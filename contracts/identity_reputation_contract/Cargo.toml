@@ -4,8 +4,13 @@ version = "0.1.0"
 edition = "2021"
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 path = "lib.rs"
 
 [dependencies]
 soroban-sdk = { workspace = true }
+shared_types = { path = "../shared_types" }
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
+

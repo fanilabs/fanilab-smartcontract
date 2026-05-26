@@ -1,10 +1,10 @@
 #![no_std]
 
 use shared_types::SwiftChainError;
+use shared_types::{CargoCategory, CargoDescriptor, DeliveryMetadata, DriverProfile};
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, Address, Env, Symbol,
 };
-use shared_types::{DriverProfile, DeliveryMetadata, CargoDescriptor, CargoCategory};
 
 pub type DeliveryId = u64;
 
@@ -103,7 +103,12 @@ impl DeliveryContract {
         );
     }
 
-    pub fn create_delivery(env: Env, sender: Address, recipient: Address, metadata: DeliveryMetadata) -> DeliveryId {
+    pub fn create_delivery(
+        env: Env,
+        sender: Address,
+        recipient: Address,
+        metadata: DeliveryMetadata,
+    ) -> DeliveryId {
         sender.require_auth();
 
         let mut counter: u64 = env
@@ -295,13 +300,16 @@ impl DeliveryContract {
                     deliveries_completed: 0,
                     reputation_score: 0,
                     registered_at: env.ledger().timestamp(),
+                    kyc_verified: false,
                 });
 
             profile.deliveries_completed += 1;
             profile.reputation_score += 1;
 
             env.storage().persistent().set(&driver_key, &profile);
-            env.storage().persistent().extend_ttl(&driver_key, 518400, 518400);
+            env.storage()
+                .persistent()
+                .extend_ttl(&driver_key, 518400, 518400);
         }
 
         env.events().publish(
@@ -377,6 +385,7 @@ impl DeliveryContract {
                 deliveries_completed: 0,
                 reputation_score: 0,
                 registered_at: env.ledger().timestamp(),
+                kyc_verified: false,
             })
     }
 

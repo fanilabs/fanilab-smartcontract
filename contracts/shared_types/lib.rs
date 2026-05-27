@@ -400,6 +400,14 @@ pub struct DriverProfile {
     pub deliveries_completed: u32,
     pub reputation_score: u32,
     pub registered_at: u64,
+    pub kyc_verified: bool,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UserProfile {
+    pub address: Address,
+    pub registered_at: u64,
 }
 
 #[contracttype]

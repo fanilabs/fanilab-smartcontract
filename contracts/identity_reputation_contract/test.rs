@@ -10,48 +10,51 @@ fn setup_env() -> (Env, Address) {
 }
 
 #[test]
-fn test_register_user_success() {
+fn test_register_driver_success() {
     let (env, contract_id) = setup_env();
     let client = IdentityReputationContractClient::new(&env, &contract_id);
     let admin = Address::generate(&env);
     client.init(&admin);
 
-    let user = Address::generate(&env);
-    client.register_user(&user);
+    let driver = Address::generate(&env);
+    client.register_driver(&driver);
 
-    let profile = client.get_user_profile(&user);
-    assert_eq!(profile.address, user);
+    let profile = client.get_driver_profile(&driver);
+    assert_eq!(profile.address, driver);
+    assert_eq!(profile.deliveries_completed, 0);
+    assert_eq!(profile.reputation_score, 50);
+    assert_eq!(profile.kyc_verified, false);
     assert_eq!(profile.registered_at, env.ledger().timestamp());
 }
 
 #[test]
-fn test_register_user_duplicate() {
+fn test_register_driver_duplicate() {
     let (env, contract_id) = setup_env();
     let client = IdentityReputationContractClient::new(&env, &contract_id);
     let admin = Address::generate(&env);
     client.init(&admin);
 
-    let user = Address::generate(&env);
-    client.register_user(&user);
+    let driver = Address::generate(&env);
+    client.register_driver(&driver);
 
-    let result = client.try_register_user(&user);
+    let result = client.try_register_driver(&driver);
     match result {
         Err(Ok(err)) => assert_eq!(err, SwiftChainError::AlreadyInitialized.into()),
-        _ => panic!("Expected duplicate user registration to panic with AlreadyInitialized"),
+        _ => panic!("Expected duplicate driver registration to panic with AlreadyInitialized"),
     }
 }
 
 #[test]
-fn test_get_user_profile_not_found() {
+fn test_get_driver_profile_not_found() {
     let (env, contract_id) = setup_env();
     let client = IdentityReputationContractClient::new(&env, &contract_id);
     let admin = Address::generate(&env);
     client.init(&admin);
 
-    let user = Address::generate(&env);
-    let result = client.try_get_user_profile(&user);
+    let driver = Address::generate(&env);
+    let result = client.try_get_driver_profile(&driver);
     match result {
         Err(Ok(err)) => assert_eq!(err, SwiftChainError::ProviderNotFound.into()),
-        _ => panic!("Expected missing user profile to return ProviderNotFound"),
+        _ => panic!("Expected missing driver profile to return ProviderNotFound"),
     }
 }

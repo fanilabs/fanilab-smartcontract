@@ -2,6 +2,7 @@ use super::*;
 use soroban_sdk::{
     contract, contractimpl,
     testutils::{Address as _, Ledger},
+    token::{Client as TokenClient, StellarAssetClient},
     Address, Env, String,
 };
 use shared_types::SwiftChainError;
@@ -47,6 +48,14 @@ impl MockEscrowContract {
             } else {
                 record.status = shared_types::EscrowStatus::Refunded;
             }
+            env.storage().instance().set(&delivery_id, &record);
+        }
+    }
+
+    pub fn resolve_dispute_split(env: Env, _caller: Address, delivery_id: u64, _sender_share_bps: u32) {
+        if env.storage().instance().has(&delivery_id) {
+            let mut record: shared_types::EscrowRecord = env.storage().instance().get(&delivery_id).unwrap();
+            record.status = shared_types::EscrowStatus::Refunded;
             env.storage().instance().set(&delivery_id, &record);
         }
     }
@@ -228,6 +237,7 @@ fn test_raise_dispute_active_delivery() {
     assert_eq!(case.delivery_id, 1);
     assert_eq!(case.status, DisputeStatus::Open);
     assert_eq!(case.raised_by, sender);
+    assert_eq!(case.evidence_hashes.len(), 0);
 }
 
 #[test]
@@ -322,4 +332,118 @@ fn test_unauthorized_resolve_dispute_fails() {
 
     // Attacker (sender) tries to resolve dispute
     dispute_client.resolve_dispute_refund_sender(&sender, &5);
+}
+
+#[test]
+fn test_add_evidence_hash_success() {
+    let (env, _admin, sender, recipient, _driver, delivery_id, _escrow_id, dispute_client) = setup_test();
+
+    let delivery_record = create_mock_delivery_record(&env, 6, sender.clone(), recipient.clone(), delivery_contract::DeliveryStatus::Active, None);
+    set_mock_delivery(&env, &delivery_id, 6, &delivery_record);
+
+    dispute_client.raise_dispute(&sender, &6);
+
+    let evidence_hash1 = soroban_sdk::BytesN::from_array(&env, &[1; 32]);
+    let evidence_hash2 = soroban_sdk::BytesN::from_array(&env, &[2; 32]);
+
+    // Sender adds evidence
+    dispute_client.add_evidence_hash(&sender, &6, &evidence_hash1);
+    // Recipient adds evidence
+    dispute_client.add_evidence_hash(&recipient, &6, &evidence_hash2);
+
+    let case = dispute_client.get_dispute(&6);
+    assert_eq!(case.evidence_hashes.len(), 2);
+    assert_eq!(case.evidence_hashes.get(0).unwrap(), evidence_hash1);
+    assert_eq!(case.evidence_hashes.get(1).unwrap(), evidence_hash2);
+}
+
+#[test]
+#[should_panic(expected = "HostError: Error(Contract, #1)")] // SwiftChainError::Unauthorized
+fn test_add_evidence_unauthorized_fails() {
+    let (env, _admin, sender, recipient, _driver, delivery_id, _escrow_id, dispute_client) = setup_test();
+
+    let delivery_record = create_mock_delivery_record(&env, 7, sender.clone(), recipient.clone(), delivery_contract::DeliveryStatus::Active, None);
+    set_mock_delivery(&env, &delivery_id, 7, &delivery_record);
+
+    dispute_client.raise_dispute(&sender, &7);
+
+    let attacker = Address::generate(&env);
+    let evidence_hash = soroban_sdk::BytesN::from_array(&env, &[3; 32]);
+
+    dispute_client.add_evidence_hash(&attacker, &7, &evidence_hash);
+}
+
+#[test]
+fn test_integration_resolve_dispute_split_funds() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let driver = Address::generate(&env);
+
+    // Register real contracts
+    let delivery_contract_id = env.register(delivery_contract::DeliveryContract, ());
+    let escrow_contract_id = env.register(escrow_contract::EscrowContract, ());
+    let dispute_resolution_id = env.register(DisputeResolutionContract, ());
+
+    let delivery_client = delivery_contract::DeliveryContractClient::new(&env, &delivery_contract_id);
+    let escrow_client = escrow_contract::EscrowContractClient::new(&env, &escrow_contract_id);
+    let dispute_client = DisputeResolutionContractClient::new(&env, &dispute_resolution_id);
+
+    // Register stellar asset contract for token
+    let token = env.register_stellar_asset_contract_v2(admin.clone()).address();
+
+    // Init contracts
+    escrow_client.init(&admin, &token, &0);
+    delivery_client.init(&admin, &escrow_contract_id);
+    dispute_client.init(&admin, &delivery_contract_id, &escrow_contract_id, &3600);
+
+    // Mint tokens to sender
+    StellarAssetClient::new(&env, &token).mint(&sender, &1000);
+
+    // Create delivery
+    let metadata = {
+        let cargo = shared_types::CargoDescriptor {
+            weight_grams: 500,
+            category: shared_types::CargoCategory::Electronics,
+            fragile: true,
+        };
+        shared_types::DeliveryMetadata {
+            delivery_id: 0,
+            origin: String::from_str(&env, "Origin"),
+            destination: String::from_str(&env, "Destination"),
+            cargo_description: cargo,
+            created_at: env.ledger().timestamp(),
+            estimated_delivery: env.ledger().timestamp() + 3600,
+        }
+    };
+    let delivery_id_val = delivery_client.create_delivery(&sender, &recipient, &metadata);
+
+    // Create escrow
+    escrow_client.create_escrow(&sender, &recipient, &driver, &delivery_id_val, &token, &1000);
+
+    // Assign driver to make delivery Active
+    delivery_client.assign_driver(&admin, &delivery_id_val, &driver);
+
+    // Raise dispute
+    dispute_client.raise_dispute(&sender, &delivery_id_val);
+
+    // Verify escrow is paused
+    let escrow = escrow_client.get_escrow(&delivery_id_val);
+    assert_eq!(escrow.status, shared_types::EscrowStatus::Paused);
+
+    // Resolve split (60% sender, 40% driver)
+    dispute_client.resolve_dispute_split_funds(&admin, &delivery_id_val, &6000);
+
+    // Verify local dispute is Split
+    let case = dispute_client.get_dispute(&delivery_id_val);
+    assert_eq!(case.status, DisputeStatus::Split);
+
+    // Verify token balances
+    let sender_balance = TokenClient::new(&env, &token).balance(&sender);
+    let driver_balance = TokenClient::new(&env, &token).balance(&driver);
+    assert_eq!(sender_balance, 600); // 60% of 1000 refunded
+    assert_eq!(driver_balance, 400); // 40% of 1000 paid to driver
 }

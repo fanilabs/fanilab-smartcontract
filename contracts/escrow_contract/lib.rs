@@ -437,6 +437,54 @@ impl EscrowContract {
         );
     }
 
+    pub fn resolve_dispute_split(
+        env: Env,
+        caller: Address,
+        delivery_id: u64,
+        sender_share_bps: u32,
+    ) {
+        caller.require_auth();
+        require_admin(&env, &caller);
+        if sender_share_bps > 10000 {
+            panic_with_error!(&env, EscrowError::InvalidFee);
+        }
+        let mut record = load_escrow(&env, delivery_id);
+        if record.status != EscrowStatus::Paused {
+            panic_with_error!(&env, EscrowError::InvalidState);
+        }
+        let contract_balance =
+            token::Client::new(&env, &record.token).balance(&env.current_contract_address());
+        if contract_balance < record.amount {
+            panic_with_error!(&env, EscrowError::InsufficientFunds);
+        }
+
+        let sender_amount = record.amount.saturating_mul(sender_share_bps as i128) / 10000;
+        let driver_amount = record.amount.saturating_sub(sender_amount);
+
+        if sender_amount > 0 {
+            token::Client::new(&env, &record.token).transfer(
+                &env.current_contract_address(),
+                &record.sender,
+                &sender_amount,
+            );
+        }
+        if driver_amount > 0 {
+            token::Client::new(&env, &record.token).transfer(
+                &env.current_contract_address(),
+                &record.driver,
+                &driver_amount,
+            );
+        }
+
+        record.status = EscrowStatus::Refunded;
+        save_escrow(&env, delivery_id, &record);
+
+        env.events().publish(
+            (events::dispute_resolved(&env), delivery_id),
+            (caller.clone(), caller),
+        );
+    }
+
     pub fn get_escrow(env: Env, delivery_id: u64) -> EscrowRecord {
         if !env
             .storage()

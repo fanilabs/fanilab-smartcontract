@@ -1,6 +1,9 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, contracttype, panic_with_error, Address, Env, IntoVal, Symbol};
+use soroban_sdk::{
+    contract, contractimpl, contracttype, panic_with_error, Address, BytesN, Env, IntoVal, Symbol,
+    Vec,
+};
 use shared_types::SwiftChainError;
 use delivery_contract::{DeliveryContractClient, DeliveryStatus};
 
@@ -22,6 +25,7 @@ pub struct DisputeCase {
     pub status: DisputeStatus,
     pub raised_at: u64,
     pub raised_by: Address,
+    pub evidence_hashes: Vec<BytesN<32>>,
 }
 
 #[contracttype]
@@ -142,6 +146,7 @@ impl DisputeResolutionContract {
             status: DisputeStatus::Open,
             raised_at: env.ledger().timestamp(),
             raised_by: caller.clone(),
+            evidence_hashes: Vec::new(&env),
         };
 
         env.storage().persistent().set(&dispute_key, &dispute);
@@ -150,6 +155,43 @@ impl DisputeResolutionContract {
         env.events().publish(
             (Symbol::new(&env, "dispute_raised"), delivery_id),
             (caller, delivery_id),
+        );
+    }
+
+    pub fn add_evidence_hash(
+        env: Env,
+        caller: Address,
+        delivery_id: DeliveryId,
+        evidence_hash: BytesN<32>,
+    ) {
+        caller.require_auth();
+
+        let dispute_key = DataKey::Dispute(delivery_id);
+        let mut dispute: DisputeCase = env
+            .storage()
+            .persistent()
+            .get(&dispute_key)
+            .unwrap_or_else(|| panic_with_error!(&env, SwiftChainError::DeliveryNotFound));
+
+        if dispute.status != DisputeStatus::Open {
+            panic_with_error!(&env, SwiftChainError::InvalidState);
+        }
+
+        let delivery_contract_addr = Self::get_delivery_contract(env.clone());
+        let delivery_client = DeliveryContractClient::new(&env, &delivery_contract_addr);
+        let delivery = delivery_client.get_delivery(&delivery_id);
+
+        if caller != delivery.sender && caller != delivery.recipient {
+            panic_with_error!(&env, SwiftChainError::Unauthorized);
+        }
+
+        dispute.evidence_hashes.push_back(evidence_hash.clone());
+        env.storage().persistent().set(&dispute_key, &dispute);
+        env.storage().persistent().extend_ttl(&dispute_key, 518400, 518400);
+
+        env.events().publish(
+            (Symbol::new(&env, "evidence_added"), delivery_id),
+            (caller, delivery_id, evidence_hash),
         );
     }
 
@@ -190,6 +232,56 @@ impl DisputeResolutionContract {
 
         env.events().publish(
             (Symbol::new(&env, "dispute_resolved_refund"), delivery_id),
+            (caller, delivery_id),
+        );
+    }
+
+    pub fn resolve_dispute_split_funds(
+        env: Env,
+        caller: Address,
+        delivery_id: DeliveryId,
+        sender_share_bps: u32,
+    ) {
+        caller.require_auth();
+        if !Self::is_admin(env.clone(), caller.clone()) {
+            panic_with_error!(&env, SwiftChainError::Unauthorized);
+        }
+
+        let dispute_key = DataKey::Dispute(delivery_id);
+        let mut dispute: DisputeCase = env
+            .storage()
+            .persistent()
+            .get(&dispute_key)
+            .unwrap_or_else(|| panic_with_error!(&env, SwiftChainError::DeliveryNotFound));
+
+        if dispute.status != DisputeStatus::Open {
+            panic_with_error!(&env, SwiftChainError::InvalidState);
+        }
+
+        dispute.status = DisputeStatus::Split;
+        env.storage().persistent().set(&dispute_key, &dispute);
+        env.storage().persistent().extend_ttl(&dispute_key, 518400, 518400);
+
+        let escrow_addr = Self::get_escrow_contract(env.clone());
+        let escrow_client = escrow_contract::EscrowContractClient::new(&env, &escrow_addr);
+        let escrow = escrow_client.get_escrow(&delivery_id);
+
+        if escrow.status == shared_types::EscrowStatus::Paused {
+            use soroban_sdk::IntoVal;
+            let _: () = env.invoke_contract(
+                &escrow_addr,
+                &Symbol::new(&env, "resolve_dispute_split"),
+                soroban_sdk::vec![
+                    &env,
+                    caller.into_val(&env),
+                    delivery_id.into_val(&env),
+                    sender_share_bps.into_val(&env),
+                ],
+            );
+        }
+
+        env.events().publish(
+            (Symbol::new(&env, "dispute_resolved_split"), delivery_id),
             (caller, delivery_id),
         );
     }

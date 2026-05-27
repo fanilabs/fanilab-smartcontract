@@ -14,15 +14,15 @@ pub struct MockEscrow;
 
 #[contractimpl]
 impl MockEscrow {
-    pub fn refund_escrow(_env: Env, delivery_id: DeliveryId) {
+    pub fn refund_escrow(_env: Env, _caller: Address, delivery_id: DeliveryId) {
         if delivery_id == 999 {
             panic!("Escrow failure simulated");
         }
     }
 
-    pub fn release_escrow(_env: Env, _delivery_id: DeliveryId) {}
+    pub fn release_escrow(_env: Env, _caller: Address, _delivery_id: DeliveryId) {}
 
-    pub fn raise_dispute(_env: Env, delivery_id: DeliveryId) {
+    pub fn raise_dispute(_env: Env, _caller: Address, delivery_id: DeliveryId) {
         if delivery_id == 777 {
             panic!("Escrow raise_dispute failure simulated");
         }

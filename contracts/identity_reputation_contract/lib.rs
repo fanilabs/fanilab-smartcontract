@@ -8,6 +8,7 @@ use soroban_sdk::{contract, contractimpl, contracttype, panic_with_error, Addres
 pub enum DataKey {
     Admin,
     DriverProfile(Address),
+    AuthorizedContract(Address),
 }
 
 #[contract]
@@ -29,6 +30,30 @@ impl IdentityReputationContract {
             .unwrap_or_else(|| panic_with_error!(&env, SwiftChainError::NotInitialized))
     }
 
+    pub fn set_authorized_contract(
+        env: Env,
+        admin: Address,
+        contract_addr: Address,
+        authorized: bool,
+    ) {
+        admin.require_auth();
+        let stored_admin = Self::get_admin(env.clone());
+        if admin != stored_admin {
+            panic_with_error!(&env, SwiftChainError::Unauthorized);
+        }
+        let key = DataKey::AuthorizedContract(contract_addr);
+        if authorized {
+            env.storage().persistent().set(&key, &true);
+        } else {
+            env.storage().persistent().remove(&key);
+        }
+    }
+
+    pub fn is_authorized_contract(env: Env, contract_addr: Address) -> bool {
+        let key = DataKey::AuthorizedContract(contract_addr);
+        env.storage().persistent().get(&key).unwrap_or(false)
+    }
+
     pub fn register_driver(env: Env, driver: Address) {
         driver.require_auth();
         let key = DataKey::DriverProfile(driver.clone());
@@ -39,7 +64,7 @@ impl IdentityReputationContract {
         let profile = DriverProfile {
             address: driver.clone(),
             deliveries_completed: 0,
-            reputation_score: 50, // default/base reputation score
+            reputation_score: 50,
             registered_at: env.ledger().timestamp(),
             kyc_verified: false,
         };
@@ -59,6 +84,54 @@ impl IdentityReputationContract {
             .get(&key)
             .unwrap_or_else(|| panic_with_error!(&env, SwiftChainError::ProviderNotFound));
         profile
+    }
+
+    pub fn increase_reputation(
+        env: Env,
+        caller: Address,
+        driver: Address,
+        _delivery_id: u64,
+        weight_grams: u32,
+        fragile: bool,
+    ) {
+        caller.require_auth();
+
+        let stored_admin = Self::get_admin(env.clone());
+        let is_admin = caller == stored_admin;
+        let is_auth_contract = Self::is_authorized_contract(env.clone(), caller.clone());
+
+        if !is_admin && !is_auth_contract {
+            panic_with_error!(&env, SwiftChainError::Unauthorized);
+        }
+
+        let key = DataKey::DriverProfile(driver.clone());
+        let mut profile: DriverProfile = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| panic_with_error!(&env, SwiftChainError::ProviderNotFound));
+
+        let mut points_to_add = 5u32;
+        if weight_grams > 5000 {
+            points_to_add += 3;
+        }
+        if fragile {
+            points_to_add += 2;
+        }
+
+        profile.deliveries_completed += 1;
+        profile.reputation_score = profile.reputation_score.saturating_add(points_to_add);
+        if profile.reputation_score > 100 {
+            profile.reputation_score = 100;
+        }
+
+        env.storage().persistent().set(&key, &profile);
+        env.storage().persistent().extend_ttl(&key, 518400, 518400);
+
+        env.events().publish(
+            (Symbol::new(&env, "reputation_increased"),),
+            (driver, profile.reputation_score),
+        );
     }
 }
 

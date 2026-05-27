@@ -412,6 +412,13 @@ pub struct UserProfile {
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UserProfile {
+    pub address: Address,
+    pub registered_at: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CargoCategory {
     Documents,
     Electronics,

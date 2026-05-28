@@ -103,7 +103,7 @@ impl DisputeResolutionContract {
             .unwrap_or(0)
     }
 
-    pub fn raise_dispute(env: Env, caller: Address, delivery_id: DeliveryId) {
+    pub fn raise_dispute(env: Env, caller: Address, delivery_id: DeliveryId, reason_code: u32) {
         caller.require_auth();
 
         let delivery_contract_addr = Self::get_delivery_contract(env.clone());

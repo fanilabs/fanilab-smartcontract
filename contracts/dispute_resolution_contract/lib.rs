@@ -22,6 +22,7 @@ pub struct DisputeCase {
     pub status: DisputeStatus,
     pub raised_at: u64,
     pub raised_by: Address,
+    pub reason_code: u32,
 }
 
 #[contracttype]
@@ -99,7 +100,7 @@ impl DisputeResolutionContract {
             .unwrap_or(0)
     }
 
-    pub fn raise_dispute(env: Env, caller: Address, delivery_id: DeliveryId) {
+    pub fn raise_dispute(env: Env, caller: Address, delivery_id: DeliveryId, reason_code: u32) {
         caller.require_auth();
 
         let delivery_contract_addr = Self::get_delivery_contract(env.clone());
@@ -142,6 +143,7 @@ impl DisputeResolutionContract {
             status: DisputeStatus::Open,
             raised_at: env.ledger().timestamp(),
             raised_by: caller.clone(),
+            reason_code,
         };
 
         env.storage().persistent().set(&dispute_key, &dispute);
@@ -190,6 +192,85 @@ impl DisputeResolutionContract {
 
         env.events().publish(
             (Symbol::new(&env, "dispute_resolved_refund"), delivery_id),
+            (caller, delivery_id),
+        );
+    }
+
+    pub fn resolve_dispute_payout_recipient(env: Env, caller: Address, delivery_id: DeliveryId) {
+        caller.require_auth();
+        if !Self::is_admin(env.clone(), caller.clone()) {
+            panic_with_error!(&env, SwiftChainError::Unauthorized);
+        }
+
+        let dispute_key = DataKey::Dispute(delivery_id);
+        let mut dispute: DisputeCase = env
+            .storage()
+            .persistent()
+            .get(&dispute_key)
+            .unwrap_or_else(|| panic_with_error!(&env, SwiftChainError::DeliveryNotFound));
+
+        if dispute.status != DisputeStatus::Open {
+            panic_with_error!(&env, SwiftChainError::InvalidState);
+        }
+
+        dispute.status = DisputeStatus::ResolvedPayout;
+        env.storage().persistent().set(&dispute_key, &dispute);
+        env.storage().persistent().extend_ttl(&dispute_key, 518400, 518400);
+
+        let escrow_addr = Self::get_escrow_contract(env.clone());
+
+        let _: () = env.invoke_contract(
+            &escrow_addr,
+            &Symbol::new(&env, "resolve_dispute"),
+            soroban_sdk::vec![
+                &env,
+                caller.into_val(&env),
+                delivery_id.into_val(&env),
+                true.into_val(&env),
+            ],
+        );
+
+        env.events().publish(
+            (Symbol::new(&env, "dispute_resolved_payout"), delivery_id),
+            (caller, delivery_id),
+        );
+    }
+
+    pub fn resolve_dispute_split(env: Env, caller: Address, delivery_id: DeliveryId) {
+        caller.require_auth();
+        if !Self::is_admin(env.clone(), caller.clone()) {
+            panic_with_error!(&env, SwiftChainError::Unauthorized);
+        }
+
+        let dispute_key = DataKey::Dispute(delivery_id);
+        let mut dispute: DisputeCase = env
+            .storage()
+            .persistent()
+            .get(&dispute_key)
+            .unwrap_or_else(|| panic_with_error!(&env, SwiftChainError::DeliveryNotFound));
+
+        if dispute.status != DisputeStatus::Open {
+            panic_with_error!(&env, SwiftChainError::InvalidState);
+        }
+
+        dispute.status = DisputeStatus::Split;
+        env.storage().persistent().set(&dispute_key, &dispute);
+        env.storage().persistent().extend_ttl(&dispute_key, 518400, 518400);
+
+        let escrow_addr = Self::get_escrow_contract(env.clone());
+
+        let _: () = env.invoke_contract(
+            &escrow_addr,
+            &Symbol::new(&env, "split_escrow"),
+            soroban_sdk::vec![
+                &env,
+                caller.into_val(&env),
+                delivery_id.into_val(&env),
+            ],
+        );
+
+        env.events().publish(
+            (Symbol::new(&env, "dispute_resolved_split"), delivery_id),
             (caller, delivery_id),
         );
     }

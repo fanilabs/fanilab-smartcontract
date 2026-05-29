@@ -9,6 +9,8 @@ pub enum DataKey {
     Admin,
     DriverProfile(Address),
     AuthorizedContract(Address),
+    DeliveryContract,
+    DisputeContract,
 }
 
 #[contracttype]
@@ -32,6 +34,16 @@ impl IdentityReputationContract {
             panic_with_error!(&env, SwiftChainError::AlreadyInitialized);
         }
         env.storage().instance().set(&DataKey::Admin, &admin);
+    }
+
+    pub fn initialize(env: Env, admin: Address, delivery_contract: Address, dispute_contract: Address) {
+        if env.storage().instance().has(&DataKey::Admin) {
+            panic_with_error!(&env, SwiftChainError::AlreadyInitialized);
+        }
+        admin.require_auth();
+        env.storage().instance().set(&DataKey::Admin, &admin);
+        env.storage().instance().set(&DataKey::DeliveryContract, &delivery_contract);
+        env.storage().instance().set(&DataKey::DisputeContract, &dispute_contract);
     }
 
     pub fn get_admin(env: Env) -> Address {
@@ -136,20 +148,21 @@ impl IdentityReputationContract {
         weight_grams: u32,
         fragile: bool,
     ) {
-        caller.require_auth();
-
-        let stored_admin: Address = env
+        let delivery_contract: Address = env
             .storage()
             .instance()
-            .get(&DataKey::Admin)
+            .get(&DataKey::DeliveryContract)
+            .unwrap_or_else(|| panic_with_error!(&env, SwiftChainError::NotInitialized));
+        let dispute_contract: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::DisputeContract)
             .unwrap_or_else(|| panic_with_error!(&env, SwiftChainError::NotInitialized));
 
-        let is_admin = caller == stored_admin;
-        let is_authorized = Self::is_authorized_contract(env.clone(), caller.clone());
-
-        if !is_admin && !is_authorized {
+        if caller != delivery_contract && caller != dispute_contract {
             panic_with_error!(&env, SwiftChainError::Unauthorized);
         }
+        caller.require_auth();
 
         let key = DataKey::DriverProfile(driver.clone());
         let mut profile: DriverProfile = env
@@ -184,20 +197,21 @@ impl IdentityReputationContract {
         driver: Address,
         points: u32,
     ) {
-        caller.require_auth();
-
-        let stored_admin: Address = env
+        let delivery_contract: Address = env
             .storage()
             .instance()
-            .get(&DataKey::Admin)
+            .get(&DataKey::DeliveryContract)
+            .unwrap_or_else(|| panic_with_error!(&env, SwiftChainError::NotInitialized));
+        let dispute_contract: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::DisputeContract)
             .unwrap_or_else(|| panic_with_error!(&env, SwiftChainError::NotInitialized));
 
-        let is_admin = caller == stored_admin;
-        let is_authorized = Self::is_authorized_contract(env.clone(), caller.clone());
-
-        if !is_admin && !is_authorized {
+        if caller != delivery_contract && caller != dispute_contract {
             panic_with_error!(&env, SwiftChainError::Unauthorized);
         }
+        caller.require_auth();
 
         let key = DataKey::DriverProfile(driver.clone());
         let mut profile: DriverProfile = env

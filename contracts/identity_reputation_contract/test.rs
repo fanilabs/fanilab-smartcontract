@@ -106,6 +106,255 @@ fn test_increase_reputation_cap_at_100() {
 }
 
 #[test]
+fn test_decrease_reputation_success() {
+    let (env, contract_id) = setup_env();
+    let client = IdentityReputationContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.init(&admin);
+
+    let driver = Address::generate(&env);
+    client.register_driver(&driver); // starts at 50
+
+    client.decrease_reputation(&admin, &driver, &10u32);
+    let profile = client.get_driver_profile(&driver);
+    assert_eq!(profile.reputation_score, 40); // 50 - 10
+}
+
+#[test]
+fn test_decrease_reputation_floor_at_zero() {
+    let (env, contract_id) = setup_env();
+    let client = IdentityReputationContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.init(&admin);
+
+    let driver = Address::generate(&env);
+    client.register_driver(&driver); // starts at 50
+
+    // Deduct more than the current score
+    client.decrease_reputation(&admin, &driver, &200u32);
+    let profile = client.get_driver_profile(&driver);
+    assert_eq!(profile.reputation_score, 0);
+}
+
+#[test]
+fn test_decrease_reputation_unauthorized() {
+    let (env, contract_id) = setup_env();
+    let client = IdentityReputationContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.init(&admin);
+
+    let driver = Address::generate(&env);
+    client.register_driver(&driver);
+
+    let attacker = Address::generate(&env);
+    let result = client.try_decrease_reputation(&attacker, &driver, &10u32);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, SwiftChainError::Unauthorized.into()),
+        _ => panic!("Expected unauthorized caller to panic with Unauthorized"),
+    }
+}
+
+#[test]
+fn test_decrease_reputation_missing_driver() {
+    let (env, contract_id) = setup_env();
+    let client = IdentityReputationContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.init(&admin);
+
+    let driver = Address::generate(&env);
+    let result = client.try_decrease_reputation(&admin, &driver, &10u32);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, SwiftChainError::ProviderNotFound.into()),
+        _ => panic!("Expected missing driver to return ProviderNotFound"),
+    }
+}
+
+#[test]
+fn test_decrease_reputation_authorized_contract() {
+    let (env, contract_id) = setup_env();
+    let client = IdentityReputationContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.init(&admin);
+
+    let delivery_contract_addr = Address::generate(&env);
+    client.set_authorized_contract(&admin, &delivery_contract_addr, &true);
+
+    let driver = Address::generate(&env);
+    client.register_driver(&driver);
+
+    client.decrease_reputation(&delivery_contract_addr, &driver, &5u32);
+    let profile = client.get_driver_profile(&driver);
+    assert_eq!(profile.reputation_score, 45); // 50 - 5
+}
+
+#[test]
+fn test_get_driver_tier_silver_at_registration() {
+    let (env, contract_id) = setup_env();
+    let client = IdentityReputationContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.init(&admin);
+
+    let driver = Address::generate(&env);
+    client.register_driver(&driver); // starts at 50
+
+    let tier = client.get_driver_tier(&driver);
+    assert_eq!(tier, DriverTier::Silver);
+}
+
+#[test]
+fn test_get_driver_tier_bronze() {
+    let (env, contract_id) = setup_env();
+    let client = IdentityReputationContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.init(&admin);
+
+    let driver = Address::generate(&env);
+    client.register_driver(&driver); // starts at 50
+
+    // Deduct enough to fall below 50
+    client.decrease_reputation(&admin, &driver, &15u32);
+    let profile = client.get_driver_profile(&driver);
+    assert_eq!(profile.reputation_score, 35);
+
+    let tier = client.get_driver_tier(&driver);
+    assert_eq!(tier, DriverTier::Bronze);
+}
+
+#[test]
+fn test_get_driver_tier_gold() {
+    let (env, contract_id) = setup_env();
+    let client = IdentityReputationContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.init(&admin);
+
+    let driver = Address::generate(&env);
+    client.register_driver(&driver); // starts at 50
+
+    // Increase to reach Gold (>= 75)
+    for i in 0..3 {
+        client.increase_reputation(&admin, &driver, &(200 + i), &6000u32, &true);
+    }
+    let profile = client.get_driver_profile(&driver);
+    assert_eq!(profile.reputation_score, 80); // 50 + 10 + 10 + 10
+
+    let tier = client.get_driver_tier(&driver);
+    assert_eq!(tier, DriverTier::Gold);
+}
+
+#[test]
+fn test_get_driver_tier_boundary_silver_to_gold() {
+    let (env, contract_id) = setup_env();
+    let client = IdentityReputationContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.init(&admin);
+
+    let driver = Address::generate(&env);
+    client.register_driver(&driver); // starts at 50
+
+    // Increase to exactly 75 (Gold threshold)
+    for i in 0..5 {
+        client.increase_reputation(&admin, &driver, &(300 + i), &1000u32, &false); // +5 each
+    }
+    let profile = client.get_driver_profile(&driver);
+    assert_eq!(profile.reputation_score, 75);
+
+    let tier = client.get_driver_tier(&driver);
+    assert_eq!(tier, DriverTier::Gold);
+}
+
+#[test]
+fn test_is_eligible_for_enterprise_true() {
+    let (env, contract_id) = setup_env();
+    let client = IdentityReputationContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.init(&admin);
+
+    let driver = Address::generate(&env);
+    client.register_driver(&driver); // starts at 50
+
+    // Reach the enterprise threshold (75)
+    for i in 0..5 {
+        client.increase_reputation(&admin, &driver, &(400 + i), &1000u32, &false);
+    }
+    let profile = client.get_driver_profile(&driver);
+    assert_eq!(profile.reputation_score, 75);
+
+    assert!(client.is_eligible_for_enterprise(&driver));
+}
+
+#[test]
+fn test_is_eligible_for_enterprise_false() {
+    let (env, contract_id) = setup_env();
+    let client = IdentityReputationContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.init(&admin);
+
+    let driver = Address::generate(&env);
+    client.register_driver(&driver); // starts at 50 (below 75 threshold)
+
+    assert!(!client.is_eligible_for_enterprise(&driver));
+}
+
+#[test]
+fn test_is_eligible_for_enterprise_after_decrease() {
+    let (env, contract_id) = setup_env();
+    let client = IdentityReputationContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.init(&admin);
+
+    let driver = Address::generate(&env);
+    client.register_driver(&driver); // starts at 50
+
+    // Raise to Gold tier
+    for i in 0..5 {
+        client.increase_reputation(&admin, &driver, &(500 + i), &1000u32, &false);
+    }
+    assert!(client.is_eligible_for_enterprise(&driver)); // score = 75, eligible
+
+    // Penalize below threshold
+    client.decrease_reputation(&admin, &driver, &5u32);
+    assert!(!client.is_eligible_for_enterprise(&driver)); // score = 70, no longer eligible
+}
+
+#[test]
+fn test_reputation_bounds_cannot_exceed_100() {
+    let (env, contract_id) = setup_env();
+    let client = IdentityReputationContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.init(&admin);
+
+    let driver = Address::generate(&env);
+    client.register_driver(&driver); // starts at 50
+
+    // Repeatedly apply maximum bonus to ensure we never exceed 100
+    for i in 0..20 {
+        client.increase_reputation(&admin, &driver, &(600 + i), &6000u32, &true);
+    }
+
+    let profile = client.get_driver_profile(&driver);
+    assert_eq!(profile.reputation_score, 100);
+}
+
+#[test]
+fn test_reputation_bounds_cannot_drop_below_zero() {
+    let (env, contract_id) = setup_env();
+    let client = IdentityReputationContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.init(&admin);
+
+    let driver = Address::generate(&env);
+    client.register_driver(&driver); // starts at 50
+
+    // Repeatedly apply large penalties
+    for _ in 0..10 {
+        client.decrease_reputation(&admin, &driver, &50u32);
+    }
+
+    let profile = client.get_driver_profile(&driver);
+    assert_eq!(profile.reputation_score, 0);
+}
+
+#[test]
 fn test_update_kyc_status_admin_approve() {
     let (env, contract_id) = setup_env();
     let client = IdentityReputationContractClient::new(&env, &contract_id);

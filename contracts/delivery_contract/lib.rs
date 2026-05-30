@@ -1,7 +1,7 @@
 #![no_std]
 
 use shared_types::SwiftChainError;
-use shared_types::{CargoCategory, CargoDescriptor, DeliveryMetadata, DriverProfile};
+use shared_types::{DeliveryMetadata, DriverProfile};
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, Address, Env, Symbol,
 };

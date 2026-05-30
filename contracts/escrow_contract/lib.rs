@@ -1,8 +1,12 @@
 #![no_std]
 
-use shared_types::{events, DeliveryStatus, EscrowRecord, EscrowStatus, SwiftChainError};
+use shared_types::{
+    escrow_key, events, DeliveryStatus, EscrowRecord, EscrowStatus, ProtocolConfig, StorageKey,
+    SwiftChainError,
+};
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, panic_with_error, token, Address, Env, Symbol,
+    contract, contracterror, contractimpl, contracttype, panic_with_error, token, Address, Env,
+    Symbol,
 };
 
 pub mod constants {
@@ -15,7 +19,7 @@ fn require_admin(env: &Env, caller: &Address) {
     let stored_admin: Address = env
         .storage()
         .instance()
-        .get(&DataKey::Admin)
+        .get(&StorageKey::Admin)
         .unwrap_or_else(|| panic_with_error!(env, SwiftChainError::NotInitialized));
     if *caller != stored_admin {
         panic_with_error!(env, SwiftChainError::Unauthorized);
@@ -26,9 +30,20 @@ fn is_admin(env: &Env, caller: &Address) -> bool {
     let stored_admin: Address = env
         .storage()
         .instance()
-        .get(&DataKey::Admin)
+        .get(&StorageKey::Admin)
         .expect("Not initialized");
     *caller == stored_admin
+}
+
+fn load_protocol_config(env: &Env) -> ProtocolConfig {
+    env.storage()
+        .instance()
+        .get(&StorageKey::ProtocolConfig)
+        .unwrap_or_else(|| panic_with_error!(env, SwiftChainError::NotInitialized))
+}
+
+fn save_protocol_config(env: &Env, config: &ProtocolConfig) {
+    env.storage().instance().set(&StorageKey::ProtocolConfig, config);
 }
 
 fn calculate_fee(amount: i128, platform_fee_bps: u32) -> i128 {
@@ -36,7 +51,7 @@ fn calculate_fee(amount: i128, platform_fee_bps: u32) -> i128 {
 }
 
 fn save_escrow(env: &Env, delivery_id: u64, record: &EscrowRecord) {
-    let key = DataKey::Escrow(delivery_id);
+    let key = escrow_key(delivery_id);
     env.storage().persistent().set(&key, record);
     env.storage().persistent().extend_ttl(
         &key,
@@ -46,7 +61,7 @@ fn save_escrow(env: &Env, delivery_id: u64, record: &EscrowRecord) {
 }
 
 fn load_escrow(env: &Env, delivery_id: u64) -> EscrowRecord {
-    let key = DataKey::Escrow(delivery_id);
+    let key = escrow_key(delivery_id);
     let record: EscrowRecord = env
         .storage()
         .persistent()
@@ -63,12 +78,7 @@ fn load_escrow(env: &Env, delivery_id: u64) -> EscrowRecord {
 #[contracttype]
 #[derive(Clone)]
 enum DataKey {
-    Admin,
     PendingAdmin,
-    Token,
-    PlatformFeeBps,
-    ProtocolVersion,
-    Escrow(u64),
 }
 
 #[contracterror]
@@ -106,17 +116,18 @@ pub struct EscrowContract;
 #[contractimpl]
 impl EscrowContract {
     pub fn init(env: Env, admin: Address, token: Address, platform_fee_bps: u32) {
-        if env.storage().instance().has(&DataKey::Admin) {
+        if env.storage().instance().has(&StorageKey::Admin) {
             panic_with_error!(&env, SwiftChainError::AlreadyInitialized);
         }
-        env.storage().instance().set(&DataKey::Admin, &admin);
-        env.storage().instance().set(&DataKey::Token, &token);
-        env.storage()
-            .instance()
-            .set(&DataKey::PlatformFeeBps, &platform_fee_bps);
-        env.storage()
-            .instance()
-            .set(&DataKey::ProtocolVersion, &constants::PROTOCOL_VERSION);
+        env.storage().instance().set(&StorageKey::Admin, &admin);
+        save_protocol_config(
+            &env,
+            &ProtocolConfig {
+                token: token.clone(),
+                platform_fee_bps,
+                protocol_version: constants::PROTOCOL_VERSION,
+            },
+        );
 
         env.events().publish(
             (Symbol::new(&env, "ProtocolInitialized"),),
@@ -133,7 +144,7 @@ impl EscrowContract {
         let stored_admin: Address = env
             .storage()
             .instance()
-            .get(&DataKey::Admin)
+            .get(&StorageKey::Admin)
             .unwrap_or_else(|| panic_with_error!(&env, SwiftChainError::NotInitialized));
         if admin != stored_admin {
             panic_with_error!(&env, SwiftChainError::Unauthorized);
@@ -142,14 +153,10 @@ impl EscrowContract {
         if new_fee_bps > 1000 {
             panic_with_error!(&env, EscrowError::InvalidFee);
         }
-        let old_fee: u32 = env
-            .storage()
-            .instance()
-            .get(&DataKey::PlatformFeeBps)
-            .unwrap_or(0);
-        env.storage()
-            .instance()
-            .set(&DataKey::PlatformFeeBps, &new_fee_bps);
+        let mut config = load_protocol_config(&env);
+        let old_fee = config.platform_fee_bps;
+        config.platform_fee_bps = new_fee_bps;
+        save_protocol_config(&env, &config);
         env.events().publish(
             (Symbol::new(&env, "FeeUpdated"),),
             FeeUpdated {
@@ -160,35 +167,26 @@ impl EscrowContract {
     }
 
     pub fn get_platform_fee(env: Env) -> u32 {
-        env.storage()
-            .instance()
-            .get(&DataKey::PlatformFeeBps)
-            .unwrap_or(0)
+        load_protocol_config(&env).platform_fee_bps
     }
 
     pub fn get_status(_env: Env) -> DeliveryStatus {
-        DeliveryStatus::Created
+        DeliveryStatus::Pending
     }
 
     pub fn get_admin(env: Env) -> Address {
         env.storage()
             .instance()
-            .get(&DataKey::Admin)
+            .get(&StorageKey::Admin)
             .unwrap_or_else(|| panic_with_error!(&env, SwiftChainError::NotInitialized))
     }
 
     pub fn get_token(env: Env) -> Address {
-        env.storage()
-            .instance()
-            .get(&DataKey::Token)
-            .unwrap_or_else(|| panic_with_error!(&env, SwiftChainError::NotInitialized))
+        load_protocol_config(&env).token
     }
 
     pub fn get_protocol_version(env: Env) -> u32 {
-        env.storage()
-            .instance()
-            .get(&DataKey::ProtocolVersion)
-            .unwrap_or(0)
+        load_protocol_config(&env).protocol_version
     }
 
     pub fn propose_admin(env: Env, current_admin: Address, new_admin: Address) {
@@ -196,7 +194,7 @@ impl EscrowContract {
         let stored_admin: Address = env
             .storage()
             .instance()
-            .get(&DataKey::Admin)
+            .get(&StorageKey::Admin)
             .unwrap_or_else(|| panic_with_error!(&env, SwiftChainError::NotInitialized));
         if stored_admin != current_admin {
             panic!("caller is not the admin");
@@ -223,9 +221,9 @@ impl EscrowContract {
         let old_admin: Address = env
             .storage()
             .instance()
-            .get(&DataKey::Admin)
+            .get(&StorageKey::Admin)
             .unwrap_or_else(|| panic_with_error!(&env, SwiftChainError::NotInitialized));
-        env.storage().instance().set(&DataKey::Admin, &new_admin);
+        env.storage().instance().set(&StorageKey::Admin, &new_admin);
         env.storage().instance().remove(&DataKey::PendingAdmin);
         env.storage().instance().extend_ttl(
             constants::ESCROW_TTL_THRESHOLD,
@@ -249,7 +247,7 @@ impl EscrowContract {
         amount: i128,
     ) {
         sender.require_auth();
-        if env.storage().persistent().has(&DataKey::Escrow(delivery_id)) {
+        if env.storage().persistent().has(&escrow_key(delivery_id)) {
             panic_with_error!(&env, EscrowError::DuplicateDelivery);
         }
         token::Client::new(&env, &token).transfer(
@@ -298,7 +296,8 @@ impl EscrowContract {
         let platform_fee_bps: u32 = env
             .storage()
             .instance()
-            .get(&DataKey::PlatformFeeBps)
+            .get::<_, ProtocolConfig>(&StorageKey::ProtocolConfig)
+            .map(|config| config.platform_fee_bps)
             .unwrap_or(0);
         let platform_fee = calculate_fee(record.amount, platform_fee_bps);
         let driver_amount = record.amount.saturating_sub(platform_fee);
@@ -315,7 +314,7 @@ impl EscrowContract {
             let admin: Address = env
                 .storage()
                 .instance()
-                .get(&DataKey::Admin)
+                .get(&StorageKey::Admin)
                 .expect("Not initialized");
             token::Client::new(&env, &record.token).transfer(
                 &env.current_contract_address(),
@@ -393,7 +392,8 @@ impl EscrowContract {
             let platform_fee_bps: u32 = env
                 .storage()
                 .instance()
-                .get(&DataKey::PlatformFeeBps)
+                .get::<_, ProtocolConfig>(&StorageKey::ProtocolConfig)
+                .map(|config| config.platform_fee_bps)
                 .unwrap_or(0);
             let platform_fee = calculate_fee(record.amount, platform_fee_bps);
             let driver_amount = record.amount.saturating_sub(platform_fee);
@@ -410,7 +410,7 @@ impl EscrowContract {
                 let admin: Address = env
                     .storage()
                     .instance()
-                    .get(&DataKey::Admin)
+                    .get(&StorageKey::Admin)
                     .expect("Not initialized");
                 token::Client::new(&env, &record.token).transfer(
                     &env.current_contract_address(),
@@ -489,7 +489,7 @@ impl EscrowContract {
         if !env
             .storage()
             .persistent()
-            .has(&DataKey::Escrow(delivery_id))
+            .has(&escrow_key(delivery_id))
         {
             panic_with_error!(&env, EscrowError::DeliveryNotFound);
         }

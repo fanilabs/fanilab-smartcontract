@@ -1,23 +1,11 @@
 #![no_std]
 
 use shared_types::SwiftChainError;
-use shared_types::{DeliveryMetadata, DriverProfile};
+use shared_types::{delivery_key, DeliveryMetadata, DriverProfile, StorageKey};
+pub use shared_types::{DeliveryId, DeliveryStatus};
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, Address, Env, Symbol,
 };
-
-pub type DeliveryId = u64;
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum DeliveryStatus {
-    Pending,
-    Active,
-    InTransit,
-    Delivered,
-    Cancelled,
-    Disputed,
-}
 
 // Local DeliveryMetadata removed in favor of shared_types::DeliveryMetadata
 
@@ -38,11 +26,8 @@ pub struct DeliveryRecord {
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
-    Delivery(DeliveryId),
     DeliveryCounter,
-    Admin,
     EscrowContract,
-    DriverProfile(Address),
 }
 
 #[contracterror]
@@ -61,7 +46,7 @@ pub enum DeliveryError {
 ///   Disputed  → Delivered, Cancelled
 ///   Delivered, Cancelled → (terminal, no transitions)
 pub fn validate_transition(from: DeliveryStatus, to: DeliveryStatus) -> Result<(), DeliveryError> {
-    let valid = match (&from, &to) {
+    let valid = match (from, to) {
         (DeliveryStatus::Pending, DeliveryStatus::Active) => true,
         (DeliveryStatus::Pending, DeliveryStatus::Cancelled) => true,
         (DeliveryStatus::Active, DeliveryStatus::InTransit) => true,
@@ -86,10 +71,10 @@ pub struct DeliveryContract;
 #[contractimpl]
 impl DeliveryContract {
     pub fn init(env: Env, admin: Address, escrow_contract: Address) {
-        if env.storage().instance().has(&DataKey::Admin) {
+        if env.storage().instance().has(&StorageKey::Admin) {
             panic_with_error!(&env, SwiftChainError::AlreadyInitialized);
         }
-        env.storage().instance().set(&DataKey::Admin, &admin);
+        env.storage().instance().set(&StorageKey::Admin, &admin);
         env.storage()
             .instance()
             .set(&DataKey::EscrowContract, &escrow_contract);
@@ -121,7 +106,7 @@ impl DeliveryContract {
             .persistent()
             .set(&DataKey::DeliveryCounter, &counter);
 
-        let delivery_id = counter;
+        let delivery_id = DeliveryId::from(counter);
 
         let record = DeliveryRecord {
             delivery_id,
@@ -135,7 +120,7 @@ impl DeliveryContract {
             transit_started_at: None,
         };
 
-        let key = DataKey::Delivery(delivery_id);
+        let key = delivery_key(delivery_id);
         env.storage().persistent().set(&key, &record);
         env.storage().persistent().extend_ttl(&key, 518400, 518400);
 
@@ -150,7 +135,7 @@ impl DeliveryContract {
     pub fn cancel_delivery(env: Env, sender: Address, delivery_id: DeliveryId) {
         sender.require_auth();
 
-        let key = DataKey::Delivery(delivery_id);
+        let key = delivery_key(delivery_id);
         let mut delivery: DeliveryRecord = env
             .storage()
             .persistent()
@@ -174,7 +159,11 @@ impl DeliveryContract {
         let _: () = env.invoke_contract(
             &escrow_address,
             &soroban_sdk::Symbol::new(&env, "refund_escrow"),
-            soroban_sdk::vec![&env, sender.into_val(&env), delivery_id.into_val(&env)],
+            soroban_sdk::vec![
+                &env,
+                sender.into_val(&env),
+                u64::from(delivery_id).into_val(&env),
+            ],
         );
 
         delivery.status = DeliveryStatus::Cancelled;
@@ -197,7 +186,7 @@ impl DeliveryContract {
             panic!("NotAuthorized");
         }
 
-        let key = DataKey::Delivery(delivery_id);
+        let key = delivery_key(delivery_id);
         let mut delivery: DeliveryRecord = env
             .storage()
             .persistent()
@@ -224,7 +213,7 @@ impl DeliveryContract {
     pub fn mark_in_transit(env: Env, driver: Address, delivery_id: DeliveryId) {
         driver.require_auth();
 
-        let key = DataKey::Delivery(delivery_id);
+        let key = delivery_key(delivery_id);
         let mut delivery: DeliveryRecord = env
             .storage()
             .persistent()
@@ -256,7 +245,7 @@ impl DeliveryContract {
     pub fn confirm_delivery(env: Env, recipient: Address, delivery_id: DeliveryId) {
         recipient.require_auth();
 
-        let key = DataKey::Delivery(delivery_id);
+        let key = delivery_key(delivery_id);
         let mut delivery: DeliveryRecord = env
             .storage()
             .persistent()
@@ -280,7 +269,11 @@ impl DeliveryContract {
         let _: () = env.invoke_contract(
             &escrow_address,
             &soroban_sdk::Symbol::new(&env, "release_escrow"),
-            soroban_sdk::vec![&env, recipient.into_val(&env), delivery_id.into_val(&env)],
+            soroban_sdk::vec![
+                &env,
+                recipient.into_val(&env),
+                u64::from(delivery_id).into_val(&env),
+            ],
         );
 
         delivery.status = DeliveryStatus::Delivered;
@@ -290,7 +283,7 @@ impl DeliveryContract {
         env.storage().persistent().extend_ttl(&key, 518400, 518400);
 
         if let Some(driver_addr) = &delivery.driver {
-            let driver_key = DataKey::DriverProfile(driver_addr.clone());
+            let driver_key = StorageKey::DriverProfile(driver_addr.clone());
             let mut profile: DriverProfile = env
                 .storage()
                 .persistent()
@@ -324,7 +317,7 @@ impl DeliveryContract {
     pub fn raise_dispute(env: Env, caller: Address, delivery_id: DeliveryId) {
         caller.require_auth();
 
-        let key = DataKey::Delivery(delivery_id);
+        let key = delivery_key(delivery_id);
         let mut delivery: DeliveryRecord = env
             .storage()
             .persistent()
@@ -352,7 +345,11 @@ impl DeliveryContract {
         let _: () = env.invoke_contract(
             &escrow_address,
             &Symbol::new(&env, "raise_dispute"),
-            soroban_sdk::vec![&env, caller.into_val(&env), delivery_id.into_val(&env)],
+            soroban_sdk::vec![
+                &env,
+                caller.into_val(&env),
+                u64::from(delivery_id).into_val(&env),
+            ],
         );
 
         let timestamp = env.ledger().timestamp();
@@ -368,7 +365,7 @@ impl DeliveryContract {
     }
 
     fn is_admin(env: &Env, caller: &Address) -> bool {
-        if let Some(admin) = env.storage().instance().get::<_, Address>(&DataKey::Admin) {
+        if let Some(admin) = env.storage().instance().get::<_, Address>(&StorageKey::Admin) {
             admin == *caller
         } else {
             false
@@ -376,7 +373,7 @@ impl DeliveryContract {
     }
 
     pub fn get_driver_profile(env: Env, driver: Address) -> DriverProfile {
-        let driver_key = DataKey::DriverProfile(driver.clone());
+        let driver_key = StorageKey::DriverProfile(driver.clone());
         env.storage()
             .persistent()
             .get(&driver_key)
@@ -390,7 +387,7 @@ impl DeliveryContract {
     }
 
     pub fn get_delivery(env: Env, delivery_id: DeliveryId) -> DeliveryRecord {
-        let key = DataKey::Delivery(delivery_id);
+        let key = delivery_key(delivery_id);
         env.storage()
             .persistent()
             .get(&key)

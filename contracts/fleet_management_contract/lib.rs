@@ -124,6 +124,34 @@ impl FleetManagementContract {
             .unwrap_or_else(|| panic_with_error!(&env, FleetError::FleetNotFound))
     }
 
+    /// Update the treasury wallet for an existing fleet.
+    pub fn update_fleet_treasury(env: Env, owner: Address, fleet_id: FleetId, treasury: Address) {
+        owner.require_auth();
+
+        let mut profile: FleetProfile = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Fleet(fleet_id))
+            .unwrap_or_else(|| panic_with_error!(&env, FleetError::FleetNotFound));
+
+        if profile.owner != owner {
+            panic_with_error!(&env, FleetError::Unauthorized);
+        }
+
+        profile.treasury = treasury.clone();
+
+        let fleet_key = DataKey::Fleet(fleet_id);
+        env.storage().persistent().set(&fleet_key, &profile);
+        env.storage()
+            .persistent()
+            .extend_ttl(&fleet_key, 518400, 518400);
+
+        env.events().publish(
+            (Symbol::new(&env, "fleet_treasury_updated"),),
+            (fleet_id, owner, treasury),
+        );
+    }
+
     // ── Issue #68 — add_driver_to_fleet ───────────────────────────────────────
 
     /// Invite a driver to a fleet.  Only the fleet owner may call this.

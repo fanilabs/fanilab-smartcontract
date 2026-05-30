@@ -122,6 +122,29 @@ fn test_get_fleet_unknown_id_panics() {
     client.get_fleet(&999);
 }
 
+#[test]
+fn test_update_fleet_treasury_updates_profile() {
+    let (env, client, _admin) = setup_test();
+    let (fleet_id, owner, _treasury) = register_fleet(&env, &client);
+    let new_treasury = Address::generate(&env);
+
+    client.update_fleet_treasury(&owner, &fleet_id, &new_treasury);
+
+    let profile = client.get_fleet(&fleet_id);
+    assert_eq!(profile.treasury, new_treasury);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #3)")]
+fn test_update_fleet_treasury_rejects_non_owner() {
+    let (env, client, _admin) = setup_test();
+    let (fleet_id, _owner, _treasury) = register_fleet(&env, &client);
+    let attacker = Address::generate(&env);
+    let new_treasury = Address::generate(&env);
+
+    client.update_fleet_treasury(&attacker, &fleet_id, &new_treasury);
+}
+
 // ── Issue #68 tests — add_driver_to_fleet ────────────────────────────────────
 
 #[test]

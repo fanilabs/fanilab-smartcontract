@@ -1,13 +1,11 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, panic_with_error, Address, BytesN, Env, IntoVal, Symbol,
+    contract, contractimpl, contracttype, panic_with_error, Address, BytesN, Env, Symbol,
     Vec,
 };
-use shared_types::SwiftChainError;
+use shared_types::{DeliveryId, SwiftChainError};
 use delivery_contract::{DeliveryContractClient, DeliveryStatus};
-
-pub type DeliveryId = u64;
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -103,7 +101,7 @@ impl DisputeResolutionContract {
             .unwrap_or(0)
     }
 
-    pub fn raise_dispute(env: Env, caller: Address, delivery_id: DeliveryId, reason_code: u32) {
+    pub fn raise_dispute(env: Env, caller: Address, delivery_id: DeliveryId) {
         caller.require_auth();
 
         let delivery_contract_addr = Self::get_delivery_contract(env.clone());
@@ -225,7 +223,7 @@ impl DisputeResolutionContract {
             soroban_sdk::vec![
                 &env,
                 caller.into_val(&env),
-                delivery_id.into_val(&env),
+                u64::from(delivery_id).into_val(&env),
                 false.into_val(&env),
             ],
         );
@@ -264,7 +262,7 @@ impl DisputeResolutionContract {
 
         let escrow_addr = Self::get_escrow_contract(env.clone());
         let escrow_client = escrow_contract::EscrowContractClient::new(&env, &escrow_addr);
-        let escrow = escrow_client.get_escrow(&delivery_id);
+        let escrow = escrow_client.get_escrow(&u64::from(delivery_id));
 
         if escrow.status == shared_types::EscrowStatus::Paused {
             use soroban_sdk::IntoVal;
@@ -274,7 +272,7 @@ impl DisputeResolutionContract {
                 soroban_sdk::vec![
                     &env,
                     caller.into_val(&env),
-                    delivery_id.into_val(&env),
+                    u64::from(delivery_id).into_val(&env),
                     sender_share_bps.into_val(&env),
                 ],
             );

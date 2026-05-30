@@ -18,18 +18,6 @@ fn setup_token(env: &Env, admin: &Address) -> Address {
         .address()
 }
 
-fn init_contract(
-    env: &Env,
-    client: &EscrowContractClient,
-    admin: &Address,
-    platform_fee_bps: u32,
-) -> Address {
-    let token_admin = Address::generate(env);
-    let token = setup_token(env, &token_admin);
-    client.init(admin, &token, &platform_fee_bps);
-    token
-}
-
 fn mint(env: &Env, token: &Address, to: &Address, amount: i128) {
     StellarAssetClient::new(env, token).mint(to, &amount);
 }
@@ -326,17 +314,17 @@ fn test_insufficient_funds_guard_on_release() {
     mint(&env, &token, &sender, 200);
     client.create_escrow(&sender, &recipient, &driver, &10u64, &token, &200);
 
-    env.as_contract(&contract_id, || {
-        let mut record: EscrowRecord = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Escrow(10u64))
-            .unwrap();
-        record.amount = 500;
-        env.storage()
-            .persistent()
-            .set(&DataKey::Escrow(10u64), &record);
-    });
+        env.as_contract(&contract_id, || {
+            let mut record: EscrowRecord = env
+                .storage()
+                .persistent()
+                .get(&shared_types::escrow_key(10u64))
+                .unwrap();
+            record.amount = 500;
+            env.storage()
+                .persistent()
+                .set(&shared_types::escrow_key(10u64), &record);
+        });
 
     let result = client.try_release_escrow(&admin, &10u64);
     match result {

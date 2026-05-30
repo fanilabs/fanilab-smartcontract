@@ -153,29 +153,102 @@ pub struct EscrowRefundedEvent {
 }
 
 #[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+pub struct DeliveryId(pub u64);
+
+impl DeliveryId {
+    pub fn new(value: u64) -> Self {
+        Self(value)
+    }
+
+    pub fn value(self) -> u64 {
+        self.0
+    }
+}
+
+impl From<u64> for DeliveryId {
+    fn from(value: u64) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<DeliveryId> for u64 {
+    fn from(value: DeliveryId) -> Self {
+        value.0
+    }
+}
+
+impl PartialEq<u64> for DeliveryId {
+    fn eq(&self, other: &u64) -> bool {
+        self.0 == *other
+    }
+}
+
+impl PartialEq<DeliveryId> for u64 {
+    fn eq(&self, other: &DeliveryId) -> bool {
+        *self == other.0
+    }
+}
+
+#[contracttype]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 pub enum DeliveryStatus {
-    Created,
+    Pending,
+    Active,
     InTransit,
     Delivered,
     Disputed,
+    Cancelled,
 }
 
 #[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DeliveryDetails {
-    pub id: u64,
-    pub driver: String,
-    pub status: DeliveryStatus,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum EscrowStatus {
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+pub enum EscrowState {
     Locked,
-    Paused,
     Released,
     Refunded,
+    Paused,
+}
+
+pub type EscrowStatus = EscrowState;
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PartyAddresses {
+    pub sender: Address,
+    pub driver: Address,
+    pub recipient: Address,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProtocolConfig {
+    pub token: Address,
+    pub platform_fee_bps: u32,
+    pub protocol_version: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum StorageKey {
+    /// Instance storage for the shared admin address.
+    Admin,
+    /// Persistent storage for a delivery record.
+    Delivery(DeliveryId),
+    /// Persistent storage for an escrow record.
+    Escrow(DeliveryId),
+    /// Persistent storage for a driver profile.
+    DriverProfile(Address),
+    /// Instance storage for protocol-wide configuration.
+    ProtocolConfig,
+}
+
+pub fn delivery_key(id: impl Into<DeliveryId>) -> StorageKey {
+    StorageKey::Delivery(id.into())
+}
+
+pub fn escrow_key(id: impl Into<DeliveryId>) -> StorageKey {
+    StorageKey::Escrow(id.into())
 }
 
 #[contracttype]
@@ -186,20 +259,77 @@ pub struct EscrowRecord {
     pub driver: Address,
     pub token: Address,
     pub amount: i128,
-    pub status: EscrowStatus,
+    pub status: EscrowState,
     pub created_at: u64,
     pub disputed_by: Option<Address>,
     pub disputed_at: Option<u64>,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DeliveryDetails {
+    pub id: DeliveryId,
+    pub driver: String,
+    pub status: DeliveryStatus,
 }
 
 #[cfg(test)]
 mod test {
     use super::{
         CargoCategory, CargoDescriptor, DeliveryConfirmedEvent, DeliveryCreatedEvent,
-        DeliveryDisputedEvent, DeliveryMetadata, DriverAssignedEvent, EscrowFundedEvent,
-        EscrowRefundedEvent, EscrowReleasedEvent, SwiftChainError,
+        DeliveryDisputedEvent, DeliveryId, DeliveryMetadata, DeliveryStatus, DriverAssignedEvent,
+        EscrowFundedEvent, EscrowRefundedEvent, EscrowReleasedEvent, EscrowState, PartyAddresses,
+        StorageKey, SwiftChainError, delivery_key, escrow_key,
     };
     use soroban_sdk::{testutils::Address as _, Address, Env, String};
+
+    #[test]
+    fn delivery_id_wraps_raw_u64() {
+        let delivery_id = DeliveryId::new(42);
+
+        assert_eq!(delivery_id, 42);
+        assert_eq!(u64::from(delivery_id), 42);
+    }
+
+    #[test]
+    fn delivery_and_escrow_states_expose_expected_variants() {
+        assert_eq!(DeliveryStatus::Pending, DeliveryStatus::Pending);
+        assert_eq!(DeliveryStatus::Active, DeliveryStatus::Active);
+        assert_eq!(DeliveryStatus::InTransit, DeliveryStatus::InTransit);
+        assert_eq!(DeliveryStatus::Delivered, DeliveryStatus::Delivered);
+        assert_eq!(DeliveryStatus::Disputed, DeliveryStatus::Disputed);
+        assert_eq!(DeliveryStatus::Cancelled, DeliveryStatus::Cancelled);
+
+        assert_eq!(EscrowState::Locked, EscrowState::Locked);
+        assert_eq!(EscrowState::Released, EscrowState::Released);
+        assert_eq!(EscrowState::Refunded, EscrowState::Refunded);
+        assert_eq!(EscrowState::Paused, EscrowState::Paused);
+    }
+
+    #[test]
+    fn party_addresses_preserve_fields() {
+        let env = Env::default();
+        let sender = Address::generate(&env);
+        let driver = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        let party_addresses = PartyAddresses {
+            sender: sender.clone(),
+            driver: driver.clone(),
+            recipient: recipient.clone(),
+        };
+
+        assert_eq!(party_addresses.sender, sender);
+        assert_eq!(party_addresses.driver, driver);
+        assert_eq!(party_addresses.recipient, recipient);
+    }
+
+    #[test]
+    fn storage_key_helpers_construct_expected_variants() {
+        let delivery_id = DeliveryId::new(7);
+
+        assert_eq!(delivery_key(delivery_id), StorageKey::Delivery(delivery_id));
+        assert_eq!(escrow_key(delivery_id), StorageKey::Escrow(delivery_id));
+    }
 
     #[test]
     fn unauthorized_has_expected_discriminant() {

@@ -51,6 +51,7 @@ make build
 # Build specific contracts
 make build-escrow
 make build-delivery
+make build-dispute
 ```
 
 **For Windows Users (or users without Make):**
@@ -61,6 +62,7 @@ cargo build --target wasm32-unknown-unknown --release
 # Build specific contracts
 cargo build -p escrow_contract --target wasm32-unknown-unknown --release
 cargo build -p delivery_contract --target wasm32-unknown-unknown --release
+cargo build -p dispute_resolution_contract --target wasm32-unknown-unknown --release
 ```
 
 ## Testing Guidelines

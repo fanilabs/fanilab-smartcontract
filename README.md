@@ -243,6 +243,7 @@ SwiftChain-SmartContract/
    ```bash
    make build-escrow
    make build-delivery
+   make build-dispute
    ```
    
    To run tests:
@@ -263,6 +264,7 @@ SwiftChain-SmartContract/
    ```bash
    cargo build -p escrow_contract --target wasm32-unknown-unknown --release
    cargo build -p delivery_contract --target wasm32-unknown-unknown --release
+   cargo build -p dispute_resolution_contract --target wasm32-unknown-unknown --release
    ```
    
    To run tests:

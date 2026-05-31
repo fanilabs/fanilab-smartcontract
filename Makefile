@@ -17,6 +17,10 @@ build-delivery:
 	cargo build -p delivery_contract --target wasm32-unknown-unknown --release
 	@echo "Delivery contract built successfully!"
 
+build-dispute:
+	cargo build -p dispute_resolution_contract --target wasm32-unknown-unknown --release
+	@echo "Dispute resolution contract built successfully!"
+
 clean:
 	cargo clean
 

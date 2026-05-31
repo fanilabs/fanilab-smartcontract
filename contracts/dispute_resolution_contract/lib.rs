@@ -1,11 +1,10 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, panic_with_error, Address, BytesN, Env, Symbol,
-    Vec,
+    contract, contractimpl, contracttype, panic_with_error, Address, BytesN, Env, IntoVal,
+    Symbol, Vec,
 };
-use shared_types::{DeliveryId, SwiftChainError};
-use delivery_contract::{DeliveryContractClient, DeliveryStatus};
+use shared_types::{DeliveryId, DeliveryStatus, EscrowRecord, EscrowStatus, SwiftChainError};
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -105,10 +104,11 @@ impl DisputeResolutionContract {
         caller.require_auth();
 
         let delivery_contract_addr = Self::get_delivery_contract(env.clone());
-        let delivery_client = DeliveryContractClient::new(&env, &delivery_contract_addr);
-        
-        // Fetch the delivery record
-        let delivery = delivery_client.get_delivery(&delivery_id);
+        let delivery: shared_types::DeliveryRecord = env.invoke_contract(
+            &delivery_contract_addr,
+            &Symbol::new(&env, "get_delivery"),
+            soroban_sdk::vec![&env, delivery_id.into_val(&env)],
+        );
 
         // Verify the caller is sender or recipient
         if caller != delivery.sender && caller != delivery.recipient {
@@ -127,7 +127,11 @@ impl DisputeResolutionContract {
             }
             DeliveryStatus::Active | DeliveryStatus::InTransit => {
                 // Call delivery contract to transition to Disputed and pause escrow
-                delivery_client.raise_dispute(&caller, &delivery_id);
+                let _: () = env.invoke_contract(
+                    &delivery_contract_addr,
+                    &Symbol::new(&env, "raise_dispute"),
+                    soroban_sdk::vec![&env, caller.into_val(&env), delivery_id.into_val(&env)],
+                );
             }
             _ => {
                 panic_with_error!(&env, SwiftChainError::InvalidState);
@@ -135,8 +139,11 @@ impl DisputeResolutionContract {
         }
 
         let escrow_addr = Self::get_escrow_contract(env.clone());
-        let escrow_client = escrow_contract::EscrowContractClient::new(&env, &escrow_addr);
-        escrow_client.freeze_funds(&u64::from(delivery_id));
+        let _: () = env.invoke_contract(
+            &escrow_addr,
+            &Symbol::new(&env, "freeze_funds"),
+            soroban_sdk::vec![&env, u64::from(delivery_id).into_val(&env)],
+        );
 
         let dispute_key = DataKey::Dispute(delivery_id);
         if env.storage().persistent().has(&dispute_key) {
@@ -180,8 +187,11 @@ impl DisputeResolutionContract {
         }
 
         let delivery_contract_addr = Self::get_delivery_contract(env.clone());
-        let delivery_client = DeliveryContractClient::new(&env, &delivery_contract_addr);
-        let delivery = delivery_client.get_delivery(&delivery_id);
+        let delivery: shared_types::DeliveryRecord = env.invoke_contract(
+            &delivery_contract_addr,
+            &Symbol::new(&env, "get_delivery"),
+            soroban_sdk::vec![&env, delivery_id.into_val(&env)],
+        );
 
         if caller != delivery.sender && caller != delivery.recipient {
             panic_with_error!(&env, SwiftChainError::Unauthorized);
@@ -265,11 +275,13 @@ impl DisputeResolutionContract {
         env.storage().persistent().extend_ttl(&dispute_key, 518400, 518400);
 
         let escrow_addr = Self::get_escrow_contract(env.clone());
-        let escrow_client = escrow_contract::EscrowContractClient::new(&env, &escrow_addr);
-        let escrow = escrow_client.get_escrow(&u64::from(delivery_id));
+        let escrow: EscrowRecord = env.invoke_contract(
+            &escrow_addr,
+            &Symbol::new(&env, "get_escrow"),
+            soroban_sdk::vec![&env, u64::from(delivery_id).into_val(&env)],
+        );
 
-        if escrow.status == shared_types::EscrowStatus::Paused {
-            use soroban_sdk::IntoVal;
+        if escrow.status == EscrowStatus::Paused {
             let _: () = env.invoke_contract(
                 &escrow_addr,
                 &Symbol::new(&env, "resolve_dispute_split"),

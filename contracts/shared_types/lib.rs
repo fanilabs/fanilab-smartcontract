@@ -202,6 +202,20 @@ pub enum DeliveryStatus {
 }
 
 #[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DeliveryRecord {
+    pub delivery_id: DeliveryId,
+    pub sender: Address,
+    pub recipient: Address,
+    pub driver: Option<Address>,
+    pub status: DeliveryStatus,
+    pub metadata: DeliveryMetadata,
+    pub created_at: u64,
+    pub delivered_at: Option<u64>,
+    pub transit_started_at: Option<u64>,
+}
+
+#[contracttype]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 pub enum EscrowState {
     Locked,

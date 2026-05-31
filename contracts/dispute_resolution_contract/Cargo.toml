@@ -11,6 +11,7 @@ crate-type = ["cdylib", "rlib"]
 soroban-sdk = { workspace = true }
 delivery_contract = { path = "../delivery_contract" }
 escrow_contract = { path = "../escrow_contract" }
+identity_reputation_contract = { path = "../identity_reputation_contract" }
 shared_types = { path = "../shared_types" }
 
 [dev-dependencies]

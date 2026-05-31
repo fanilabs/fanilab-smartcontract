@@ -134,6 +134,10 @@ impl DisputeResolutionContract {
             }
         }
 
+        let escrow_addr = Self::get_escrow_contract(env.clone());
+        let escrow_client = escrow_contract::EscrowContractClient::new(&env, &escrow_addr);
+        escrow_client.freeze_funds(&u64::from(delivery_id));
+
         let dispute_key = DataKey::Dispute(delivery_id);
         if env.storage().persistent().has(&dispute_key) {
             panic_with_error!(&env, SwiftChainError::DuplicateDelivery);
@@ -280,6 +284,47 @@ impl DisputeResolutionContract {
 
         env.events().publish(
             (Symbol::new(&env, "dispute_resolved_split"), delivery_id),
+            (caller, delivery_id),
+        );
+    }
+
+    pub fn resolve_dispute_pay_driver(env: Env, caller: Address, delivery_id: DeliveryId) {
+        caller.require_auth();
+        if !Self::is_admin(env.clone(), caller.clone()) {
+            panic_with_error!(&env, SwiftChainError::Unauthorized);
+        }
+
+        let dispute_key = DataKey::Dispute(delivery_id);
+        let mut dispute: DisputeCase = env
+            .storage()
+            .persistent()
+            .get(&dispute_key)
+            .unwrap_or_else(|| panic_with_error!(&env, SwiftChainError::DeliveryNotFound));
+
+        if dispute.status != DisputeStatus::Open {
+            panic_with_error!(&env, SwiftChainError::InvalidState);
+        }
+
+        dispute.status = DisputeStatus::ResolvedPayout;
+        env.storage().persistent().set(&dispute_key, &dispute);
+        env.storage().persistent().extend_ttl(&dispute_key, 518400, 518400);
+
+        let escrow_addr = Self::get_escrow_contract(env.clone());
+        
+        use soroban_sdk::IntoVal;
+        let _: () = env.invoke_contract(
+            &escrow_addr,
+            &Symbol::new(&env, "resolve_dispute"),
+            soroban_sdk::vec![
+                &env,
+                caller.into_val(&env),
+                u64::from(delivery_id).into_val(&env),
+                true.into_val(&env),
+            ],
+        );
+
+        env.events().publish(
+            (Symbol::new(&env, "dispute_resolved_payout"), delivery_id),
             (caller, delivery_id),
         );
     }

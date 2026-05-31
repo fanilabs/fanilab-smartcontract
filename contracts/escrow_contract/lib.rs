@@ -495,6 +495,15 @@ impl EscrowContract {
         }
         load_escrow(&env, delivery_id)
     }
+
+    pub fn freeze_funds(env: Env, delivery_id: u64) {
+        let mut record = load_escrow(&env, delivery_id);
+        if record.status == EscrowStatus::Locked {
+            record.status = EscrowStatus::Paused;
+            record.disputed_at = Some(env.ledger().timestamp());
+            save_escrow(&env, delivery_id, &record);
+        }
+    }
 }
 
 #[cfg(test)]

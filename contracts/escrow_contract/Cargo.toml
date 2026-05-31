@@ -10,6 +10,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 soroban-sdk = { workspace = true }
 shared_types = { path = "../shared_types" }
+settlement_contract = { path = "../settlement_contract" }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }

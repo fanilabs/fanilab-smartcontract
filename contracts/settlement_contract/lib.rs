@@ -1,7 +1,7 @@
 #![no_std]
 
 use soroban_sdk::{
-	contract, contracterror, contractimpl, contracttype, panic_with_error, Address, Env,
+	contract, contracterror, contractimpl, contracttype, panic_with_error, token, Address, Env,
 	IntoVal, Symbol, Vec,
 };
 
@@ -36,6 +36,7 @@ pub enum SettlementError {
 	Unauthorized = 3,
 	UnsupportedAssetPair = 4,
 	InvalidAmount = 5,
+	SlippageExceeded = 6,
 }
 
 fn asset_key(asset: SupportedAsset) -> DataKey {
@@ -208,6 +209,78 @@ impl SettlementContract {
 			&Symbol::new(&env, "quote_exact_input"),
 			soroban_sdk::vec![&env, path.into_val(&env), amount_in.into_val(&env)],
 		)
+	}
+
+	pub fn execute_settlement_swap(
+		env: Env,
+		caller: Address,
+		source_asset: Address,
+		destination_asset: Address,
+		recipient: Address,
+		amount_in: i128,
+		min_amount_out: i128,
+	) -> i128 {
+		caller.require_auth();
+		require_positive_amount(&env, amount_in);
+
+		if min_amount_out < 0 {
+			panic_with_error!(&env, SettlementError::InvalidAmount);
+		}
+
+		if source_asset == destination_asset {
+			if amount_in < min_amount_out {
+				panic_with_error!(&env, SettlementError::SlippageExceeded);
+			}
+			token::Client::new(&env, &source_asset).transfer(&caller, &recipient, &amount_in);
+			return amount_in;
+		}
+
+		require_supported_pair(&env, &source_asset, &destination_asset);
+
+		let estimated_amount_out = Self::calculate_swap_estimate(
+			env.clone(),
+			source_asset.clone(),
+			destination_asset.clone(),
+			amount_in,
+		);
+		if estimated_amount_out < min_amount_out {
+			panic_with_error!(&env, SettlementError::SlippageExceeded);
+		}
+
+		let router = get_router(&env);
+		let contract_address = env.current_contract_address();
+		token::Client::new(&env, &source_asset).transfer(&caller, &contract_address, &amount_in);
+		token::Client::new(&env, &source_asset).approve(
+			&contract_address,
+			&router,
+			&amount_in,
+			&(env.ledger().sequence() + 100),
+		);
+
+		let path = pair_path(&env, source_asset, destination_asset);
+		let amount_out: i128 = env.invoke_contract(
+			&router,
+			&Symbol::new(&env, "swap_exact_tokens_for_tokens"),
+			soroban_sdk::vec![
+				&env,
+				contract_address.into_val(&env),
+				recipient.clone().into_val(&env),
+				path.into_val(&env),
+				amount_in.into_val(&env),
+				min_amount_out.into_val(&env),
+			],
+		);
+
+		if amount_out < min_amount_out {
+			panic_with_error!(&env, SettlementError::SlippageExceeded);
+		}
+
+		env.events().publish(
+			(Symbol::new(&env, "settlement_swap_executed"),),
+			(caller, recipient, amount_in, amount_out),
+		);
+
+		amount_out
 	}
 
 }

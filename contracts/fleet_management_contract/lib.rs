@@ -1,7 +1,8 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, panic_with_error, Address, Env, Symbol,
+    contract, contracterror, contractimpl, contracttype, panic_with_error, Address, Env, IntoVal,
+    Symbol,
 };
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -45,6 +46,8 @@ pub struct FleetProfile {
 pub enum DataKey {
     /// Instance key — stores the contract administrator address.
     Admin,
+    /// Instance key — optional address of the identity_reputation_contract.
+    IdentityContract,
     /// Persistent key — monotonically incrementing fleet counter.
     FleetCounter,
     /// Persistent key — fleet profile keyed by fleet id.
@@ -73,11 +76,31 @@ impl FleetManagementContract {
             .set(&DataKey::FleetCounter, &0u64);
     }
 
+    /// Configure the address of the identity_reputation_contract.  Admin only.
+    /// Once set, `register_fleet` will automatically create an identity profile
+    /// for the fleet owner via a cross-contract call.
+    pub fn set_identity_contract(env: Env, admin: Address, identity_contract: Address) {
+        admin.require_auth();
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .unwrap_or_else(|| panic_with_error!(&env, FleetError::NotInitialized));
+        if admin != stored_admin {
+            panic_with_error!(&env, FleetError::Unauthorized);
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::IdentityContract, &identity_contract);
+    }
+
     // ── Issue #67 — register_fleet ────────────────────────────────────────────
 
     /// Register a new fleet, designating an owner and a treasury wallet.
     ///
     /// The caller (owner) must sign the transaction.  Returns the new fleet id.
+    /// If an identity contract is configured, automatically creates an identity
+    /// profile for the owner via a cross-contract call.
     pub fn register_fleet(env: Env, owner: Address, treasury: Address) -> FleetId {
         owner.require_auth();
 
@@ -105,6 +128,20 @@ impl FleetManagementContract {
         env.storage()
             .persistent()
             .extend_ttl(&fleet_key, 518400, 518400);
+
+        // Issue #73 — if identity contract is configured, register the fleet
+        // owner as a driver in the identity_reputation_contract.
+        if let Some(identity_addr) = env
+            .storage()
+            .instance()
+            .get::<DataKey, Address>(&DataKey::IdentityContract)
+        {
+            let _: () = env.invoke_contract(
+                &identity_addr,
+                &Symbol::new(&env, "register_driver"),
+                soroban_sdk::vec![&env, owner.clone().into_val(&env)],
+            );
+        }
 
         // Emit event: topic = "fleet_registered", data = (fleet_id, owner, treasury).
         env.events().publish(
@@ -303,6 +340,32 @@ impl FleetManagementContract {
             (Symbol::new(&env, "driver_removed"),),
             (fleet_id, driver),
         );
+    }
+
+    // ── Issue #72 — get_payout_address ───────────────────────────────────────
+
+    /// Return the address that the escrow_contract should route funds to for a
+    /// given driver and fleet.
+    ///
+    /// Returns the fleet's treasury if the driver is an active member of that
+    /// fleet, otherwise returns the driver's own address.
+    pub fn get_payout_address(env: Env, driver: Address, fleet_id: FleetId) -> Address {
+        let status: Option<DriverFleetStatus> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::DriverFleet(fleet_id, driver.clone()));
+
+        match status {
+            Some(DriverFleetStatus::Active) => {
+                let profile: FleetProfile = env
+                    .storage()
+                    .persistent()
+                    .get(&DataKey::Fleet(fleet_id))
+                    .unwrap_or_else(|| panic_with_error!(&env, FleetError::FleetNotFound));
+                profile.treasury
+            }
+            _ => driver,
+        }
     }
 
     /// Return the status of a driver within a fleet, or `None` if no record

@@ -377,3 +377,195 @@ fn test_remove_driver_unauthorized_caller_panics() {
     // random_caller is neither owner nor driver — must panic.
     client.remove_driver_from_fleet(&fleet_id, &random_caller, &driver);
 }
+
+// ── Issue #75 tests — Fleet Roster Management ────────────────────────────────
+
+#[test]
+fn test_roster_full_lifecycle_add_accept_remove() {
+    let (env, client, _admin) = setup_test();
+    let (fleet_id, owner, _treasury) = register_fleet(&env, &client);
+
+    let driver = Address::generate(&env);
+
+    // Add: driver starts as Pending.
+    client.add_driver_to_fleet(&fleet_id, &driver);
+    assert_eq!(
+        client.get_driver_fleet_status(&fleet_id, &driver),
+        Some(DriverFleetStatus::Pending)
+    );
+
+    // Accept: driver transitions to Active, count increments.
+    client.accept_fleet_invite(&fleet_id, &driver);
+    assert_eq!(
+        client.get_driver_fleet_status(&fleet_id, &driver),
+        Some(DriverFleetStatus::Active)
+    );
+    assert_eq!(client.get_fleet(&fleet_id).total_active_drivers, 1);
+
+    // Remove: record deleted, count decrements.
+    client.remove_driver_from_fleet(&fleet_id, &owner, &driver);
+    assert_eq!(client.get_driver_fleet_status(&fleet_id, &driver), None);
+    assert_eq!(client.get_fleet(&fleet_id).total_active_drivers, 0);
+}
+
+#[test]
+fn test_roster_multiple_drivers_independent_states() {
+    let (env, client, _admin) = setup_test();
+    let (fleet_id, owner, _treasury) = register_fleet(&env, &client);
+
+    let driver_a = Address::generate(&env);
+    let driver_b = Address::generate(&env);
+    let driver_c = Address::generate(&env);
+
+    client.add_driver_to_fleet(&fleet_id, &driver_a);
+    client.add_driver_to_fleet(&fleet_id, &driver_b);
+    client.add_driver_to_fleet(&fleet_id, &driver_c);
+
+    // Accept only a and b.
+    client.accept_fleet_invite(&fleet_id, &driver_a);
+    client.accept_fleet_invite(&fleet_id, &driver_b);
+
+    assert_eq!(client.get_fleet(&fleet_id).total_active_drivers, 2);
+    assert_eq!(
+        client.get_driver_fleet_status(&fleet_id, &driver_c),
+        Some(DriverFleetStatus::Pending)
+    );
+
+    // Remove driver_a; driver_b and driver_c unaffected.
+    client.remove_driver_from_fleet(&fleet_id, &owner, &driver_a);
+    assert_eq!(client.get_fleet(&fleet_id).total_active_drivers, 1);
+    assert_eq!(
+        client.get_driver_fleet_status(&fleet_id, &driver_b),
+        Some(DriverFleetStatus::Active)
+    );
+    assert_eq!(
+        client.get_driver_fleet_status(&fleet_id, &driver_c),
+        Some(DriverFleetStatus::Pending)
+    );
+}
+
+#[test]
+fn test_roster_driver_can_leave_voluntarily() {
+    let (env, client, _admin) = setup_test();
+    let (fleet_id, _owner, _treasury) = register_fleet(&env, &client);
+
+    let driver = Address::generate(&env);
+    client.add_driver_to_fleet(&fleet_id, &driver);
+    client.accept_fleet_invite(&fleet_id, &driver);
+
+    // Driver removes themselves.
+    client.remove_driver_from_fleet(&fleet_id, &driver, &driver);
+
+    assert_eq!(client.get_driver_fleet_status(&fleet_id, &driver), None);
+    assert_eq!(client.get_fleet(&fleet_id).total_active_drivers, 0);
+}
+
+#[test]
+fn test_roster_re_invite_after_removal() {
+    let (env, client, _admin) = setup_test();
+    let (fleet_id, owner, _treasury) = register_fleet(&env, &client);
+
+    let driver = Address::generate(&env);
+    client.add_driver_to_fleet(&fleet_id, &driver);
+    client.accept_fleet_invite(&fleet_id, &driver);
+    client.remove_driver_from_fleet(&fleet_id, &owner, &driver);
+
+    // Should be possible to invite the same driver again after removal.
+    client.add_driver_to_fleet(&fleet_id, &driver);
+    assert_eq!(
+        client.get_driver_fleet_status(&fleet_id, &driver),
+        Some(DriverFleetStatus::Pending)
+    );
+}
+
+// ── Issue #76 tests — Treasury Routing Logic ─────────────────────────────────
+
+#[test]
+fn test_get_payout_address_returns_treasury_for_active_driver() {
+    let (env, client, _admin) = setup_test();
+    let (fleet_id, _owner, treasury) = register_fleet(&env, &client);
+
+    let driver = Address::generate(&env);
+    client.add_driver_to_fleet(&fleet_id, &driver);
+    client.accept_fleet_invite(&fleet_id, &driver);
+
+    let payout = client.get_payout_address(&driver, &fleet_id);
+    assert_eq!(payout, treasury);
+}
+
+#[test]
+fn test_get_payout_address_returns_driver_when_not_in_fleet() {
+    let (env, client, _admin) = setup_test();
+    let (fleet_id, _owner, _treasury) = register_fleet(&env, &client);
+
+    let driver = Address::generate(&env);
+    // Driver has no record in the fleet.
+    let payout = client.get_payout_address(&driver, &fleet_id);
+    assert_eq!(payout, driver);
+}
+
+#[test]
+fn test_get_payout_address_returns_driver_for_pending_invite() {
+    let (env, client, _admin) = setup_test();
+    let (fleet_id, _owner, _treasury) = register_fleet(&env, &client);
+
+    let driver = Address::generate(&env);
+    client.add_driver_to_fleet(&fleet_id, &driver);
+    // Invite is Pending — not yet accepted.
+
+    let payout = client.get_payout_address(&driver, &fleet_id);
+    assert_eq!(payout, driver);
+}
+
+#[test]
+fn test_get_payout_address_returns_driver_after_removal() {
+    let (env, client, _admin) = setup_test();
+    let (fleet_id, owner, _treasury) = register_fleet(&env, &client);
+
+    let driver = Address::generate(&env);
+    client.add_driver_to_fleet(&fleet_id, &driver);
+    client.accept_fleet_invite(&fleet_id, &driver);
+    client.remove_driver_from_fleet(&fleet_id, &owner, &driver);
+
+    // After removal the driver should receive their own address.
+    let payout = client.get_payout_address(&driver, &fleet_id);
+    assert_eq!(payout, driver);
+}
+
+#[test]
+fn test_get_payout_address_treasury_updates_are_reflected() {
+    let (env, client, _admin) = setup_test();
+    let (fleet_id, owner, _old_treasury) = register_fleet(&env, &client);
+
+    let driver = Address::generate(&env);
+    client.add_driver_to_fleet(&fleet_id, &driver);
+    client.accept_fleet_invite(&fleet_id, &driver);
+
+    let new_treasury = Address::generate(&env);
+    client.update_fleet_treasury(&owner, &fleet_id, &new_treasury);
+
+    let payout = client.get_payout_address(&driver, &fleet_id);
+    assert_eq!(payout, new_treasury);
+}
+
+#[test]
+fn test_get_payout_address_multiple_drivers_same_fleet() {
+    let (env, client, _admin) = setup_test();
+    let (fleet_id, _owner, treasury) = register_fleet(&env, &client);
+
+    let driver_a = Address::generate(&env);
+    let driver_b = Address::generate(&env);
+    let driver_c = Address::generate(&env);
+
+    client.add_driver_to_fleet(&fleet_id, &driver_a);
+    client.add_driver_to_fleet(&fleet_id, &driver_b);
+    client.add_driver_to_fleet(&fleet_id, &driver_c);
+
+    // Only a and b accept; c stays pending.
+    client.accept_fleet_invite(&fleet_id, &driver_a);
+    client.accept_fleet_invite(&fleet_id, &driver_b);
+
+    assert_eq!(client.get_payout_address(&driver_a, &fleet_id), treasury);
+    assert_eq!(client.get_payout_address(&driver_b, &fleet_id), treasury);
+    assert_eq!(client.get_payout_address(&driver_c, &fleet_id), driver_c);
+}

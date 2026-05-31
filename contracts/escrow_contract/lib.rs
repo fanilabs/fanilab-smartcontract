@@ -8,6 +8,7 @@ use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, token, Address, Env,
     Symbol,
 };
+use settlement_contract::SettlementContractClient;
 
 pub mod constants {
     pub const ESCROW_TTL_THRESHOLD: u32 = 518400;
@@ -50,6 +51,35 @@ fn calculate_fee(amount: i128, platform_fee_bps: u32) -> i128 {
     amount.saturating_mul(platform_fee_bps as i128) / 10_000
 }
 
+fn get_settlement_contract(env: &Env) -> Option<Address> {
+    env.storage().instance().get(&DataKey::SettlementContract)
+}
+
+fn payout_driver(env: &Env, token: &Address, driver: &Address, amount: i128) {
+    if amount <= 0 {
+        return;
+    }
+
+    if let Some(settlement_addr) = get_settlement_contract(env) {
+        let settlement_client = SettlementContractClient::new(env, &settlement_addr);
+        if let Some(preferred_asset) = settlement_client.get_driver_preference(driver) {
+            if preferred_asset != token.clone() {
+                settlement_client.execute_settlement_swap(
+                    &env.current_contract_address(),
+                    token,
+                    &preferred_asset,
+                    driver,
+                    &amount,
+                    &0i128,
+                );
+                return;
+            }
+        }
+    }
+
+    token::Client::new(env, token).transfer(&env.current_contract_address(), driver, &amount);
+}
+
 fn save_escrow(env: &Env, delivery_id: u64, record: &EscrowRecord) {
     let key = escrow_key(delivery_id);
     env.storage().persistent().set(&key, record);
@@ -79,6 +109,7 @@ fn load_escrow(env: &Env, delivery_id: u64) -> EscrowRecord {
 #[derive(Clone)]
 enum DataKey {
     PendingAdmin,
+    SettlementContract,
 }
 
 #[contracterror]
@@ -187,6 +218,18 @@ impl EscrowContract {
 
     pub fn get_protocol_version(env: Env) -> u32 {
         load_protocol_config(&env).protocol_version
+    }
+
+    pub fn set_settlement_contract(env: Env, admin: Address, settlement_contract: Address) {
+        admin.require_auth();
+        require_admin(&env, &admin);
+        env.storage()
+            .instance()
+            .set(&DataKey::SettlementContract, &settlement_contract);
+    }
+
+    pub fn get_settlement_contract(env: Env) -> Option<Address> {
+        get_settlement_contract(&env)
     }
 
     pub fn propose_admin(env: Env, current_admin: Address, new_admin: Address) {
@@ -302,13 +345,7 @@ impl EscrowContract {
         let platform_fee = calculate_fee(record.amount, platform_fee_bps);
         let driver_amount = record.amount.saturating_sub(platform_fee);
 
-        if driver_amount > 0 {
-            token::Client::new(&env, &record.token).transfer(
-                &env.current_contract_address(),
-                &record.driver,
-                &driver_amount,
-            );
-        }
+        payout_driver(&env, &record.token, &record.driver, driver_amount);
 
         if platform_fee > 0 {
             let admin: Address = env
@@ -398,13 +435,7 @@ impl EscrowContract {
             let platform_fee = calculate_fee(record.amount, platform_fee_bps);
             let driver_amount = record.amount.saturating_sub(platform_fee);
 
-            if driver_amount > 0 {
-                token::Client::new(&env, &record.token).transfer(
-                    &env.current_contract_address(),
-                    &record.driver,
-                    &driver_amount,
-                );
-            }
+            payout_driver(&env, &record.token, &record.driver, driver_amount);
 
             if platform_fee > 0 {
                 let admin: Address = env

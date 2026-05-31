@@ -2,6 +2,7 @@
 
 use soroban_sdk::{
 	contract, contracterror, contractimpl, contracttype, panic_with_error, Address, Env,
+	IntoVal, Symbol, Vec,
 };
 
 #[contracttype]
@@ -17,10 +18,13 @@ pub enum SupportedAsset {
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum DataKey {
 	Admin,
+	Router,
 	Xlm,
 	Usdc,
 	Ngnc,
 	Kes,
+	AssetPair(Address, Address),
+	DriverPreference(Address),
 }
 
 #[contracterror]
@@ -30,6 +34,8 @@ pub enum SettlementError {
 	AlreadyInitialized = 1,
 	NotInitialized = 2,
 	Unauthorized = 3,
+	UnsupportedAssetPair = 4,
+	InvalidAmount = 5,
 }
 
 fn asset_key(asset: SupportedAsset) -> DataKey {
@@ -50,6 +56,38 @@ fn require_admin(env: &Env, caller: &Address) {
 	if stored_admin != *caller {
 		panic_with_error!(env, SettlementError::Unauthorized);
 	}
+}
+
+fn require_positive_amount(env: &Env, amount: i128) {
+	if amount <= 0 {
+		panic_with_error!(env, SettlementError::InvalidAmount);
+	}
+}
+
+fn require_supported_pair(env: &Env, source_asset: &Address, destination_asset: &Address) {
+	if source_asset == destination_asset {
+		return;
+	}
+
+	let key = DataKey::AssetPair(source_asset.clone(), destination_asset.clone());
+	let supported = env.storage().persistent().get(&key).unwrap_or(false);
+	if !supported {
+		panic_with_error!(env, SettlementError::UnsupportedAssetPair);
+	}
+}
+
+fn get_router(env: &Env) -> Address {
+	env.storage()
+		.instance()
+		.get(&DataKey::Router)
+		.unwrap_or_else(|| panic_with_error!(env, SettlementError::NotInitialized))
+}
+
+fn pair_path(env: &Env, source_asset: Address, destination_asset: Address) -> Vec<Address> {
+	let mut path = Vec::new(env);
+	path.push_back(source_asset);
+	path.push_back(destination_asset);
+	path
 }
 
 #[contract]
@@ -75,6 +113,66 @@ impl SettlementContract {
 		env.storage().instance().set(&asset_key(asset), &supported);
 	}
 
+	pub fn set_router(env: Env, admin: Address, router: Address) {
+		admin.require_auth();
+		require_admin(&env, &admin);
+		env.storage().instance().set(&DataKey::Router, &router);
+	}
+
+	pub fn get_router(env: Env) -> Address {
+		get_router(&env)
+	}
+
+	pub fn set_supported_asset_pair(
+		env: Env,
+		admin: Address,
+		source_asset: Address,
+		destination_asset: Address,
+		supported: bool,
+	) {
+		admin.require_auth();
+		require_admin(&env, &admin);
+
+		if source_asset == destination_asset {
+			panic_with_error!(&env, SettlementError::UnsupportedAssetPair);
+		}
+
+		let key = DataKey::AssetPair(source_asset, destination_asset);
+		if supported {
+			env.storage().persistent().set(&key, &true);
+		} else {
+			env.storage().persistent().remove(&key);
+		}
+	}
+
+	pub fn is_supported_asset_pair(
+		env: Env,
+		source_asset: Address,
+		destination_asset: Address,
+	) -> bool {
+		if source_asset == destination_asset {
+			return true;
+		}
+
+		env.storage()
+			.persistent()
+			.get(&DataKey::AssetPair(source_asset, destination_asset))
+			.unwrap_or(false)
+	}
+
+	pub fn register_driver_preference(env: Env, driver: Address, asset: Address) {
+		driver.require_auth();
+		env.storage()
+			.persistent()
+			.set(&DataKey::DriverPreference(driver), &asset);
+	}
+
+	pub fn get_driver_preference(env: Env, driver: Address) -> Option<Address> {
+		env.storage()
+			.persistent()
+			.get(&DataKey::DriverPreference(driver))
+	}
+
 	pub fn is_supported(env: Env, asset: SupportedAsset) -> bool {
 		env.storage()
 			.instance()
@@ -88,6 +186,30 @@ impl SettlementContract {
 			.get(&DataKey::Admin)
 			.unwrap_or_else(|| panic_with_error!(&env, SettlementError::NotInitialized))
 	}
+
+	pub fn calculate_swap_estimate(
+		env: Env,
+		source_asset: Address,
+		destination_asset: Address,
+		amount_in: i128,
+	) -> i128 {
+		require_positive_amount(&env, amount_in);
+
+		if source_asset == destination_asset {
+			return amount_in;
+		}
+
+		require_supported_pair(&env, &source_asset, &destination_asset);
+
+		let router = get_router(&env);
+		let path = pair_path(&env, source_asset, destination_asset);
+		env.invoke_contract(
+			&router,
+			&Symbol::new(&env, "quote_exact_input"),
+			soroban_sdk::vec![&env, path.into_val(&env), amount_in.into_val(&env)],
+		)
+	}
+
 }
 
 #[cfg(test)]
@@ -141,4 +263,3 @@ mod test {
 		assert!(!client.is_supported(&SupportedAsset::Kes));
 	}
 }
-

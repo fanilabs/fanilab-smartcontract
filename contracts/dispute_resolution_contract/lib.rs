@@ -246,13 +246,19 @@ impl DisputeResolutionContract {
             .driver
             .unwrap_or_else(|| panic_with_error!(&env, SwiftChainError::ProviderNotFound));
 
-        let reputation_addr = Self::get_identity_reputation_contract(env.clone());
-        let reputation_client = IdentityReputationContractClient::new(&env, &reputation_addr);
-        reputation_client.decrease_reputation(
-            &env.current_contract_address(),
-            &driver,
-            &DISPUTE_REPUTATION_PENALTY,
-        );
+        if let Some(reputation_addr) = env
+            .storage()
+            .instance()
+            .get::<DataKey, Address>(&DataKey::IdentityReputationContract)
+        {
+            let reputation_client =
+                IdentityReputationContractClient::new(&env, &reputation_addr);
+            reputation_client.decrease_reputation(
+                &env.current_contract_address(),
+                &driver,
+                &DISPUTE_REPUTATION_PENALTY,
+            );
+        }
 
         let escrow_addr = Self::get_escrow_contract(env.clone());
         

@@ -193,17 +193,21 @@ impl FleetManagementContract {
 
     /// Invite a driver to a fleet.  Only the fleet owner may call this.
     ///
-    /// Stores a `Pending` invite for `driver` under this fleet.  The driver
-    /// must later call `accept_fleet_invite` to become active.
-    pub fn add_driver_to_fleet(env: Env, fleet_id: FleetId, driver: Address) {
+    /// `caller` must be the registered fleet owner and must sign the
+    /// transaction.  Stores a `Pending` invite for `driver` under this fleet.
+    /// The driver must later call `accept_fleet_invite` to become active.
+    pub fn add_driver_to_fleet(env: Env, caller: Address, fleet_id: FleetId, driver: Address) {
+        caller.require_auth();
+
         let profile: FleetProfile = env
             .storage()
             .persistent()
             .get(&DataKey::Fleet(fleet_id))
             .unwrap_or_else(|| panic_with_error!(&env, FleetError::FleetNotFound));
 
-        // Require fleet-owner authorisation.
-        profile.owner.require_auth();
+        if profile.owner != caller {
+            panic_with_error!(&env, FleetError::Unauthorized);
+        }
 
         let invite_key = DataKey::DriverFleet(fleet_id, driver.clone());
 

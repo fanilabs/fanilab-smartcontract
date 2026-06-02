@@ -19,6 +19,7 @@ pub enum SupportedAsset {
 enum DataKey {
 	Admin,
 	Router,
+	EscrowContract,
 	Xlm,
 	Usdc,
 	Ngnc,
@@ -92,6 +93,38 @@ fn pair_path(env: &Env, source_asset: Address, destination_asset: Address) -> Ve
 	path
 }
 
+fn get_escrow_contract(env: &Env) -> Address {
+	env.storage()
+		.instance()
+		.get(&DataKey::EscrowContract)
+		.unwrap_or_else(|| panic_with_error!(env, SettlementError::NotInitialized))
+}
+
+fn require_escrow_contract(env: &Env, caller: &Address) {
+	let escrow_contract: Address = get_escrow_contract(env);
+	if escrow_contract != *caller {
+		panic_with_error!(env, SettlementError::Unauthorized);
+	}
+}
+
+fn payout_original_asset(
+	env: &Env,
+	source_asset: &Address,
+	contract_address: &Address,
+	recipient: &Address,
+	admin: &Address,
+	amount_in: i128,
+	fee_bps: u32,
+) -> i128 {
+	let fee: i128 = (amount_in * fee_bps as i128) / 10000;
+	let net = amount_in - fee;
+	token::Client::new(env, source_asset).transfer(contract_address, recipient, &net);
+	if fee > 0 {
+		token::Client::new(env, source_asset).transfer(contract_address, admin, &fee);
+	}
+	net
+}
+
 #[contract]
 pub struct SettlementContract;
 
@@ -121,8 +154,20 @@ impl SettlementContract {
 		env.storage().instance().set(&DataKey::Router, &router);
 	}
 
+	pub fn set_escrow_contract(env: Env, admin: Address, escrow_contract: Address) {
+		admin.require_auth();
+		require_admin(&env, &admin);
+		env.storage()
+			.instance()
+			.set(&DataKey::EscrowContract, &escrow_contract);
+	}
+
 	pub fn get_router(env: Env) -> Address {
 		get_router(&env)
+	}
+
+	pub fn get_escrow_contract(env: Env) -> Address {
+		get_escrow_contract(&env)
 	}
 
 	pub fn set_supported_asset_pair(
@@ -241,6 +286,7 @@ impl SettlementContract {
 		min_amount_out: i128,
 	) -> i128 {
 		caller.require_auth();
+		require_escrow_contract(&env, &caller);
 		require_positive_amount(&env, amount_in);
 
 		if min_amount_out < 0 {
@@ -309,7 +355,18 @@ impl SettlementContract {
 		);
 
 		if amount_out < min_amount_out {
-			panic_with_error!(&env, SettlementError::SlippageExceeded);
+			// If the swap fails or returns less than the allowed minimum, fallback to
+			// paying out the original asset directly.
+			let net = payout_original_asset(
+				&env,
+				&source_asset,
+				&contract_address,
+				&recipient,
+				&admin,
+				amount_in,
+				fee_bps,
+			);
+			return net;
 		}
 
 		let fee: i128 = (amount_out * fee_bps as i128) / 10000;
@@ -355,6 +412,10 @@ mod test {
 			amount_in * rate / 10000
 		}
 
+		pub fn set_fail_swap(env: Env, should_fail: bool) {
+			env.storage().instance().set(&1u32, &should_fail);
+		}
+
 		pub fn swap_exact_tokens_for_tokens(
 			env: Env,
 			_caller: Address,
@@ -364,6 +425,10 @@ mod test {
 			_min_amount_out: i128,
 		) -> i128 {
 			let dest_asset = path.get(1).unwrap();
+			let should_fail: bool = env.storage().instance().get(&1u32).unwrap_or(false);
+			if should_fail {
+				return 0;
+			}
 			let rate: i128 = env.storage().instance().get(&0u32).unwrap_or(10000);
 			let amount_out = amount_in * rate / 10000;
 			TokenClient::new(&env, &dest_asset)
@@ -374,14 +439,16 @@ mod test {
 
 	// ── Helpers ───────────────────────────────────────────────────────────────
 
-	fn setup() -> (Env, SettlementContractClient<'static>, Address) {
+	fn setup() -> (Env, SettlementContractClient<'static>, Address, Address) {
 		let env = Env::default();
 		env.mock_all_auths();
 		let contract_id = env.register(SettlementContract, ());
 		let client = SettlementContractClient::new(&env, &contract_id);
 		let admin = Address::generate(&env);
+		let escrow_contract = Address::generate(&env);
 		client.init(&admin);
-		(env, client, admin)
+		client.set_escrow_contract(&admin, &escrow_contract);
+		(env, client, admin, escrow_contract)
 	}
 
 	fn setup_with_router() -> (
@@ -391,6 +458,7 @@ mod test {
 		Address,   // source_asset
 		Address,   // dest_asset
 		Address,   // router
+		Address,   // escrow_contract
 	) {
 		let env = Env::default();
 		env.mock_all_auths();
@@ -403,18 +471,20 @@ mod test {
 		let source_asset = env.register_stellar_asset_contract_v2(admin.clone()).address();
 		let dest_asset = env.register_stellar_asset_contract_v2(admin.clone()).address();
 		let router_id = env.register(MockRouter, ());
+		let escrow_contract = Address::generate(&env);
 
 		client.set_router(&admin, &router_id);
+		client.set_escrow_contract(&admin, &escrow_contract);
 		client.set_supported_asset_pair(&admin, &source_asset, &dest_asset, &true);
 
-		(env, client, admin, source_asset, dest_asset, router_id)
+		(env, client, admin, source_asset, dest_asset, router_id, escrow_contract)
 	}
 
 	// ── Basic tests ───────────────────────────────────────────────────────────
 
 	#[test]
 	fn init_sets_admin_and_defaults() {
-		let (_env, client, admin) = setup();
+		let (_env, client, admin, _escrow_contract) = setup();
 
 		assert_eq!(client.get_admin(), admin);
 		assert!(!client.is_supported(&SupportedAsset::Xlm));
@@ -425,7 +495,7 @@ mod test {
 
 	#[test]
 	fn can_toggle_supported_assets() {
-		let (_env, client, admin) = setup();
+		let (_env, client, admin, _escrow_contract) = setup();
 
 		client.set_supported_asset(&admin, &SupportedAsset::Xlm, &true);
 		client.set_supported_asset(&admin, &SupportedAsset::Usdc, &true);
@@ -440,9 +510,9 @@ mod test {
 
 	#[test]
 	fn same_asset_swap_succeeds_within_slippage() {
-		let (env, client, admin) = setup();
+		let (env, client, admin, escrow_contract) = setup();
 		let token = env.register_stellar_asset_contract_v2(admin.clone()).address();
-		let caller = Address::generate(&env);
+		let caller = escrow_contract.clone();
 		let recipient = Address::generate(&env);
 
 		StellarAssetClient::new(&env, &token).mint(&caller, &1000);
@@ -462,9 +532,9 @@ mod test {
 	#[test]
 	#[should_panic(expected = "Error(Contract, #6)")]
 	fn same_asset_swap_rejects_excessive_slippage() {
-		let (env, client, admin) = setup();
+		let (env, client, admin, escrow_contract) = setup();
 		let token = env.register_stellar_asset_contract_v2(admin.clone()).address();
-		let caller = Address::generate(&env);
+		let caller = escrow_contract.clone();
 		let recipient = Address::generate(&env);
 
 		StellarAssetClient::new(&env, &token).mint(&caller, &900);
@@ -483,8 +553,8 @@ mod test {
 	#[test]
 	#[should_panic(expected = "Error(Contract, #6)")]
 	fn cross_asset_swap_rejects_excessive_slippage() {
-		let (env, client, admin, source_asset, dest_asset, router_id) = setup_with_router();
-		let caller = Address::generate(&env);
+		let (env, client, admin, source_asset, dest_asset, router_id, escrow_contract) = setup_with_router();
+		let caller = escrow_contract.clone();
 		let recipient = Address::generate(&env);
 
 		// Router will return 0.5x (5000 bps), but min_amount_out is 600
@@ -504,8 +574,8 @@ mod test {
 
 	#[test]
 	fn cross_asset_swap_succeeds_within_slippage() {
-		let (env, client, admin, source_asset, dest_asset, router_id) = setup_with_router();
-		let caller = Address::generate(&env);
+		let (env, client, admin, source_asset, dest_asset, router_id, escrow_contract) = setup_with_router();
+		let caller = escrow_contract.clone();
 		let recipient = Address::generate(&env);
 
 		// Router returns 0.95x
@@ -527,17 +597,61 @@ mod test {
 		assert_eq!(TokenClient::new(&env, &dest_asset).balance(&recipient), 950);
 	}
 
+	#[test]
+	fn cross_asset_swap_falls_back_to_original_asset_when_router_returns_zero() {
+		let (env, client, admin, source_asset, dest_asset, router_id, escrow_contract) = setup_with_router();
+		let caller = escrow_contract.clone();
+		let recipient = Address::generate(&env);
+
+		MockRouterClient::new(&env, &router_id).set_fail_swap(&true);
+		StellarAssetClient::new(&env, &source_asset).mint(&caller, &1000);
+
+		let out = client.execute_settlement_swap(
+			&caller,
+			&source_asset,
+			&dest_asset,
+			&recipient,
+			&1000,
+			&0,
+		);
+
+		assert_eq!(out, 1000);
+		assert_eq!(TokenClient::new(&env, &source_asset).balance(&recipient), 1000);
+		assert_eq!(TokenClient::new(&env, &dest_asset).balance(&recipient), 0);
+	}
+
+	#[test]
+	#[should_panic(expected = "Error(Contract, #3)")]
+	fn only_escrow_contract_can_execute_settlement_swap() {
+		let (env, client, admin, source_asset, dest_asset, router_id, escrow_contract) = setup_with_router();
+		let caller = Address::generate(&env);
+		let recipient = Address::generate(&env);
+
+		MockRouterClient::new(&env, &router_id).set_rate(&10000);
+		StellarAssetClient::new(&env, &source_asset).mint(&escrow_contract, &1000);
+		StellarAssetClient::new(&env, &dest_asset).mint(&router_id, &1000);
+
+		client.execute_settlement_swap(
+			&caller,
+			&source_asset,
+			&dest_asset,
+			&recipient,
+			&1000,
+			&0,
+		);
+	}
+
 	// ── Issue #93: Platform FX fee tests ─────────────────────────────────────
 
 	#[test]
 	fn platform_fee_bps_defaults_to_zero() {
-		let (_env, client, _admin) = setup();
+		let (_env, client, _admin, _escrow_contract) = setup();
 		assert_eq!(client.get_platform_fee_bps(), 0);
 	}
 
 	#[test]
 	fn admin_can_set_platform_fee_bps() {
-		let (_env, client, admin) = setup();
+		let (_env, client, admin, _escrow_contract) = setup();
 		client.set_platform_fee_bps(&admin, &50); // 0.5%
 		assert_eq!(client.get_platform_fee_bps(), 50);
 	}
@@ -545,7 +659,7 @@ mod test {
 	#[test]
 	#[should_panic(expected = "Error(Contract, #3)")]
 	fn non_admin_cannot_set_platform_fee_bps() {
-		let (env, client, _admin) = setup();
+		let (env, client, _admin, _escrow_contract) = setup();
 		let attacker = Address::generate(&env);
 		client.set_platform_fee_bps(&attacker, &50);
 	}
@@ -553,15 +667,15 @@ mod test {
 	#[test]
 	#[should_panic(expected = "Error(Contract, #5)")]
 	fn fee_bps_above_1000_is_rejected() {
-		let (_env, client, admin) = setup();
+		let (_env, client, admin, _escrow_contract) = setup();
 		client.set_platform_fee_bps(&admin, &1001);
 	}
 
 	#[test]
 	fn same_asset_swap_deducts_platform_fee() {
-		let (env, client, admin) = setup();
+		let (env, client, admin, escrow_contract) = setup();
 		let token = env.register_stellar_asset_contract_v2(admin.clone()).address();
-		let caller = Address::generate(&env);
+		let caller = escrow_contract.clone();
 		let recipient = Address::generate(&env);
 
 		StellarAssetClient::new(&env, &token).mint(&caller, &1000);
@@ -585,8 +699,8 @@ mod test {
 
 	#[test]
 	fn cross_asset_swap_deducts_platform_fee() {
-		let (env, client, admin, source_asset, dest_asset, router_id) = setup_with_router();
-		let caller = Address::generate(&env);
+		let (env, client, admin, source_asset, dest_asset, router_id, escrow_contract) = setup_with_router();
+		let caller = escrow_contract.clone();
 		let recipient = Address::generate(&env);
 
 		MockRouterClient::new(&env, &router_id).set_rate(&10000); // 1:1 rate
@@ -611,9 +725,9 @@ mod test {
 
 	#[test]
 	fn zero_fee_transfers_full_amount() {
-		let (env, client, admin) = setup();
+		let (env, client, admin, escrow_contract) = setup();
 		let token = env.register_stellar_asset_contract_v2(admin.clone()).address();
-		let caller = Address::generate(&env);
+		let caller = escrow_contract.clone();
 		let recipient = Address::generate(&env);
 
 		StellarAssetClient::new(&env, &token).mint(&caller, &500);

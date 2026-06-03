@@ -1,12 +1,30 @@
 #![no_std]
 
-use shared_types::{DriverProfile, SwiftChainError};
-use soroban_sdk::{contract, contractimpl, contracttype, panic_with_error, Address, Env, Symbol};
+use shared_types::SwiftChainError;
+use soroban_sdk::contract, contracurl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | shctimpl, contracttype, panic_with_error, Address, Env, Symbol};
+
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct UserProfile {
+    pub address: Address,
+    pub join_date: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DriverProfile {
+    pub address: Address,
+    pub deliveries_completed: u32,
+    pub reputation_score: u32,
+    pub registered_at: u64,
+    pub kyc_verified: bool,
+}
 
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
     Admin,
+    UserProfile(Address),
     DriverProfile(Address),
     AuthorizedContract(Address),
     DeliveryContract,
@@ -97,6 +115,40 @@ impl IdentityReputationContract {
 
         env.events()
             .publish((Symbol::new(&env, "driver_registered"),), (driver,));
+    }
+
+    pub fn register_user(env: Env, user: Address) -> UserProfile {
+        user.require_auth();
+        
+        let join_date = env.ledger().timestamp();
+        
+        let profile = UserProfile {
+            address: user.clone(),
+            join_date,
+        };
+        
+        let key = DataKey::UserProfile(user.clone());
+        if env.storage().persistent().has(&key) {
+            panic_with_error!(&env, SwiftChainError::AlreadyInitialized);
+        }
+        
+        env.storage().persistent().set(&key, &profile);
+        env.storage().persistent().extend_ttl(&key, 518400, 518400);
+        
+        env.events()
+            .publish((Symbol::new(&env, "user_registered"),), (user,));
+        
+        profile
+    }
+
+    pub fn get_user_profile(env: Env, user: Address) -> UserProfile {
+        let key = DataKey::UserProfile(user);
+        let profile: UserProfile = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| panic_with_error!(&env, SwiftChainError::ProviderNotFound));
+        profile
     }
 
     pub fn get_driver_profile(env: Env, driver: Address) -> DriverProfile {

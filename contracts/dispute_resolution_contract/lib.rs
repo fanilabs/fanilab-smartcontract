@@ -31,6 +31,7 @@ pub enum DataKey {
     Admin(Address),
     DeliveryContract,
     EscrowContract,
+    IdentityReputationContract,
     DisputeTimeLimit,
     Dispute(DeliveryId),
 }
@@ -90,6 +91,23 @@ impl DisputeResolutionContract {
         env.storage()
             .instance()
             .get(&DataKey::EscrowContract)
+            .unwrap_or_else(|| panic_with_error!(&env, SwiftChainError::NotInitialized))
+    }
+
+    pub fn set_identity_reputation_contract(env: Env, caller: Address, reputation_contract: Address) {
+        caller.require_auth();
+        if !Self::is_admin(env.clone(), caller.clone()) {
+            panic_with_error!(&env, SwiftChainError::Unauthorized);
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::IdentityReputationContract, &reputation_contract);
+    }
+
+    pub fn get_identity_reputation_contract(env: Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&DataKey::IdentityReputationContract)
             .unwrap_or_else(|| panic_with_error!(&env, SwiftChainError::NotInitialized))
     }
 
@@ -228,6 +246,27 @@ impl DisputeResolutionContract {
         env.storage().persistent().set(&dispute_key, &dispute);
         env.storage().persistent().extend_ttl(&dispute_key, 518400, 518400);
 
+        let delivery_contract_addr = Self::get_delivery_contract(env.clone());
+        let delivery_client = DeliveryContractClient::new(&env, &delivery_contract_addr);
+        let delivery = delivery_client.get_delivery(&delivery_id);
+        let driver = delivery
+            .driver
+            .unwrap_or_else(|| panic_with_error!(&env, SwiftChainError::ProviderNotFound));
+
+        if let Some(reputation_addr) = env
+            .storage()
+            .instance()
+            .get::<DataKey, Address>(&DataKey::IdentityReputationContract)
+        {
+            let reputation_client =
+                IdentityReputationContractClient::new(&env, &reputation_addr);
+            reputation_client.decrease_reputation(
+                &env.current_contract_address(),
+                &driver,
+                &DISPUTE_REPUTATION_PENALTY,
+            );
+        }
+
         let escrow_addr = Self::get_escrow_contract(env.clone());
         
         use soroban_sdk::IntoVal;
@@ -244,7 +283,7 @@ impl DisputeResolutionContract {
 
         env.events().publish(
             (Symbol::new(&env, "dispute_resolved_refund"), delivery_id),
-            (caller, delivery_id),
+            (caller, delivery_id, driver, DISPUTE_REPUTATION_PENALTY),
         );
     }
 
@@ -352,4 +391,3 @@ impl DisputeResolutionContract {
 
 #[cfg(test)]
 mod test;
-

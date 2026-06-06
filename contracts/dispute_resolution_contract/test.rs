@@ -323,8 +323,9 @@ fn test_raise_dispute_delivered_exceeds_time_limit() {
 fn test_resolve_dispute_refund_sender_by_admin() {
     let (env, admin, sender, recipient, driver, delivery_id, escrow_id, dispute_client) = setup_test();
 
-    // Setup mock delivery
-    let delivery_record = create_mock_delivery_record(&env, did(4), sender.clone(), recipient.clone(), delivery_contract::DeliveryStatus::Active, None);
+    // Setup mock delivery with driver assigned (required for reputation penalty on resolve)
+    let mut delivery_record = create_mock_delivery_record(&env, did(4), sender.clone(), recipient.clone(), delivery_contract::DeliveryStatus::Active, None);
+    delivery_record.driver = Some(driver.clone());
     set_mock_delivery(&env, &delivery_id, did(4), &delivery_record);
 
     // Setup mock escrow as Paused (representing escrow paused after dispute raised)

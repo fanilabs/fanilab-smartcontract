@@ -2,6 +2,13 @@
 name = "dispute_resolution_contract"
 version = "0.1.0"
 edition = "2021"
+description = "Soroban dispute resolution smart contract for SwiftChain logistics escrow workflows."
+license = "MIT"
+repository = "https://github.com/SwiftChainn/SwiftChain-SmartContract"
+authors = ["SwiftChain Contributors <dev@swiftchain.org>"]
+keywords = ["soroban", "stellar", "escrow", "dispute", "logistics", "blockchain"]
+homepage = "https://github.com/SwiftChainn/SwiftChain-SmartContract"
+documentation = "https://github.com/SwiftChainn/SwiftChain-SmartContract#readme"
 
 [lib]
 path = "lib.rs"
@@ -9,10 +16,9 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 soroban-sdk = { workspace = true }
-delivery_contract = { path = "../delivery_contract" }
-escrow_contract = { path = "../escrow_contract" }
-identity_reputation_contract = { path = "../identity_reputation_contract" }
 shared_types = { path = "../shared_types" }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
+delivery_contract = { path = "../delivery_contract" }
+escrow_contract = { path = "../escrow_contract" }

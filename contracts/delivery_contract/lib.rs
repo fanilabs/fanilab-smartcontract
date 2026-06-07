@@ -2,26 +2,12 @@
 
 use shared_types::SwiftChainError;
 use shared_types::{delivery_key, DeliveryMetadata, DriverProfile, StorageKey};
-pub use shared_types::{DeliveryId, DeliveryStatus};
+pub use shared_types::{DeliveryId, DeliveryStatus, DeliveryRecord};
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, Address, Env, Symbol,
 };
 
 // Local DeliveryMetadata removed in favor of shared_types::DeliveryMetadata
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DeliveryRecord {
-    pub delivery_id: DeliveryId,
-    pub sender: Address,
-    pub recipient: Address,
-    pub driver: Option<Address>,
-    pub status: DeliveryStatus,
-    pub metadata: DeliveryMetadata,
-    pub created_at: u64,
-    pub delivered_at: Option<u64>,
-    pub transit_started_at: Option<u64>,
-}
 
 #[contracttype]
 #[derive(Clone)]

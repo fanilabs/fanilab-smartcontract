@@ -6,6 +6,8 @@ use soroban_sdk::{
 };
 use shared_types::{DeliveryId, DeliveryStatus, EscrowRecord, EscrowStatus, SwiftChainError};
 
+const DISPUTE_REPUTATION_PENALTY: u32 = 10;
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DisputeStatus {
@@ -247,8 +249,11 @@ impl DisputeResolutionContract {
         env.storage().persistent().extend_ttl(&dispute_key, 518400, 518400);
 
         let delivery_contract_addr = Self::get_delivery_contract(env.clone());
-        let delivery_client = DeliveryContractClient::new(&env, &delivery_contract_addr);
-        let delivery = delivery_client.get_delivery(&delivery_id);
+        let delivery: shared_types::DeliveryRecord = env.invoke_contract(
+            &delivery_contract_addr,
+            &Symbol::new(&env, "get_delivery"),
+            soroban_sdk::vec![&env, delivery_id.into_val(&env)],
+        );
         let driver = delivery
             .driver
             .unwrap_or_else(|| panic_with_error!(&env, SwiftChainError::ProviderNotFound));
@@ -258,12 +263,15 @@ impl DisputeResolutionContract {
             .instance()
             .get::<DataKey, Address>(&DataKey::IdentityReputationContract)
         {
-            let reputation_client =
-                IdentityReputationContractClient::new(&env, &reputation_addr);
-            reputation_client.decrease_reputation(
-                &env.current_contract_address(),
-                &driver,
-                &DISPUTE_REPUTATION_PENALTY,
+            let _: () = env.invoke_contract(
+                &reputation_addr,
+                &Symbol::new(&env, "decrease_reputation"),
+                soroban_sdk::vec![
+                    &env,
+                    env.current_contract_address().into_val(&env),
+                    driver.clone().into_val(&env),
+                    DISPUTE_REPUTATION_PENALTY.into_val(&env),
+                ],
             );
         }
 

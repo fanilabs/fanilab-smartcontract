@@ -6,9 +6,8 @@ use shared_types::{
 };
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, token, Address, Env,
-    Symbol,
+    Symbol, IntoVal,
 };
-use settlement_contract::SettlementContractClient;
 
 pub mod constants {
     pub const ESCROW_TTL_THRESHOLD: u32 = 518400;
@@ -61,16 +60,26 @@ fn payout_driver(env: &Env, token: &Address, driver: &Address, amount: i128) {
     }
 
     if let Some(settlement_addr) = get_settlement_contract(env) {
-        let settlement_client = SettlementContractClient::new(env, &settlement_addr);
-        if let Some(preferred_asset) = settlement_client.get_driver_preference(driver) {
+        let preferred_asset: Option<Address> = env.invoke_contract(
+            &settlement_addr,
+            &Symbol::new(env, "get_driver_preference"),
+            soroban_sdk::vec![env, driver.into_val(env)],
+        );
+        
+        if let Some(preferred_asset) = preferred_asset {
             if preferred_asset != token.clone() {
-                settlement_client.execute_settlement_swap(
-                    &env.current_contract_address(),
-                    token,
-                    &preferred_asset,
-                    driver,
-                    &amount,
-                    &0i128,
+                let _: () = env.invoke_contract(
+                    &settlement_addr,
+                    &Symbol::new(env, "execute_settlement_swap"),
+                    soroban_sdk::vec![
+                        env,
+                        env.current_contract_address().into_val(env),
+                        token.into_val(env),
+                        preferred_asset.into_val(env),
+                        driver.into_val(env),
+                        amount.into_val(env),
+                        0i128.into_val(env),
+                    ],
                 );
                 return;
             }

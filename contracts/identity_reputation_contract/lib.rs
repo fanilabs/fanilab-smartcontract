@@ -1,7 +1,7 @@
 #![no_std]
 
 use shared_types::SwiftChainError;
-use soroban_sdk::contract, contracurl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | shctimpl, contracttype, panic_with_error, Address, Env, Symbol};
+use soroban_sdk::{contract, contractimpl, contracttype, panic_with_error, Address, Env, Symbol};
 
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]

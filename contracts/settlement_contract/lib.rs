@@ -553,7 +553,7 @@ mod test {
 	#[test]
 	#[should_panic(expected = "Error(Contract, #6)")]
 	fn cross_asset_swap_rejects_excessive_slippage() {
-		let (env, client, admin, source_asset, dest_asset, router_id, escrow_contract) = setup_with_router();
+		let (env, client, _admin, source_asset, dest_asset, router_id, escrow_contract) = setup_with_router();
 		let caller = escrow_contract.clone();
 		let recipient = Address::generate(&env);
 
@@ -574,7 +574,7 @@ mod test {
 
 	#[test]
 	fn cross_asset_swap_succeeds_within_slippage() {
-		let (env, client, admin, source_asset, dest_asset, router_id, escrow_contract) = setup_with_router();
+		let (env, client, _admin, source_asset, dest_asset, router_id, escrow_contract) = setup_with_router();
 		let caller = escrow_contract.clone();
 		let recipient = Address::generate(&env);
 
@@ -599,7 +599,7 @@ mod test {
 
 	#[test]
 	fn cross_asset_swap_falls_back_to_original_asset_when_router_returns_zero() {
-		let (env, client, admin, source_asset, dest_asset, router_id, escrow_contract) = setup_with_router();
+		let (env, client, _admin, source_asset, dest_asset, router_id, escrow_contract) = setup_with_router();
 		let caller = escrow_contract.clone();
 		let recipient = Address::generate(&env);
 
@@ -612,7 +612,7 @@ mod test {
 			&dest_asset,
 			&recipient,
 			&1000,
-			&0,
+			&1, // require at least 1, so 0 will trigger fallback
 		);
 
 		assert_eq!(out, 1000);
@@ -623,7 +623,7 @@ mod test {
 	#[test]
 	#[should_panic(expected = "Error(Contract, #3)")]
 	fn only_escrow_contract_can_execute_settlement_swap() {
-		let (env, client, admin, source_asset, dest_asset, router_id, escrow_contract) = setup_with_router();
+		let (env, client, _admin, source_asset, dest_asset, router_id, escrow_contract) = setup_with_router();
 		let caller = Address::generate(&env);
 		let recipient = Address::generate(&env);
 

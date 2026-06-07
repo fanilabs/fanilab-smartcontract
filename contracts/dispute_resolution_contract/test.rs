@@ -5,7 +5,7 @@ use soroban_sdk::{
     token::{Client as TokenClient, StellarAssetClient},
     Address, Env, String,
 };
-use shared_types::DeliveryId;
+use shared_types::{DeliveryId, DeliveryStatus, DeliveryRecord, EscrowRecord, EscrowStatus};
 
 fn did(value: u64) -> DeliveryId {
     DeliveryId::from(value)
@@ -16,19 +16,19 @@ pub struct MockDeliveryContract;
 
 #[contractimpl]
 impl MockDeliveryContract {
-    pub fn get_delivery(env: Env, delivery_id: DeliveryId) -> delivery_contract::DeliveryRecord {
+    pub fn get_delivery(env: Env, delivery_id: DeliveryId) -> DeliveryRecord {
         env.storage()
             .instance()
-            .get(&u64::from(delivery_id))
+            .get::<_, DeliveryRecord>(&u64::from(delivery_id))
             .unwrap_or_else(|| panic!("DeliveryNotFound"))
     }
 
     pub fn raise_dispute(env: Env, _caller: Address, delivery_id: DeliveryId) {
         let storage_key = u64::from(delivery_id);
         if env.storage().instance().has(&storage_key) {
-            let mut record: delivery_contract::DeliveryRecord =
+            let mut record: DeliveryRecord =
                 env.storage().instance().get(&storage_key).unwrap();
-            record.status = delivery_contract::DeliveryStatus::Disputed;
+            record.status = shared_types::DeliveryStatus::Disputed;
             env.storage().instance().set(&storage_key, &record);
         }
     }
@@ -131,7 +131,7 @@ fn set_mock_delivery(
     env: &Env,
     delivery_contract_id: &Address,
     delivery_id: DeliveryId,
-    record: &delivery_contract::DeliveryRecord,
+    record: &DeliveryRecord,
 ) {
     env.as_contract(delivery_contract_id, || {
         env.storage().instance().set(&u64::from(delivery_id), record);
@@ -154,9 +154,9 @@ fn create_mock_delivery_record(
     delivery_id: DeliveryId,
     sender: Address,
     recipient: Address,
-    status: delivery_contract::DeliveryStatus,
+    status: DeliveryStatus,
     delivered_at: Option<u64>,
-) -> delivery_contract::DeliveryRecord {
+) -> DeliveryRecord {
     let cargo = shared_types::CargoDescriptor {
         weight_grams: 500,
         category: shared_types::CargoCategory::Electronics,
@@ -170,7 +170,7 @@ fn create_mock_delivery_record(
         created_at: env.ledger().timestamp(),
         estimated_delivery: env.ledger().timestamp() + 3600,
     };
-    delivery_contract::DeliveryRecord {
+    DeliveryRecord {
         delivery_id,
         sender,
         recipient,
@@ -244,7 +244,7 @@ fn test_raise_dispute_active_delivery() {
     let (env, _admin, sender, recipient, driver, delivery_id, escrow_id, dispute_client) = setup_test();
 
     // Setup mock delivery status: Active
-    let delivery_record = create_mock_delivery_record(&env, did(1), sender.clone(), recipient.clone(), delivery_contract::DeliveryStatus::Active, None);
+    let delivery_record = create_mock_delivery_record(&env, did(1), sender.clone(), recipient.clone(), DeliveryStatus::Active, None);
     set_mock_delivery(&env, &delivery_id, did(1), &delivery_record);
 
     // Setup mock escrow status: Locked
@@ -257,7 +257,7 @@ fn test_raise_dispute_active_delivery() {
 
     // Verify delivery status changed to Disputed in MockDeliveryContract
     let delivery = MockDeliveryContractClient::new(&env, &delivery_id).get_delivery(&did(1));
-    assert_eq!(delivery.status, delivery_contract::DeliveryStatus::Disputed);
+    assert_eq!(delivery.status, DeliveryStatus::Disputed);
 
     // Verify escrow status changed to Paused in MockEscrowContract
     let escrow = MockEscrowContractClient::new(&env, &escrow_id).get_escrow(&1);
@@ -277,7 +277,7 @@ fn test_raise_dispute_delivered_within_time_limit() {
 
     // Setup mock delivery status: Delivered with timestamp
     let delivered_at = env.ledger().timestamp();
-    let delivery_record = create_mock_delivery_record(&env, did(2), sender.clone(), recipient.clone(), delivery_contract::DeliveryStatus::Delivered, Some(delivered_at));
+    let delivery_record = create_mock_delivery_record(&env, did(2), sender.clone(), recipient.clone(), DeliveryStatus::Delivered, Some(delivered_at));
     set_mock_delivery(&env, &delivery_id, did(2), &delivery_record);
 
     // Setup mock escrow status: Released
@@ -304,7 +304,7 @@ fn test_raise_dispute_delivered_exceeds_time_limit() {
 
     // Setup mock delivery status: Delivered
     let delivered_at = env.ledger().timestamp();
-    let delivery_record = create_mock_delivery_record(&env, did(3), sender.clone(), recipient.clone(), delivery_contract::DeliveryStatus::Delivered, Some(delivered_at));
+    let delivery_record = create_mock_delivery_record(&env, did(3), sender.clone(), recipient.clone(), DeliveryStatus::Delivered, Some(delivered_at));
     set_mock_delivery(&env, &delivery_id, did(3), &delivery_record);
 
     // Setup mock escrow status: Released
@@ -324,7 +324,7 @@ fn test_resolve_dispute_refund_sender_by_admin() {
     let (env, admin, sender, recipient, driver, delivery_id, escrow_id, dispute_client) = setup_test();
 
     // Setup mock delivery with driver assigned (required for reputation penalty on resolve)
-    let mut delivery_record = create_mock_delivery_record(&env, did(4), sender.clone(), recipient.clone(), delivery_contract::DeliveryStatus::Active, None);
+    let mut delivery_record = create_mock_delivery_record(&env, did(4), sender.clone(), recipient.clone(), DeliveryStatus::Active, None);
     delivery_record.driver = Some(driver.clone());
     set_mock_delivery(&env, &delivery_id, did(4), &delivery_record);
 
@@ -353,7 +353,7 @@ fn test_resolve_dispute_refund_sender_by_admin() {
 fn test_unauthorized_resolve_dispute_fails() {
     let (env, _admin, sender, recipient, driver, delivery_id, escrow_id, dispute_client) = setup_test();
 
-    let delivery_record = create_mock_delivery_record(&env, did(5), sender.clone(), recipient.clone(), delivery_contract::DeliveryStatus::Active, None);
+    let delivery_record = create_mock_delivery_record(&env, did(5), sender.clone(), recipient.clone(), DeliveryStatus::Active, None);
     set_mock_delivery(&env, &delivery_id, did(5), &delivery_record);
 
     let token = Address::generate(&env);
@@ -370,7 +370,7 @@ fn test_unauthorized_resolve_dispute_fails() {
 fn test_add_evidence_hash_success() {
     let (env, _admin, sender, recipient, _driver, delivery_id, _escrow_id, dispute_client) = setup_test();
 
-    let delivery_record = create_mock_delivery_record(&env, did(6), sender.clone(), recipient.clone(), delivery_contract::DeliveryStatus::Active, None);
+    let delivery_record = create_mock_delivery_record(&env, did(6), sender.clone(), recipient.clone(), DeliveryStatus::Active, None);
     set_mock_delivery(&env, &delivery_id, did(6), &delivery_record);
 
     dispute_client.raise_dispute(&sender, &did(6));
@@ -394,7 +394,7 @@ fn test_add_evidence_hash_success() {
 fn test_add_evidence_unauthorized_fails() {
     let (env, _admin, sender, recipient, _driver, delivery_id, _escrow_id, dispute_client) = setup_test();
 
-    let delivery_record = create_mock_delivery_record(&env, did(7), sender.clone(), recipient.clone(), delivery_contract::DeliveryStatus::Active, None);
+    let delivery_record = create_mock_delivery_record(&env, did(7), sender.clone(), recipient.clone(), DeliveryStatus::Active, None);
     set_mock_delivery(&env, &delivery_id, did(7), &delivery_record);
 
     dispute_client.raise_dispute(&sender, &did(7));
@@ -492,7 +492,7 @@ fn test_resolve_dispute_pay_driver_by_admin() {
     let (env, admin, sender, recipient, driver, delivery_id, escrow_id, dispute_client) = setup_test();
 
     // Setup mock delivery
-    let delivery_record = create_mock_delivery_record(&env, did(8), sender.clone(), recipient.clone(), delivery_contract::DeliveryStatus::Active, None);
+    let delivery_record = create_mock_delivery_record(&env, did(8), sender.clone(), recipient.clone(), DeliveryStatus::Active, None);
     set_mock_delivery(&env, &delivery_id, did(8), &delivery_record);
 
     // Setup mock escrow as Paused (representing escrow paused after dispute raised)
@@ -520,7 +520,7 @@ fn test_resolve_dispute_pay_driver_by_admin() {
 fn test_unauthorized_resolve_pay_driver_fails() {
     let (env, _admin, sender, recipient, driver, delivery_id, escrow_id, dispute_client) = setup_test();
 
-    let delivery_record = create_mock_delivery_record(&env, did(9), sender.clone(), recipient.clone(), delivery_contract::DeliveryStatus::Active, None);
+    let delivery_record = create_mock_delivery_record(&env, did(9), sender.clone(), recipient.clone(), DeliveryStatus::Active, None);
     set_mock_delivery(&env, &delivery_id, did(9), &delivery_record);
 
     let token = Address::generate(&env);

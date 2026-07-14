@@ -42,12 +42,13 @@ impl SettlementContract {
 #[cfg(test)]
 mod test {
     use super::*;
+    use soroban_sdk::testutils::Address as _;
 
     #[test]
     fn test_init() {
         let env = Env::default();
         let admin = Address::generate(&env);
-        let contract_id = env.register_contract(None, SettlementContract);
+        let contract_id = env.register(SettlementContract, ());
         let client = SettlementContractClient::new(&env, &contract_id);
 
         client.init(&admin);

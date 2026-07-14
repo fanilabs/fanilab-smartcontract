@@ -1,4 +1,5 @@
 #![no_std]
+#![allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, Address, Env, IntoVal,

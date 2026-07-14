@@ -1,4 +1,5 @@
 #![no_std]
+#![allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional
 
 // Settlement contract for cross-border currency swaps
 // This contract will handle currency conversions between different assets
@@ -12,26 +13,26 @@ pub struct SettlementContract;
 #[contractimpl]
 impl SettlementContract {
     /// Initialize the settlement contract
-    pub fn init(env: Env, admin: Address) {
+    pub fn init(_env: Env, admin: Address) {
         admin.require_auth();
         // Implementation to be added in Phase 3
     }
 
     /// Get driver's preferred asset for payment
-    pub fn get_driver_preference(env: Env, driver: Address) -> Option<Address> {
+    pub fn get_driver_preference(_env: Env, _driver: Address) -> Option<Address> {
         // Implementation to be added in Phase 3
         None
     }
 
     /// Execute asset swap and transfer to driver
     pub fn execute_settlement_swap(
-        env: Env,
+        _env: Env,
         caller: Address,
-        from_token: Address,
-        to_token: Address,
-        recipient: Address,
-        amount: i128,
-        min_amount_out: i128,
+        _from_token: Address,
+        _to_token: Address,
+        _recipient: Address,
+        _amount: i128,
+        _min_amount_out: i128,
     ) {
         caller.require_auth();
         // Implementation to be added in Phase 3

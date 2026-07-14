@@ -33,24 +33,24 @@ jobs:
     - name: Set up Rust toolchain
       uses: dtolnay/rust-toolchain@stable
       with:
-        targets: wasm32-unknown-unknown
+        targets: wasm32v1-none
 
     - name: Cache dependencies
       uses: Swatinem/rust-cache@v2
 
     - name: Install Stellar CLI
       run: |
-        cargo install --locked stellar-cli --version 21.5.0
+        cargo install --locked stellar-cli --features opt
 
     - name: Build Contracts
-      run: cargo build --target wasm32-unknown-unknown --release
+      run: cargo build --target wasm32v1-none --release
 
     - name: Optimize WASM
       run: |
-        cargo install wasm-opt --locked
-        for contract in target/wasm32-unknown-unknown/release/*.wasm; do
-          wasm-opt -Oz "$contract" -o "$contract.opt"
-          mv "$contract.opt" "$contract"
+        mkdir -p release_artifacts
+        for contract in target/wasm32v1-none/release/*.wasm; do
+          filename=$(basename "$contract")
+          cp "$contract" "release_artifacts/$filename"
         done
 
     - name: Deploy Contract

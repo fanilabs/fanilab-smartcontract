@@ -20,18 +20,17 @@ jobs:
     - name: Set up Rust toolchain
       uses: dtolnay/rust-toolchain@stable
       with:
-        targets: wasm32-unknown-unknown
+        targets: wasm32v1-none
 
     - name: Build Release Contracts
-      run: cargo build --target wasm32-unknown-unknown --release
+      run: cargo build --target wasm32v1-none --release
 
     - name: Optimize WASM
       run: |
-        cargo install wasm-opt --locked
         mkdir -p release_artifacts
-        for contract in target/wasm32-unknown-unknown/release/*.wasm; do
+        for contract in target/wasm32v1-none/release/*.wasm; do
           filename=$(basename "$contract")
-          wasm-opt -Oz "$contract" -o "release_artifacts/$filename"
+          cp "$contract" "release_artifacts/$filename"
         done
 
     - name: Generate Checksums

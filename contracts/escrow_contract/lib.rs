@@ -1,4 +1,5 @@
 #![no_std]
+#![allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional
 
 use shared_types::{
     escrow_key, events, DeliveryStatus, EscrowRecord, EscrowStatus, FaniLabError, ProtocolConfig,

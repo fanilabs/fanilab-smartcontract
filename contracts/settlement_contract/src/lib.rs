@@ -48,7 +48,7 @@ mod test {
     fn test_init() {
         let env = Env::default();
         env.mock_all_auths();
-        
+
         let admin = Address::generate(&env);
         let contract_id = env.register(SettlementContract, ());
         let client = SettlementContractClient::new(&env, &contract_id);

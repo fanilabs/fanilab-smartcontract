@@ -213,11 +213,7 @@ impl FleetManagementContract {
 
         // Guard: do not overwrite an existing invite or active membership.
         if env.storage().persistent().has(&invite_key) {
-            let existing: DriverFleetStatus = env
-                .storage()
-                .persistent()
-                .get(&invite_key)
-                .unwrap();
+            let existing: DriverFleetStatus = env.storage().persistent().get(&invite_key).unwrap();
             match existing {
                 DriverFleetStatus::Pending => {
                     panic_with_error!(&env, FleetError::DriverAlreadyInvited)
@@ -237,10 +233,8 @@ impl FleetManagementContract {
             .extend_ttl(&invite_key, 518400, 518400);
 
         // Emit event.
-        env.events().publish(
-            (Symbol::new(&env, "driver_invited"),),
-            (fleet_id, driver),
-        );
+        env.events()
+            .publish((Symbol::new(&env, "driver_invited"),), (fleet_id, driver));
     }
 
     // ── Issue #69 — accept_fleet_invite ───────────────────────────────────────
@@ -290,10 +284,8 @@ impl FleetManagementContract {
             .extend_ttl(&fleet_key, 518400, 518400);
 
         // Emit event.
-        env.events().publish(
-            (Symbol::new(&env, "invite_accepted"),),
-            (fleet_id, driver),
-        );
+        env.events()
+            .publish((Symbol::new(&env, "invite_accepted"),), (fleet_id, driver));
     }
 
     // ── Issue #70 — remove_driver_from_fleet ──────────────────────────────────
@@ -340,10 +332,8 @@ impl FleetManagementContract {
         env.storage().persistent().remove(&invite_key);
 
         // Emit event.
-        env.events().publish(
-            (Symbol::new(&env, "driver_removed"),),
-            (fleet_id, driver),
-        );
+        env.events()
+            .publish((Symbol::new(&env, "driver_removed"),), (fleet_id, driver));
     }
 
     // ── Issue #72 — get_payout_address ───────────────────────────────────────

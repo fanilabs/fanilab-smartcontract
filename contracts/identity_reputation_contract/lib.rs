@@ -54,21 +54,30 @@ impl IdentityReputationContract {
         env.storage().instance().set(&DataKey::Admin, &admin);
     }
 
-    pub fn initialize(env: Env, admin: Address, delivery_contract: Address, dispute_contract: Address) {
+    pub fn initialize(
+        env: Env,
+        admin: Address,
+        delivery_contract: Address,
+        dispute_contract: Address,
+    ) {
         if env.storage().instance().has(&DataKey::Admin) {
-            panic_with_error!(&env, SwiftChainError::AlreadyInitialized);
+            panic_with_error!(&env, FaniLabError::AlreadyInitialized);
         }
         admin.require_auth();
         env.storage().instance().set(&DataKey::Admin, &admin);
-        env.storage().instance().set(&DataKey::DeliveryContract, &delivery_contract);
-        env.storage().instance().set(&DataKey::DisputeContract, &dispute_contract);
+        env.storage()
+            .instance()
+            .set(&DataKey::DeliveryContract, &delivery_contract);
+        env.storage()
+            .instance()
+            .set(&DataKey::DisputeContract, &dispute_contract);
     }
 
     pub fn get_admin(env: Env) -> Address {
         env.storage()
             .instance()
             .get(&DataKey::Admin)
-            .unwrap_or_else(|| panic_with_error!(&env, SwiftChainError::NotInitialized))
+            .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::NotInitialized))
     }
 
     pub fn set_authorized_contract(
@@ -80,7 +89,7 @@ impl IdentityReputationContract {
         admin.require_auth();
         let stored_admin = Self::get_admin(env.clone());
         if admin != stored_admin {
-            panic_with_error!(&env, SwiftChainError::Unauthorized);
+            panic_with_error!(&env, FaniLabError::Unauthorized);
         }
         let key = DataKey::AuthorizedContract(contract_addr);
         if authorized {
@@ -99,7 +108,7 @@ impl IdentityReputationContract {
         driver.require_auth();
         let key = DataKey::DriverProfile(driver.clone());
         if env.storage().persistent().has(&key) {
-            panic_with_error!(&env, SwiftChainError::AlreadyInitialized);
+            panic_with_error!(&env, FaniLabError::AlreadyInitialized);
         }
 
         let profile = DriverProfile {
@@ -119,25 +128,25 @@ impl IdentityReputationContract {
 
     pub fn register_user(env: Env, user: Address) -> UserProfile {
         user.require_auth();
-        
+
         let join_date = env.ledger().timestamp();
-        
+
         let profile = UserProfile {
             address: user.clone(),
             join_date,
         };
-        
+
         let key = DataKey::UserProfile(user.clone());
         if env.storage().persistent().has(&key) {
-            panic_with_error!(&env, SwiftChainError::AlreadyInitialized);
+            panic_with_error!(&env, FaniLabError::AlreadyInitialized);
         }
-        
+
         env.storage().persistent().set(&key, &profile);
         env.storage().persistent().extend_ttl(&key, 518400, 518400);
-        
+
         env.events()
             .publish((Symbol::new(&env, "user_registered"),), (user,));
-        
+
         profile
     }
 
@@ -147,7 +156,7 @@ impl IdentityReputationContract {
             .storage()
             .persistent()
             .get(&key)
-            .unwrap_or_else(|| panic_with_error!(&env, SwiftChainError::ProviderNotFound));
+            .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::ProviderNotFound));
         profile
     }
 
@@ -157,7 +166,7 @@ impl IdentityReputationContract {
             .storage()
             .persistent()
             .get(&key)
-            .unwrap_or_else(|| panic_with_error!(&env, SwiftChainError::ProviderNotFound));
+            .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::ProviderNotFound));
         profile
     }
 
@@ -168,10 +177,10 @@ impl IdentityReputationContract {
             .storage()
             .instance()
             .get(&DataKey::Admin)
-            .unwrap_or_else(|| panic_with_error!(&env, SwiftChainError::NotInitialized));
+            .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::NotInitialized));
 
         if admin != stored_admin {
-            panic_with_error!(&env, SwiftChainError::Unauthorized);
+            panic_with_error!(&env, FaniLabError::Unauthorized);
         }
 
         let key = DataKey::DriverProfile(driver.clone());
@@ -179,7 +188,7 @@ impl IdentityReputationContract {
             .storage()
             .persistent()
             .get(&key)
-            .unwrap_or_else(|| panic_with_error!(&env, SwiftChainError::ProviderNotFound));
+            .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::ProviderNotFound));
 
         profile.kyc_verified = kyc_verified;
 
@@ -204,15 +213,15 @@ impl IdentityReputationContract {
             .storage()
             .instance()
             .get(&DataKey::DeliveryContract)
-            .unwrap_or_else(|| panic_with_error!(&env, SwiftChainError::NotInitialized));
+            .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::NotInitialized));
         let dispute_contract: Address = env
             .storage()
             .instance()
             .get(&DataKey::DisputeContract)
-            .unwrap_or_else(|| panic_with_error!(&env, SwiftChainError::NotInitialized));
+            .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::NotInitialized));
 
         if caller != delivery_contract && caller != dispute_contract {
-            panic_with_error!(&env, SwiftChainError::Unauthorized);
+            panic_with_error!(&env, FaniLabError::Unauthorized);
         }
         caller.require_auth();
 
@@ -221,7 +230,7 @@ impl IdentityReputationContract {
             .storage()
             .persistent()
             .get(&key)
-            .unwrap_or_else(|| panic_with_error!(&env, SwiftChainError::ProviderNotFound));
+            .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::ProviderNotFound));
 
         let mut points: u32 = 5;
         if weight_grams > 5000 {
@@ -243,25 +252,20 @@ impl IdentityReputationContract {
         );
     }
 
-    pub fn decrease_reputation(
-        env: Env,
-        caller: Address,
-        driver: Address,
-        points: u32,
-    ) {
+    pub fn decrease_reputation(env: Env, caller: Address, driver: Address, points: u32) {
         let delivery_contract: Address = env
             .storage()
             .instance()
             .get(&DataKey::DeliveryContract)
-            .unwrap_or_else(|| panic_with_error!(&env, SwiftChainError::NotInitialized));
+            .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::NotInitialized));
         let dispute_contract: Address = env
             .storage()
             .instance()
             .get(&DataKey::DisputeContract)
-            .unwrap_or_else(|| panic_with_error!(&env, SwiftChainError::NotInitialized));
+            .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::NotInitialized));
 
         if caller != delivery_contract && caller != dispute_contract {
-            panic_with_error!(&env, SwiftChainError::Unauthorized);
+            panic_with_error!(&env, FaniLabError::Unauthorized);
         }
         caller.require_auth();
 
@@ -270,7 +274,7 @@ impl IdentityReputationContract {
             .storage()
             .persistent()
             .get(&key)
-            .unwrap_or_else(|| panic_with_error!(&env, SwiftChainError::ProviderNotFound));
+            .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::ProviderNotFound));
 
         profile.reputation_score = profile.reputation_score.saturating_sub(points);
 

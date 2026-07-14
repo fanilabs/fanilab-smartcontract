@@ -2,7 +2,7 @@
 
 use shared_types::FaniLabError;
 use shared_types::{delivery_key, DeliveryMetadata, DriverProfile, StorageKey};
-pub use shared_types::{DeliveryId, DeliveryStatus, DeliveryRecord};
+pub use shared_types::{DeliveryId, DeliveryRecord, DeliveryStatus};
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, Address, Env, Symbol,
 };
@@ -351,7 +351,11 @@ impl DeliveryContract {
     }
 
     fn is_admin(env: &Env, caller: &Address) -> bool {
-        if let Some(admin) = env.storage().instance().get::<_, Address>(&StorageKey::Admin) {
+        if let Some(admin) = env
+            .storage()
+            .instance()
+            .get::<_, Address>(&StorageKey::Admin)
+        {
             admin == *caller
         } else {
             false

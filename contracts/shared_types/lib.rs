@@ -290,10 +290,10 @@ pub struct DeliveryDetails {
 #[cfg(test)]
 mod test {
     use super::{
-        CargoCategory, CargoDescriptor, DeliveryConfirmedEvent, DeliveryCreatedEvent,
-        DeliveryDisputedEvent, DeliveryId, DeliveryMetadata, DeliveryStatus, DriverAssignedEvent,
-        EscrowFundedEvent, EscrowRefundedEvent, EscrowReleasedEvent, EscrowState, PartyAddresses,
-        StorageKey, FaniLabError, delivery_key, escrow_key,
+        delivery_key, escrow_key, CargoCategory, CargoDescriptor, DeliveryConfirmedEvent,
+        DeliveryCreatedEvent, DeliveryDisputedEvent, DeliveryId, DeliveryMetadata, DeliveryStatus,
+        DriverAssignedEvent, EscrowFundedEvent, EscrowRefundedEvent, EscrowReleasedEvent,
+        EscrowState, FaniLabError, PartyAddresses, StorageKey,
     };
     use soroban_sdk::{testutils::Address as _, Address, Env, String};
 

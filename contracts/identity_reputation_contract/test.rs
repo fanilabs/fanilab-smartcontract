@@ -2,7 +2,13 @@ use super::*;
 use shared_types::FaniLabError;
 use soroban_sdk::{testutils::Address as _, Address, Env};
 
-fn setup() -> (Env, Address, IdentityReputationContractClient<'static>, Address, Address) {
+fn setup() -> (
+    Env,
+    Address,
+    IdentityReputationContractClient<'static>,
+    Address,
+    Address,
+) {
     let env = Env::default();
     env.mock_all_auths();
     let contract_id = env.register(IdentityReputationContract, ());

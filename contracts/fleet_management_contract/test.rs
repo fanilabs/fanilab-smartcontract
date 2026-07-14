@@ -173,8 +173,7 @@ fn test_add_driver_emits_driver_invited_event() {
     let topic0: Symbol = Symbol::try_from_val(&env, &last_event.1.get(0).unwrap()).unwrap();
     assert_eq!(topic0, Symbol::new(&env, "driver_invited"));
 
-    let data: (FleetId, Address) =
-        <(FleetId, Address)>::try_from_val(&env, &last_event.2).unwrap();
+    let data: (FleetId, Address) = <(FleetId, Address)>::try_from_val(&env, &last_event.2).unwrap();
     assert_eq!(data, (fleet_id, driver));
 }
 

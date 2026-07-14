@@ -1,10 +1,7 @@
 extern crate std;
 
 use super::*;
-use soroban_sdk::{
-    testutils::Address as _,
-    Address, Env, Symbol, String
-};
+use soroban_sdk::{testutils::Address as _, Address, Env, String, Symbol};
 
 // ── Mock Escrow Contract with call tracking ───────────────────────────────────
 
@@ -39,18 +36,37 @@ pub struct MockReputationContract;
 
 #[contractimpl]
 impl MockReputationContract {
-    pub fn increase_reputation(_env: Env, driver: Address, _delivery_id: u64, _weight_grams: u32, _fragile: bool) {
-        _env.storage().temporary().set(&Symbol::new(&_env, "rep_inc"), &driver);
+    pub fn increase_reputation(
+        _env: Env,
+        driver: Address,
+        _delivery_id: u64,
+        _weight_grams: u32,
+        _fragile: bool,
+    ) {
+        _env.storage()
+            .temporary()
+            .set(&Symbol::new(&_env, "rep_inc"), &driver);
     }
 
     pub fn decrease_reputation(_env: Env, driver: Address, _points: u32) {
-        _env.storage().temporary().set(&Symbol::new(&_env, "rep_dec"), &driver);
+        _env.storage()
+            .temporary()
+            .set(&Symbol::new(&_env, "rep_dec"), &driver);
     }
 }
 
 // ── Setup ─────────────────────────────────────────────────────────────────────
 
-fn setup_full(env: &Env) -> (DeliveryContractClient<'static>, Address, Address, Address, Address, Address) {
+fn setup_full(
+    env: &Env,
+) -> (
+    DeliveryContractClient<'static>,
+    Address,
+    Address,
+    Address,
+    Address,
+    Address,
+) {
     env.mock_all_auths();
     let escrow_id = env.register(MockEscrowContract, ());
     let reputation_id = env.register(MockReputationContract, ());
@@ -101,7 +117,10 @@ fn test_happy_path_full_lifecycle() {
             .get(&Symbol::new(&env, "released"))
             .unwrap_or(0u64)
     });
-    assert_eq!(was_released, delivery_id, "Expected escrow to be released after delivery");
+    assert_eq!(
+        was_released, delivery_id,
+        "Expected escrow to be released after delivery"
+    );
 }
 
 // ── CANCELLATION PATH ───────────────────────────────────────────────────────
@@ -125,7 +144,10 @@ fn test_cancellation_after_assign() {
             .get(&Symbol::new(&env, "refunded"))
             .unwrap_or(0u64)
     });
-    assert_eq!(was_refunded, delivery_id, "Expected escrow to be refunded after cancellation");
+    assert_eq!(
+        was_refunded, delivery_id,
+        "Expected escrow to be refunded after cancellation"
+    );
 }
 
 // ── DISPUTE PATH ─────────────────────────────────────────────────────────────
@@ -150,7 +172,10 @@ fn test_dispute_path() {
             .get(&Symbol::new(&env, "disputed"))
             .unwrap_or(0u64)
     });
-    assert_eq!(was_disputed, delivery_id, "Expected escrow dispute to be raised");
+    assert_eq!(
+        was_disputed, delivery_id,
+        "Expected escrow dispute to be raised"
+    );
 }
 
 // ── INVALID STATE REJECTIONS ───────────────────────────────────────────────
@@ -305,7 +330,9 @@ fn test_dispute_then_resolve_increments_reputation() {
     assert_eq!(delivery.status, DeliveryStatus::Disputed);
 
     env.as_contract(&reputation_id, || {
-        env.storage().temporary().set(&Symbol::new(&env, "rep_inc"), &driver);
+        env.storage()
+            .temporary()
+            .set(&Symbol::new(&env, "rep_inc"), &driver);
     });
 
     let stored_driver: Address = env.as_contract(&reputation_id, || {
@@ -314,7 +341,10 @@ fn test_dispute_then_resolve_increments_reputation() {
             .get(&Symbol::new(&env, "rep_inc"))
             .unwrap_or(driver.clone())
     });
-    assert_eq!(stored_driver, driver, "Expected reputation to be incremented for resolved dispute in driver's favor");
+    assert_eq!(
+        stored_driver, driver,
+        "Expected reputation to be incremented for resolved dispute in driver's favor"
+    );
 }
 
 #[test]
@@ -332,7 +362,9 @@ fn test_dispute_then_resolve_penalizes_driver() {
     assert_eq!(delivery.status, DeliveryStatus::Disputed);
 
     env.as_contract(&reputation_id, || {
-        env.storage().temporary().set(&Symbol::new(&env, "rep_dec"), &driver);
+        env.storage()
+            .temporary()
+            .set(&Symbol::new(&env, "rep_dec"), &driver);
     });
 
     let stored_driver: Address = env.as_contract(&reputation_id, || {
@@ -341,7 +373,10 @@ fn test_dispute_then_resolve_penalizes_driver() {
             .get(&Symbol::new(&env, "rep_dec"))
             .unwrap_or(driver.clone())
     });
-    assert_eq!(stored_driver, driver, "Expected reputation to be decremented for resolved dispute against driver");
+    assert_eq!(
+        stored_driver, driver,
+        "Expected reputation to be decremented for resolved dispute against driver"
+    );
 }
 
 #[test]

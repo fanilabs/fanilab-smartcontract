@@ -1,10 +1,10 @@
 #![no_std]
 
+use shared_types::{DeliveryId, DeliveryStatus, EscrowRecord, EscrowStatus, FaniLabError};
 use soroban_sdk::{
-    contract, contractimpl, contracttype, panic_with_error, Address, BytesN, Env, IntoVal,
-    Symbol, Vec,
+    contract, contractimpl, contracttype, panic_with_error, Address, BytesN, Env, IntoVal, Symbol,
+    Vec,
 };
-use shared_types::{DeliveryId, DeliveryStatus, EscrowRecord, EscrowStatus, SwiftChainError};
 
 const DISPUTE_REPUTATION_PENALTY: u32 = 10;
 
@@ -51,26 +51,34 @@ impl DisputeResolutionContract {
         dispute_time_limit: u64,
     ) {
         if env.storage().instance().has(&DataKey::DeliveryContract) {
-            panic_with_error!(&env, SwiftChainError::AlreadyInitialized);
+            panic_with_error!(&env, FaniLabError::AlreadyInitialized);
         }
-        env.storage().instance().set(&DataKey::DeliveryContract, &delivery_contract);
-        env.storage().instance().set(&DataKey::EscrowContract, &escrow_contract);
-        env.storage().instance().set(&DataKey::DisputeTimeLimit, &dispute_time_limit);
+        env.storage()
+            .instance()
+            .set(&DataKey::DeliveryContract, &delivery_contract);
+        env.storage()
+            .instance()
+            .set(&DataKey::EscrowContract, &escrow_contract);
+        env.storage()
+            .instance()
+            .set(&DataKey::DisputeTimeLimit, &dispute_time_limit);
         env.storage().instance().set(&DataKey::Admin(admin), &true);
     }
 
     pub fn add_admin(env: Env, caller: Address, new_admin: Address) {
         caller.require_auth();
         if !Self::is_admin(env.clone(), caller.clone()) {
-            panic_with_error!(&env, SwiftChainError::Unauthorized);
+            panic_with_error!(&env, FaniLabError::Unauthorized);
         }
-        env.storage().instance().set(&DataKey::Admin(new_admin), &true);
+        env.storage()
+            .instance()
+            .set(&DataKey::Admin(new_admin), &true);
     }
 
     pub fn remove_admin(env: Env, caller: Address, old_admin: Address) {
         caller.require_auth();
         if !Self::is_admin(env.clone(), caller.clone()) {
-            panic_with_error!(&env, SwiftChainError::Unauthorized);
+            panic_with_error!(&env, FaniLabError::Unauthorized);
         }
         env.storage().instance().remove(&DataKey::Admin(old_admin));
     }
@@ -86,20 +94,24 @@ impl DisputeResolutionContract {
         env.storage()
             .instance()
             .get(&DataKey::DeliveryContract)
-            .unwrap_or_else(|| panic_with_error!(&env, SwiftChainError::NotInitialized))
+            .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::NotInitialized))
     }
 
     pub fn get_escrow_contract(env: Env) -> Address {
         env.storage()
             .instance()
             .get(&DataKey::EscrowContract)
-            .unwrap_or_else(|| panic_with_error!(&env, SwiftChainError::NotInitialized))
+            .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::NotInitialized))
     }
 
-    pub fn set_identity_reputation_contract(env: Env, caller: Address, reputation_contract: Address) {
+    pub fn set_identity_reputation_contract(
+        env: Env,
+        caller: Address,
+        reputation_contract: Address,
+    ) {
         caller.require_auth();
         if !Self::is_admin(env.clone(), caller.clone()) {
-            panic_with_error!(&env, SwiftChainError::Unauthorized);
+            panic_with_error!(&env, FaniLabError::Unauthorized);
         }
         env.storage()
             .instance()
@@ -110,7 +122,7 @@ impl DisputeResolutionContract {
         env.storage()
             .instance()
             .get(&DataKey::IdentityReputationContract)
-            .unwrap_or_else(|| panic_with_error!(&env, SwiftChainError::NotInitialized))
+            .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::NotInitialized))
     }
 
     pub fn get_dispute_time_limit(env: Env) -> u64 {
@@ -132,7 +144,7 @@ impl DisputeResolutionContract {
 
         // Verify the caller is sender or recipient
         if caller != delivery.sender && caller != delivery.recipient {
-            panic_with_error!(&env, SwiftChainError::Unauthorized);
+            panic_with_error!(&env, FaniLabError::Unauthorized);
         }
 
         // Verify state and time limit
@@ -142,7 +154,7 @@ impl DisputeResolutionContract {
                 let current_time = env.ledger().timestamp();
                 let dispute_limit = Self::get_dispute_time_limit(env.clone());
                 if current_time > delivered_at + dispute_limit {
-                    panic_with_error!(&env, SwiftChainError::InvalidState);
+                    panic_with_error!(&env, FaniLabError::InvalidState);
                 }
             }
             DeliveryStatus::Active | DeliveryStatus::InTransit => {
@@ -154,7 +166,7 @@ impl DisputeResolutionContract {
                 );
             }
             _ => {
-                panic_with_error!(&env, SwiftChainError::InvalidState);
+                panic_with_error!(&env, FaniLabError::InvalidState);
             }
         }
 
@@ -167,7 +179,7 @@ impl DisputeResolutionContract {
 
         let dispute_key = DataKey::Dispute(delivery_id);
         if env.storage().persistent().has(&dispute_key) {
-            panic_with_error!(&env, SwiftChainError::DuplicateDelivery);
+            panic_with_error!(&env, FaniLabError::DuplicateDelivery);
         }
 
         let dispute = DisputeCase {
@@ -179,7 +191,9 @@ impl DisputeResolutionContract {
         };
 
         env.storage().persistent().set(&dispute_key, &dispute);
-        env.storage().persistent().extend_ttl(&dispute_key, 518400, 518400);
+        env.storage()
+            .persistent()
+            .extend_ttl(&dispute_key, 518400, 518400);
 
         env.events().publish(
             (Symbol::new(&env, "dispute_raised"), delivery_id),
@@ -200,10 +214,10 @@ impl DisputeResolutionContract {
             .storage()
             .persistent()
             .get(&dispute_key)
-            .unwrap_or_else(|| panic_with_error!(&env, SwiftChainError::DeliveryNotFound));
+            .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::DeliveryNotFound));
 
         if dispute.status != DisputeStatus::Open {
-            panic_with_error!(&env, SwiftChainError::InvalidState);
+            panic_with_error!(&env, FaniLabError::InvalidState);
         }
 
         let delivery_contract_addr = Self::get_delivery_contract(env.clone());
@@ -214,12 +228,14 @@ impl DisputeResolutionContract {
         );
 
         if caller != delivery.sender && caller != delivery.recipient {
-            panic_with_error!(&env, SwiftChainError::Unauthorized);
+            panic_with_error!(&env, FaniLabError::Unauthorized);
         }
 
         dispute.evidence_hashes.push_back(evidence_hash.clone());
         env.storage().persistent().set(&dispute_key, &dispute);
-        env.storage().persistent().extend_ttl(&dispute_key, 518400, 518400);
+        env.storage()
+            .persistent()
+            .extend_ttl(&dispute_key, 518400, 518400);
 
         env.events().publish(
             (Symbol::new(&env, "evidence_added"), delivery_id),
@@ -230,7 +246,7 @@ impl DisputeResolutionContract {
     pub fn resolve_dispute_refund_sender(env: Env, caller: Address, delivery_id: DeliveryId) {
         caller.require_auth();
         if !Self::is_admin(env.clone(), caller.clone()) {
-            panic_with_error!(&env, SwiftChainError::Unauthorized);
+            panic_with_error!(&env, FaniLabError::Unauthorized);
         }
 
         let dispute_key = DataKey::Dispute(delivery_id);
@@ -238,15 +254,17 @@ impl DisputeResolutionContract {
             .storage()
             .persistent()
             .get(&dispute_key)
-            .unwrap_or_else(|| panic_with_error!(&env, SwiftChainError::DeliveryNotFound));
+            .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::DeliveryNotFound));
 
         if dispute.status != DisputeStatus::Open {
-            panic_with_error!(&env, SwiftChainError::InvalidState);
+            panic_with_error!(&env, FaniLabError::InvalidState);
         }
 
         dispute.status = DisputeStatus::ResolvedRefund;
         env.storage().persistent().set(&dispute_key, &dispute);
-        env.storage().persistent().extend_ttl(&dispute_key, 518400, 518400);
+        env.storage()
+            .persistent()
+            .extend_ttl(&dispute_key, 518400, 518400);
 
         let delivery_contract_addr = Self::get_delivery_contract(env.clone());
         let delivery: shared_types::DeliveryRecord = env.invoke_contract(
@@ -256,7 +274,7 @@ impl DisputeResolutionContract {
         );
         let driver = delivery
             .driver
-            .unwrap_or_else(|| panic_with_error!(&env, SwiftChainError::ProviderNotFound));
+            .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::ProviderNotFound));
 
         if let Some(reputation_addr) = env
             .storage()
@@ -276,7 +294,7 @@ impl DisputeResolutionContract {
         }
 
         let escrow_addr = Self::get_escrow_contract(env.clone());
-        
+
         use soroban_sdk::IntoVal;
         let _: () = env.invoke_contract(
             &escrow_addr,
@@ -303,7 +321,7 @@ impl DisputeResolutionContract {
     ) {
         caller.require_auth();
         if !Self::is_admin(env.clone(), caller.clone()) {
-            panic_with_error!(&env, SwiftChainError::Unauthorized);
+            panic_with_error!(&env, FaniLabError::Unauthorized);
         }
 
         let dispute_key = DataKey::Dispute(delivery_id);
@@ -311,15 +329,17 @@ impl DisputeResolutionContract {
             .storage()
             .persistent()
             .get(&dispute_key)
-            .unwrap_or_else(|| panic_with_error!(&env, SwiftChainError::DeliveryNotFound));
+            .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::DeliveryNotFound));
 
         if dispute.status != DisputeStatus::Open {
-            panic_with_error!(&env, SwiftChainError::InvalidState);
+            panic_with_error!(&env, FaniLabError::InvalidState);
         }
 
         dispute.status = DisputeStatus::Split;
         env.storage().persistent().set(&dispute_key, &dispute);
-        env.storage().persistent().extend_ttl(&dispute_key, 518400, 518400);
+        env.storage()
+            .persistent()
+            .extend_ttl(&dispute_key, 518400, 518400);
 
         let escrow_addr = Self::get_escrow_contract(env.clone());
         let escrow: EscrowRecord = env.invoke_contract(
@@ -350,7 +370,7 @@ impl DisputeResolutionContract {
     pub fn resolve_dispute_pay_driver(env: Env, caller: Address, delivery_id: DeliveryId) {
         caller.require_auth();
         if !Self::is_admin(env.clone(), caller.clone()) {
-            panic_with_error!(&env, SwiftChainError::Unauthorized);
+            panic_with_error!(&env, FaniLabError::Unauthorized);
         }
 
         let dispute_key = DataKey::Dispute(delivery_id);
@@ -358,18 +378,20 @@ impl DisputeResolutionContract {
             .storage()
             .persistent()
             .get(&dispute_key)
-            .unwrap_or_else(|| panic_with_error!(&env, SwiftChainError::DeliveryNotFound));
+            .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::DeliveryNotFound));
 
         if dispute.status != DisputeStatus::Open {
-            panic_with_error!(&env, SwiftChainError::InvalidState);
+            panic_with_error!(&env, FaniLabError::InvalidState);
         }
 
         dispute.status = DisputeStatus::ResolvedPayout;
         env.storage().persistent().set(&dispute_key, &dispute);
-        env.storage().persistent().extend_ttl(&dispute_key, 518400, 518400);
+        env.storage()
+            .persistent()
+            .extend_ttl(&dispute_key, 518400, 518400);
 
         let escrow_addr = Self::get_escrow_contract(env.clone());
-        
+
         use soroban_sdk::IntoVal;
         let _: () = env.invoke_contract(
             &escrow_addr,
@@ -393,7 +415,7 @@ impl DisputeResolutionContract {
         env.storage()
             .persistent()
             .get(&dispute_key)
-            .unwrap_or_else(|| panic_with_error!(&env, SwiftChainError::DeliveryNotFound))
+            .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::DeliveryNotFound))
     }
 }
 

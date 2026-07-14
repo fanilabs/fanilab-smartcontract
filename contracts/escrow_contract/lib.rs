@@ -1,12 +1,12 @@
 #![no_std]
 
 use shared_types::{
-    escrow_key, events, DeliveryStatus, EscrowRecord, EscrowStatus, ProtocolConfig, StorageKey,
-    FaniLabError,
+    escrow_key, events, DeliveryStatus, EscrowRecord, EscrowStatus, FaniLabError, ProtocolConfig,
+    StorageKey,
 };
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, token, Address, Env,
-    Symbol, IntoVal,
+    IntoVal, Symbol,
 };
 
 pub mod constants {
@@ -43,7 +43,9 @@ fn load_protocol_config(env: &Env) -> ProtocolConfig {
 }
 
 fn save_protocol_config(env: &Env, config: &ProtocolConfig) {
-    env.storage().instance().set(&StorageKey::ProtocolConfig, config);
+    env.storage()
+        .instance()
+        .set(&StorageKey::ProtocolConfig, config);
 }
 
 fn calculate_fee(amount: i128, platform_fee_bps: u32) -> i128 {
@@ -65,7 +67,7 @@ fn payout_driver(env: &Env, token: &Address, driver: &Address, amount: i128) {
             &Symbol::new(env, "get_driver_preference"),
             soroban_sdk::vec![env, driver.into_val(env)],
         );
-        
+
         if let Some(preferred_asset) = preferred_asset {
             if preferred_asset != token.clone() {
                 let _: () = env.invoke_contract(
@@ -132,8 +134,6 @@ pub enum EscrowError {
     InvalidFee = 5,
 }
 
-
-
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FeeUpdated {
@@ -157,7 +157,7 @@ pub struct EscrowContract;
 impl EscrowContract {
     pub fn init(env: Env, admin: Address, token: Address, platform_fee_bps: u32) {
         if env.storage().instance().has(&StorageKey::Admin) {
-            panic_with_error!(&env, SwiftChainError::AlreadyInitialized);
+            panic_with_error!(&env, FaniLabError::AlreadyInitialized);
         }
         env.storage().instance().set(&StorageKey::Admin, &admin);
         save_protocol_config(
@@ -185,9 +185,9 @@ impl EscrowContract {
             .storage()
             .instance()
             .get(&StorageKey::Admin)
-            .unwrap_or_else(|| panic_with_error!(&env, SwiftChainError::NotInitialized));
+            .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::NotInitialized));
         if admin != stored_admin {
-            panic_with_error!(&env, SwiftChainError::Unauthorized);
+            panic_with_error!(&env, FaniLabError::Unauthorized);
         }
         admin.require_auth();
         if new_fee_bps > 1000 {
@@ -218,7 +218,7 @@ impl EscrowContract {
         env.storage()
             .instance()
             .get(&StorageKey::Admin)
-            .unwrap_or_else(|| panic_with_error!(&env, SwiftChainError::NotInitialized))
+            .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::NotInitialized))
     }
 
     pub fn get_token(env: Env) -> Address {
@@ -247,7 +247,7 @@ impl EscrowContract {
             .storage()
             .instance()
             .get(&StorageKey::Admin)
-            .unwrap_or_else(|| panic_with_error!(&env, SwiftChainError::NotInitialized));
+            .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::NotInitialized));
         if stored_admin != current_admin {
             panic!("caller is not the admin");
         }
@@ -274,7 +274,7 @@ impl EscrowContract {
             .storage()
             .instance()
             .get(&StorageKey::Admin)
-            .unwrap_or_else(|| panic_with_error!(&env, SwiftChainError::NotInitialized));
+            .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::NotInitialized));
         env.storage().instance().set(&StorageKey::Admin, &new_admin);
         env.storage().instance().remove(&DataKey::PendingAdmin);
         env.storage().instance().extend_ttl(
@@ -334,7 +334,7 @@ impl EscrowContract {
         let admin_authorized = is_admin(&env, &caller);
         let recipient_authorized = caller == record.recipient;
         if !admin_authorized && !recipient_authorized {
-            panic_with_error!(&env, SwiftChainError::Unauthorized);
+            panic_with_error!(&env, FaniLabError::Unauthorized);
         }
         if record.status != EscrowStatus::Locked {
             panic_with_error!(&env, EscrowError::InvalidState);
@@ -383,7 +383,7 @@ impl EscrowContract {
         let admin_authorized = is_admin(&env, &caller);
         let sender_authorized = caller == record.sender;
         if !admin_authorized && !sender_authorized {
-            panic_with_error!(&env, SwiftChainError::Unauthorized);
+            panic_with_error!(&env, FaniLabError::Unauthorized);
         }
         if record.status != EscrowStatus::Locked && record.status != EscrowStatus::Paused {
             panic_with_error!(&env, EscrowError::InvalidState);
@@ -411,7 +411,7 @@ impl EscrowContract {
         caller.require_auth();
         let mut record = load_escrow(&env, delivery_id);
         if caller != record.sender && caller != record.recipient {
-            panic_with_error!(&env, SwiftChainError::Unauthorized);
+            panic_with_error!(&env, FaniLabError::Unauthorized);
         }
         if record.status != EscrowStatus::Locked {
             panic_with_error!(&env, EscrowError::InvalidState);
@@ -470,7 +470,7 @@ impl EscrowContract {
         }
 
         save_escrow(&env, delivery_id, &record);
-        
+
         env.events().publish(
             (events::dispute_resolved(&env), delivery_id),
             (caller.clone(), caller),
@@ -526,11 +526,7 @@ impl EscrowContract {
     }
 
     pub fn get_escrow(env: Env, delivery_id: u64) -> EscrowRecord {
-        if !env
-            .storage()
-            .persistent()
-            .has(&escrow_key(delivery_id))
-        {
+        if !env.storage().persistent().has(&escrow_key(delivery_id)) {
             panic_with_error!(&env, EscrowError::DeliveryNotFound);
         }
         load_escrow(&env, delivery_id)

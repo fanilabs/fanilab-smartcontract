@@ -1,5 +1,5 @@
 use super::*;
-use shared_types::SwiftChainError;
+use shared_types::FaniLabError;
 use soroban_sdk::{
     testutils::Address as _,
     token::{Client as TokenClient, StellarAssetClient},
@@ -100,7 +100,6 @@ fn test_create_escrow_locks_funds_and_persists_record() {
     assert_eq!(record.disputed_by, None);
     assert_eq!(record.disputed_at, None);
     assert_eq!(record.created_at, env.ledger().timestamp());
-
 }
 
 #[test]
@@ -171,8 +170,8 @@ fn test_release_escrow_unauthorized_rejected() {
 
     let result = client.try_release_escrow(&attacker, &4u64);
     match result {
-        Err(Ok(err)) => assert_eq!(err, SwiftChainError::Unauthorized.into()),
-        _ => panic!("Expected SwiftChainError::Unauthorized"),
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::Unauthorized.into()),
+        _ => panic!("Expected FaniLabError::Unauthorized"),
     }
 }
 
@@ -314,17 +313,17 @@ fn test_insufficient_funds_guard_on_release() {
     mint(&env, &token, &sender, 200);
     client.create_escrow(&sender, &recipient, &driver, &10u64, &token, &200);
 
-        env.as_contract(&contract_id, || {
-            let mut record: EscrowRecord = env
-                .storage()
-                .persistent()
-                .get(&shared_types::escrow_key(10u64))
-                .unwrap();
-            record.amount = 500;
-            env.storage()
-                .persistent()
-                .set(&shared_types::escrow_key(10u64), &record);
-        });
+    env.as_contract(&contract_id, || {
+        let mut record: EscrowRecord = env
+            .storage()
+            .persistent()
+            .get(&shared_types::escrow_key(10u64))
+            .unwrap();
+        record.amount = 500;
+        env.storage()
+            .persistent()
+            .set(&shared_types::escrow_key(10u64), &record);
+    });
 
     let result = client.try_release_escrow(&admin, &10u64);
     match result {

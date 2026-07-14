@@ -1,6 +1,6 @@
-# SwiftChain Smart Contract Architecture
+# FaniLab Smart Contract Architecture
 
-The SwiftChain decentralized logistics economy is powered by a modular, secure, and upgradeable multi-contract architecture built on the Stellar Soroban network.
+The FaniLab decentralized logistics economy is powered by a modular, secure, and upgradeable multi-contract architecture built on the Stellar Soroban network.
 
 To ensure separation of concerns, the system is broken down into **7 core smart contracts (and libraries)**.
 

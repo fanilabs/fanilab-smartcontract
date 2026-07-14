@@ -2,7 +2,7 @@
 
 use shared_types::{
     escrow_key, events, DeliveryStatus, EscrowRecord, EscrowStatus, ProtocolConfig, StorageKey,
-    SwiftChainError,
+    FaniLabError,
 };
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, token, Address, Env,
@@ -20,9 +20,9 @@ fn require_admin(env: &Env, caller: &Address) {
         .storage()
         .instance()
         .get(&StorageKey::Admin)
-        .unwrap_or_else(|| panic_with_error!(env, SwiftChainError::NotInitialized));
+        .unwrap_or_else(|| panic_with_error!(env, FaniLabError::NotInitialized));
     if *caller != stored_admin {
-        panic_with_error!(env, SwiftChainError::Unauthorized);
+        panic_with_error!(env, FaniLabError::Unauthorized);
     }
 }
 
@@ -39,7 +39,7 @@ fn load_protocol_config(env: &Env) -> ProtocolConfig {
     env.storage()
         .instance()
         .get(&StorageKey::ProtocolConfig)
-        .unwrap_or_else(|| panic_with_error!(env, SwiftChainError::NotInitialized))
+        .unwrap_or_else(|| panic_with_error!(env, FaniLabError::NotInitialized))
 }
 
 fn save_protocol_config(env: &Env, config: &ProtocolConfig) {

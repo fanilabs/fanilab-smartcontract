@@ -1,0 +1,36 @@
+# Auto detect text files and perform LF normalization
+* text=auto
+
+# Shell scripts should always use LF
+*.sh text eol=lf
+
+# Rust source files
+*.rs text diff=rust
+
+# Documentation
+*.md text diff=markdown
+*.txt text
+
+# Cargo files
+Cargo.toml text
+Cargo.lock text
+
+# YAML files
+*.yml text
+*.yaml text
+
+# JSON files
+*.json text
+
+# TOML files
+*.toml text
+
+# Binary files
+*.wasm binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+
+# Git attributes for vendoring
+vendor/** linguist-vendored
+target/** linguist-generated

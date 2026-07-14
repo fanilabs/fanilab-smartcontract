@@ -5,7 +5,7 @@ use soroban_sdk::{contracterror, contracttype, Address, String};
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
-pub enum SwiftChainError {
+pub enum FaniLabError {
     /// Caller is not authorized to perform the requested action.
     Unauthorized = 1,
     /// Contract or protocol state has already been initialized.
@@ -293,7 +293,7 @@ mod test {
         CargoCategory, CargoDescriptor, DeliveryConfirmedEvent, DeliveryCreatedEvent,
         DeliveryDisputedEvent, DeliveryId, DeliveryMetadata, DeliveryStatus, DriverAssignedEvent,
         EscrowFundedEvent, EscrowRefundedEvent, EscrowReleasedEvent, EscrowState, PartyAddresses,
-        StorageKey, SwiftChainError, delivery_key, escrow_key,
+        StorageKey, FaniLabError, delivery_key, escrow_key,
     };
     use soroban_sdk::{testutils::Address as _, Address, Env, String};
 
@@ -347,52 +347,52 @@ mod test {
 
     #[test]
     fn unauthorized_has_expected_discriminant() {
-        assert_eq!(SwiftChainError::Unauthorized as u32, 1);
+        assert_eq!(FaniLabError::Unauthorized as u32, 1);
     }
 
     #[test]
     fn already_initialized_has_expected_discriminant() {
-        assert_eq!(SwiftChainError::AlreadyInitialized as u32, 2);
+        assert_eq!(FaniLabError::AlreadyInitialized as u32, 2);
     }
 
     #[test]
     fn not_initialized_has_expected_discriminant() {
-        assert_eq!(SwiftChainError::NotInitialized as u32, 3);
+        assert_eq!(FaniLabError::NotInitialized as u32, 3);
     }
 
     #[test]
     fn delivery_not_found_has_expected_discriminant() {
-        assert_eq!(SwiftChainError::DeliveryNotFound as u32, 4);
+        assert_eq!(FaniLabError::DeliveryNotFound as u32, 4);
     }
 
     #[test]
     fn invalid_state_has_expected_discriminant() {
-        assert_eq!(SwiftChainError::InvalidState as u32, 5);
+        assert_eq!(FaniLabError::InvalidState as u32, 5);
     }
 
     #[test]
     fn insufficient_funds_has_expected_discriminant() {
-        assert_eq!(SwiftChainError::InsufficientFunds as u32, 6);
+        assert_eq!(FaniLabError::InsufficientFunds as u32, 6);
     }
 
     #[test]
     fn escrow_locked_has_expected_discriminant() {
-        assert_eq!(SwiftChainError::EscrowLocked as u32, 7);
+        assert_eq!(FaniLabError::EscrowLocked as u32, 7);
     }
 
     #[test]
     fn duplicate_delivery_has_expected_discriminant() {
-        assert_eq!(SwiftChainError::DuplicateDelivery as u32, 8);
+        assert_eq!(FaniLabError::DuplicateDelivery as u32, 8);
     }
 
     #[test]
     fn provider_not_found_has_expected_discriminant() {
-        assert_eq!(SwiftChainError::ProviderNotFound as u32, 9);
+        assert_eq!(FaniLabError::ProviderNotFound as u32, 9);
     }
 
     #[test]
     fn invalid_address_has_expected_discriminant() {
-        assert_eq!(SwiftChainError::InvalidAddress as u32, 10);
+        assert_eq!(FaniLabError::InvalidAddress as u32, 10);
     }
 
     #[test]

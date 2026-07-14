@@ -1,6 +1,6 @@
 #![no_std]
 
-use shared_types::SwiftChainError;
+use shared_types::FaniLabError;
 use shared_types::{delivery_key, DeliveryMetadata, DriverProfile, StorageKey};
 pub use shared_types::{DeliveryId, DeliveryStatus, DeliveryRecord};
 use soroban_sdk::{
@@ -58,7 +58,7 @@ pub struct DeliveryContract;
 impl DeliveryContract {
     pub fn init(env: Env, admin: Address, escrow_contract: Address) {
         if env.storage().instance().has(&StorageKey::Admin) {
-            panic_with_error!(&env, SwiftChainError::AlreadyInitialized);
+            panic_with_error!(&env, FaniLabError::AlreadyInitialized);
         }
         env.storage().instance().set(&StorageKey::Admin, &admin);
         env.storage()

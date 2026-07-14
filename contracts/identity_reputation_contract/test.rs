@@ -1,5 +1,5 @@
 use super::*;
-use shared_types::SwiftChainError;
+use shared_types::FaniLabError;
 use soroban_sdk::{testutils::Address as _, Address, Env};
 
 fn setup() -> (Env, Address, IdentityReputationContractClient<'static>, Address, Address) {
@@ -37,7 +37,7 @@ fn test_register_driver_duplicate() {
 
     let result = client.try_register_driver(&driver);
     match result {
-        Err(Ok(err)) => assert_eq!(err, SwiftChainError::AlreadyInitialized.into()),
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::AlreadyInitialized.into()),
         _ => panic!("Expected duplicate registration to fail with AlreadyInitialized"),
     }
 }
@@ -67,7 +67,7 @@ fn test_kyc_status_update_unauthorized() {
     let attacker = Address::generate(&env);
     let result = client.try_update_driver_kyc_status(&attacker, &driver, &true);
     match result {
-        Err(Ok(err)) => assert_eq!(err, SwiftChainError::Unauthorized.into()),
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::Unauthorized.into()),
         _ => panic!("Expected non-admin caller to fail with Unauthorized"),
     }
 }

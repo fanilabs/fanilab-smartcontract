@@ -27,14 +27,36 @@ jobs:
     - name: Cache dependencies
       uses: Swatinem/rust-cache@v2
 
-    # - name: Check formatting
-    #   run: cargo fmt --all -- --check
+    - name: Check formatting
+      run: cargo fmt --all -- --check
 
-    # - name: Run Clippy (Linter)
-    #   run: cargo clippy --all-targets --all-features -- -D warnings
+    - name: Run Clippy (Linter)
+      run: cargo clippy --all-targets --all-features -- -D warnings
 
     - name: Build Contracts (WASM)
       run: cargo build --target wasm32-unknown-unknown --release
 
     - name: Run Tests
-      run: cargo test
+      run: cargo test --verbose
+
+    - name: Run Tests with Coverage
+      run: |
+        cargo install cargo-tarpaulin
+        cargo tarpaulin --out Xml --output-dir ./coverage
+
+    - name: Upload Coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        files: ./coverage/cobertura.xml
+        fail_ci_if_error: false
+
+    - name: Security Audit
+      run: |
+        cargo install cargo-audit
+        cargo audit
+
+    - name: Check for Outdated Dependencies
+      run: |
+        cargo install cargo-outdated
+        cargo outdated --exit-code 1
+      continue-on-error: true

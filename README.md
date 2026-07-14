@@ -1,6 +1,6 @@
-# SwiftChain-SmartContract 📦🔗
+# FaniLab-SmartContract 📦🔗
 
-> **SwiftChain** is a Blockchain-Powered Logistics & Escrow Delivery Platform designed to connect individuals and businesses who need to transport goods with available transport providers. This repository contains the Stellar Soroban smart contracts powering the blockchain escrow system used by the logistics platform.
+> **FaniLab** is a Blockchain-Powered Logistics & Escrow Delivery Platform designed to connect individuals and businesses who need to transport goods with available transport providers. This repository contains the Stellar Soroban smart contracts powering the blockchain escrow system used by the logistics platform.
 
 ---
 
@@ -28,10 +28,10 @@
 
 ## 🌍 Project Overview
 
-SwiftChain is composed of three main repositories:
-1. **SwiftChain-Frontend**: Stack: Next.js + TypeScript + TailwindCSS
-2. **SwiftChain-Backend**: Stack: Node.js + Express.js + TypeScript + MongoDB
-3. **SwiftChain-SmartContract** *(This Repository)*: Stack: Stellar Soroban + Rust
+FaniLab is composed of three main repositories:
+1. **FaniLab-Frontend**: Stack: Next.js + TypeScript + TailwindCSS
+2. **FaniLab-Backend**: Stack: Node.js + Express.js + TypeScript + MongoDB
+3. **FaniLab-SmartContract** *(This Repository)*: Stack: Stellar Soroban + Rust
 
 The smart contract repository powers the **blockchain escrow system** used by the logistics platform.
 
@@ -45,18 +45,18 @@ Traditional logistics and delivery networks often suffer from:
 
 ## 💡 The Solution
 
-SwiftChain creates a **shared decentralized logistics economy** by allowing existing transportation assets to participate securely in delivery operations. Transport providers include:
+FaniLab creates a **shared decentralized logistics economy** by allowing existing transportation assets to participate securely in delivery operations. Transport providers include:
 - Motorcycle delivery riders
 - Courier agents
 - Van drivers
 - Truck operators
 - Independent transport owners
 
-By leveraging **blockchain escrow smart contracts**, SwiftChain protects both senders and delivery agents, ensuring goods are transported securely and payments are settled instantly upon delivery confirmation.
+By leveraging **blockchain escrow smart contracts**, FaniLab protects both senders and delivery agents, ensuring goods are transported securely and payments are settled instantly upon delivery confirmation.
 
 ## 🔄 How It Works (Escrow Payment Model)
 
-SwiftChain ensures **trustless logistics transactions** through the following workflow:
+FaniLab ensures **trustless logistics transactions** through the following workflow:
 
 1. **Customer creates delivery request**: Sender initiates a delivery order.
 2. **Payment is locked in escrow**: The smart contract securely holds the payment.
@@ -87,7 +87,7 @@ Our primary target audience includes:
 
 ## 💰 Revenue Model
 
-SwiftChain generates revenue through the following streams:
+FaniLab generates revenue through the following streams:
 - Escrow service fees
 - Delivery commission fees
 - Cross-border settlement fees
@@ -96,7 +96,7 @@ SwiftChain generates revenue through the following streams:
 
 ## 🏗️ Smart Contract Architecture
 
-The SwiftChain smart contracts are the backbone of the trustless logistics protocol. They are responsible for:
+The FaniLab smart contracts are the backbone of the trustless logistics protocol. They are responsible for:
 - Escrow payment locking
 - Escrow payment release
 - Delivery verification
@@ -165,7 +165,7 @@ The contracts emit critical events for off-chain indexing:
 ## 📂 Repository Structure
 
 ```text
-SwiftChain-SmartContract/
+FaniLab-SmartContract/
 ├── contracts/
 │   ├── escrow_contract/
 │   │   └── lib.rs
@@ -226,8 +226,8 @@ SwiftChain-SmartContract/
 
 3. **Clone the repository:**
    ```bash
-   git clone https://github.com/your-org/SwiftChain-SmartContract.git
-   cd SwiftChain-SmartContract
+   git clone https://github.com/your-org/FaniLab-SmartContract.git
+   cd FaniLab-SmartContract
    ```
 
 4. **Build the contracts:**
@@ -314,10 +314,55 @@ This project uses GitHub Actions for CI/CD. The pipeline `.github/workflows/ci.y
 - Verify the WASM build.
 - Execute all unit and integration tests.
 
+## 📊 Project Status
+
+![CI Status](https://github.com/fanilab/FaniLab-SmartContract/workflows/Rust%20CI/badge.svg)
+![Security Audit](https://github.com/fanilab/FaniLab-SmartContract/workflows/Security%20Audit/badge.svg)
+[![codecov](https://codecov.io/gh/fanilab/FaniLab-SmartContract/branch/main/graph/badge.svg)](https://codecov.io/gh/fanilab/FaniLab-SmartContract)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+- **Current Version**: 0.2.0
+- **Audit Status**: Pending
+- **Test Coverage**: > 80%
+- **Network**: Testnet (Mainnet coming soon)
+
+## 📚 Documentation
+
+- [API Reference](docs/API.md)
+- [Deployment Guide](docs/DEPLOYMENT.md)
+- [Security Audit Checklist](docs/SECURITY_AUDIT.md)
+- [Testing Guide](docs/TESTING.md)
+- [Governance Model](docs/GOVERNANCE.md)
+- [Architecture Decision Records](docs/ARCHITECTURE_DECISION_RECORDS.md)
+
 ## 🤝 Contribution Guidelines
 
 Please review our `CONTRIBUTING.md` file for details on our code of conduct, and the process for submitting pull requests to us.
 
+## 🔒 Security
+
+Security is our top priority. Please see [SECURITY.md](SECURITY.md) for our security policy and vulnerability reporting process.
+
+**Bug Bounty**: We offer rewards up to $50,000 for critical security findings.
+
 ## 📜 License
 
 This project is licensed under the MIT License - see the `LICENSE` file for details.
+
+## 🌟 Acknowledgments
+
+- Stellar Development Foundation for Soroban
+- The Rust and Stellar communities
+- All our contributors and supporters
+
+## 📞 Contact & Community
+
+- **Website**: https://fanilab.com
+- **Email**: contact@fanilab.com
+- **Twitter**: [@FaniLabHQ](https://twitter.com/FaniLabHQ)
+- **Discord**: [Join our community](https://discord.gg/fanilab)
+- **GitHub**: [FaniLab Organization](https://github.com/fanilab)
+
+---
+
+Built with ❤️ by the FaniLab Team | Powered by Stellar Soroban

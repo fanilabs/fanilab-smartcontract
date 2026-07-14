@@ -1,14 +1,14 @@
-# Contributing to SwiftChain-SmartContract
+# Contributing to FaniLab-SmartContract
 
-Thank you for your interest in contributing to **SwiftChain-SmartContract**! We welcome contributions from the community to help build a trustless, Blockchain-Powered Logistics & Escrow Delivery Platform on the Stellar network. Whether you are fixing bugs, proposing new features, or optimizing gas usage, your help is incredibly valuable.
+Thank you for your interest in contributing to **FaniLab-SmartContract**! We welcome contributions from the community to help build a trustless, Blockchain-Powered Logistics & Escrow Delivery Platform on the Stellar network. Whether you are fixing bugs, proposing new features, or optimizing gas usage, your help is incredibly valuable.
 
 ## Getting Started
 
 1.  **Fork the repository** on GitHub.
 2.  **Clone your fork** locally:
     ```bash
-    git clone https://github.com/your-username/SwiftChain-SmartContract.git
-    cd SwiftChain-SmartContract
+    git clone https://github.com/your-username/FaniLab-SmartContract.git
+    cd FaniLab-SmartContract
     ```
 3.  **Create a branch** for your feature or bug fix:
     ```bash
@@ -17,7 +17,7 @@ Thank you for your interest in contributing to **SwiftChain-SmartContract**! We 
 
 ## Development Workflow
 
-The SwiftChain Smart Contract repository is structured as a **Cargo Workspace**. This means multiple smart contracts live in the same repository and share dependencies. 
+The FaniLab Smart Contract repository is structured as a **Cargo Workspace**. This means multiple smart contracts live in the same repository and share dependencies. 
 
 The workspace consists of three main crates located in the `contracts/` directory:
 

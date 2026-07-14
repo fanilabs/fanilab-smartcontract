@@ -1,0 +1,72 @@
+name: Deploy to Testnet
+
+on:
+  workflow_dispatch:
+    inputs:
+      contract:
+        description: 'Contract to deploy'
+        required: true
+        type: choice
+        options:
+          - all
+          - escrow_contract
+          - delivery_contract
+          - dispute_resolution_contract
+          - fleet_management_contract
+          - identity_reputation_contract
+          - settlement_contract
+
+env:
+  CARGO_TERM_COLOR: always
+  STELLAR_NETWORK: testnet
+
+jobs:
+  deploy:
+    name: Deploy Contract to Testnet
+    runs-on: ubuntu-latest
+    environment: testnet
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: wasm32-unknown-unknown
+
+    - name: Cache dependencies
+      uses: Swatinem/rust-cache@v2
+
+    - name: Install Stellar CLI
+      run: |
+        cargo install --locked stellar-cli --version 21.5.0
+
+    - name: Build Contracts
+      run: cargo build --target wasm32-unknown-unknown --release
+
+    - name: Optimize WASM
+      run: |
+        cargo install wasm-opt
+        for contract in target/wasm32-unknown-unknown/release/*.wasm; do
+          wasm-opt -Oz "$contract" -o "$contract.opt"
+          mv "$contract.opt" "$contract"
+        done
+
+    - name: Deploy Contract
+      env:
+        CONTRACT_DEPLOYER_SECRET: ${{ secrets.TESTNET_DEPLOYER_SECRET }}
+      run: |
+        if [ "${{ github.event.inputs.contract }}" = "all" ]; then
+          bash scripts/deploy-all-contracts.sh
+        else
+          bash scripts/deploy-contract.sh ${{ github.event.inputs.contract }}
+        fi
+
+    - name: Save Deployment Artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: deployment-info
+        path: |
+          deployment-*.json
+          contract-ids.txt

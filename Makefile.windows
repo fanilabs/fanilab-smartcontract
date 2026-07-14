@@ -1,0 +1,58 @@
+# Makefile for Windows (without GNU Make)
+# Alternative commands for Windows developers
+
+# Build all contracts
+build:
+	cargo build --target wasm32-unknown-unknown --release
+
+# Build specific contracts
+build-escrow:
+	cargo build -p escrow_contract --target wasm32-unknown-unknown --release
+
+build-delivery:
+	cargo build -p delivery_contract --target wasm32-unknown-unknown --release
+
+build-dispute:
+	cargo build -p dispute_resolution_contract --target wasm32-unknown-unknown --release
+
+build-fleet:
+	cargo build -p fleet_management_contract --target wasm32-unknown-unknown --release
+
+build-identity:
+	cargo build -p identity_reputation_contract --target wasm32-unknown-unknown --release
+
+build-settlement:
+	cargo build -p settlement_contract --target wasm32-unknown-unknown --release
+
+# Run tests
+test:
+	cargo test
+
+test-verbose:
+	cargo test -- --nocapture
+
+# Format code
+format:
+	cargo fmt --all
+
+# Lint
+lint:
+	cargo clippy --all-targets --all-features -- -D warnings
+
+# Security audit
+audit:
+	cargo audit
+
+# Coverage
+coverage:
+	cargo tarpaulin --out Html --output-dir coverage
+
+# Clean build artifacts
+clean:
+	cargo clean
+
+# Check compilation without building
+check:
+	cargo check --target wasm32-unknown-unknown
+
+.PHONY: build test format lint audit coverage clean check

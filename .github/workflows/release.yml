@@ -1,0 +1,69 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  create_release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: wasm32-unknown-unknown
+
+    - name: Build Release Contracts
+      run: cargo build --target wasm32-unknown-unknown --release
+
+    - name: Optimize WASM
+      run: |
+        cargo install wasm-opt --locked
+        mkdir -p release_artifacts
+        for contract in target/wasm32-unknown-unknown/release/*.wasm; do
+          filename=$(basename "$contract")
+          wasm-opt -Oz "$contract" -o "release_artifacts/$filename"
+        done
+
+    - name: Generate Checksums
+      run: |
+        cd release_artifacts
+        sha256sum *.wasm > SHA256SUMS.txt
+
+    - name: Create Release Notes
+      run: |
+        echo "# FaniLab Smart Contracts ${GITHUB_REF#refs/tags/}" > RELEASE_NOTES.md
+        echo "" >> RELEASE_NOTES.md
+        echo "## Contracts" >> RELEASE_NOTES.md
+        echo "- Escrow Contract" >> RELEASE_NOTES.md
+        echo "- Delivery Contract" >> RELEASE_NOTES.md
+        echo "- Dispute Resolution Contract" >> RELEASE_NOTES.md
+        echo "- Fleet Management Contract" >> RELEASE_NOTES.md
+        echo "- Identity Reputation Contract" >> RELEASE_NOTES.md
+        echo "- Settlement Contract" >> RELEASE_NOTES.md
+        echo "" >> RELEASE_NOTES.md
+        echo "## Checksums" >> RELEASE_NOTES.md
+        echo "\`\`\`" >> RELEASE_NOTES.md
+        cat release_artifacts/SHA256SUMS.txt >> RELEASE_NOTES.md
+        echo "\`\`\`" >> RELEASE_NOTES.md
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          release_artifacts/*.wasm
+          release_artifacts/SHA256SUMS.txt
+        body_path: RELEASE_NOTES.md
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

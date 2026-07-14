@@ -1,6 +1,6 @@
 #![no_std]
 
-use shared_types::SwiftChainError;
+use shared_types::FaniLabError;
 use soroban_sdk::{contract, contractimpl, contracttype, panic_with_error, Address, Env, Symbol};
 
 #[contracttype]
@@ -49,7 +49,7 @@ pub struct IdentityReputationContract;
 impl IdentityReputationContract {
     pub fn init(env: Env, admin: Address) {
         if env.storage().instance().has(&DataKey::Admin) {
-            panic_with_error!(&env, SwiftChainError::AlreadyInitialized);
+            panic_with_error!(&env, FaniLabError::AlreadyInitialized);
         }
         env.storage().instance().set(&DataKey::Admin, &admin);
     }

@@ -7,11 +7,11 @@ project's own `PLAN.md`, `PRODUCTION_READINESS.md`, `Cargo.toml`, and CI
 workflow. Every issue below references the specific function and file it was
 found in — none are generic placeholders.
 
-This document consolidates two review passes: an initial pass (all 30 of whose issues — 6 Critical, 4 High, and local issues #11–#30 — have since been filed to GitHub, see below) and a follow-up pass extending coverage to cross-contract architecture, testing gaps, CI/CD, deployment tooling, and documentation accuracy (issues #31–#80, still tracked in this document).
+This document consolidates two review passes: an initial pass (all 30 of whose issues — 6 Critical, 4 High, and local issues #11–#30 — have since been filed to GitHub, see below) and a follow-up pass extending coverage to cross-contract architecture, testing gaps, CI/CD, deployment tooling, and documentation accuracy (issues #31–#80, of which #31–#50 have since also been filed to GitHub, see below; #51–#80 are still tracked in this document).
 
 ## Pushed to GitHub
 
-30 issues have been filed on `github.com/fanilabs/fanilab-smartcontract` and removed from this document to avoid duplication: the original 10 highest-severity findings (6 Critical + 4 High), plus the full remaining High/Medium/Low-classified backlog from the initial review pass (local issues #11–#30). Track them there:
+50 issues have been filed on `github.com/fanilabs/fanilab-smartcontract` and removed from this document to avoid duplication: the original 10 highest-severity findings (6 Critical + 4 High), the full remaining High/Medium/Low-classified backlog from the initial review pass (local issues #11–#30), and the first batch of the follow-up pass's architecture/testing/tooling findings (local issues #31–#50). Track them there:
 
 | GitHub Issue | Title |
 |---|---|
@@ -45,8 +45,28 @@ This document consolidates two review passes: an initial pass (all 30 of whose i
 | [#34](https://github.com/fanilabs/fanilab-smartcontract/issues/34) | `PRODUCTION_READINESS.md` claims contradict the codebase's actual state |
 | [#35](https://github.com/fanilabs/fanilab-smartcontract/issues/35) | Unused `shared_types` dependency in `settlement_contract` |
 | [#36](https://github.com/fanilabs/fanilab-smartcontract/issues/36) | CI runs `cargo outdated` and `cargo audit` but not `cargo machete`/unused-dependency checks, and coverage has no enforced floor |
+| [#37](https://github.com/fanilabs/fanilab-smartcontract/issues/37) | `escrow_contract::get_status` is a dead stub that always returns `Pending` |
+| [#38](https://github.com/fanilabs/fanilab-smartcontract/issues/38) | `create_escrow` accepts any token address, making `get_token()` misleading |
+| [#39](https://github.com/fanilabs/fanilab-smartcontract/issues/39) | `register_fleet` permanently fails for any owner already registered as a driver |
+| [#40](https://github.com/fanilabs/fanilab-smartcontract/issues/40) | `dispute_resolution_contract::remove_admin` can remove the last admin, bricking governance |
+| [#41](https://github.com/fanilabs/fanilab-smartcontract/issues/41) | Two divergent `UserProfile` definitions with different field names |
+| [#42](https://github.com/fanilabs/fanilab-smartcontract/issues/42) | `DeliveryDetails` and `PartyAddresses` are fully-defined dead types |
+| [#43](https://github.com/fanilabs/fanilab-smartcontract/issues/43) | `AuthorizedContract` allowlist is built but never consulted |
+| [#44](https://github.com/fanilabs/fanilab-smartcontract/issues/44) | Driver tier system is never wired into `assign_driver` despite being documented |
+| [#45](https://github.com/fanilabs/fanilab-smartcontract/issues/45) | `DeliveryMetadata.delivery_id` is never validated against the real `DeliveryId` |
+| [#46](https://github.com/fanilabs/fanilab-smartcontract/issues/46) | `FaniLabError::DeliveryNotFound` and `EscrowError::DeliveryNotFound` carry different discriminants |
+| [#47](https://github.com/fanilabs/fanilab-smartcontract/issues/47) | Typed event payload structs and topic constants in `shared_types::events` are unused |
+| [#48](https://github.com/fanilabs/fanilab-smartcontract/issues/48) | No reputation decay for inactive drivers despite being a named roadmap item |
+| [#49](https://github.com/fanilabs/fanilab-smartcontract/issues/49) | `add_evidence_hash` allows unbounded growth of a single storage entry |
+| [#50](https://github.com/fanilabs/fanilab-smartcontract/issues/50) | No automated dispute evidence verification system despite being a named roadmap item |
+| [#51](https://github.com/fanilabs/fanilab-smartcontract/issues/51) | Dispute resolution's reputation-penalty cross-call is never exercised by any test |
+| [#52](https://github.com/fanilabs/fanilab-smartcontract/issues/52) | No `proptest` dependency anywhere despite extensive property-testing documentation |
+| [#53](https://github.com/fanilabs/fanilab-smartcontract/issues/53) | No fuzz targets despite `SECURITY_AUDIT.md` prescribing `cargo fuzz` commands |
+| [#54](https://github.com/fanilabs/fanilab-smartcontract/issues/54) | Two-step admin transfer (`propose_admin`/`accept_admin`) has zero test coverage |
+| [#55](https://github.com/fanilabs/fanilab-smartcontract/issues/55) | `settlement_contract` test suite only exercises `init` |
+| [#56](https://github.com/fanilabs/fanilab-smartcontract/issues/56) | `deploy-all-contracts.sh` still builds with the pre-migration `wasm32-unknown-unknown` target |
 
-The remaining 50 issues below (#31–#80) are not yet filed.
+The remaining 30 issues below (#51–#80) are not yet filed.
 
 ---
 
@@ -54,26 +74,6 @@ The remaining 50 issues below (#31–#80) are not yet filed.
 
 | # | Title | Labels |
 |---|---|---|
-| 31 | `escrow_contract::get_status` is a dead stub that always returns `Pending` | bug |
-| 32 | `create_escrow` accepts any token address, making `get_token()` misleading | bug, security |
-| 33 | `register_fleet` permanently fails for any owner already registered as a driver | bug |
-| 34 | `dispute_resolution_contract::remove_admin` can remove the last admin, bricking governance | bug, security |
-| 35 | Two divergent `UserProfile` definitions with different field names | bug |
-| 36 | `DeliveryDetails` and `PartyAddresses` are fully-defined dead types | refactor |
-| 37 | `AuthorizedContract` allowlist is built but never consulted | security, bug |
-| 38 | Driver tier system is never wired into `assign_driver` despite being documented | feature |
-| 39 | `DeliveryMetadata.delivery_id` is never validated against the real `DeliveryId` | bug |
-| 40 | `FaniLabError::DeliveryNotFound` and `EscrowError::DeliveryNotFound` carry different discriminants | refactor |
-| 41 | Typed event payload structs and topic constants in `shared_types::events` are unused | refactor |
-| 42 | No reputation decay for inactive drivers despite being a named roadmap item | feature |
-| 43 | `add_evidence_hash` allows unbounded growth of a single storage entry | security, performance |
-| 44 | No automated dispute evidence verification system despite being a named roadmap item | feature |
-| 45 | Dispute resolution's reputation-penalty cross-call is never exercised by any test | test |
-| 46 | No `proptest` dependency anywhere despite extensive property-testing documentation | test |
-| 47 | No fuzz targets despite `SECURITY_AUDIT.md` prescribing `cargo fuzz` commands | test |
-| 48 | Two-step admin transfer (`propose_admin`/`accept_admin`) has zero test coverage | test |
-| 49 | `settlement_contract` test suite only exercises `init` | test |
-| 50 | `deploy-all-contracts.sh` still builds with the pre-migration `wasm32-unknown-unknown` target | bug |
 | 51 | `Makefile` targets still use `wasm32-unknown-unknown` and cover only 3 of 6 contracts | bug |
 | 52 | `initialize-all-contracts.sh` only initializes 2 of the 6 deployed contracts | bug |
 | 53 | Deploy script's error handling after `cargo build` is unreachable dead code | bug |
@@ -107,589 +107,9 @@ The remaining 50 issues below (#31–#80) are not yet filed.
 
 ---
 
-## Additional Findings — Architecture, Testing, Documentation & Tooling (Issues #31–#80)
+## Additional Findings — Architecture, Testing, Documentation & Tooling (Issues #51–#80)
 
-A follow-up review pass covering cross-contract architecture, admin/governance models, test-coverage gaps, CI/CD and deployment tooling, and documentation accuracy — building on the initial pass now filed as GitHub #7–#16 and #17–#36, without duplicating any of those findings.
-
----
-
-### 31. `escrow_contract::get_status` is a dead stub that always returns `Pending`
-
-**Summary:** `EscrowContract::get_status` ignores its `Env` argument entirely and unconditionally returns `DeliveryStatus::Pending`, making it either dead code or a landmine for any caller who expects it to reflect real state.
-
-**Background:** `contracts/escrow_contract/lib.rs:214-216` defines:
-```rust
-pub fn get_status(_env: Env) -> DeliveryStatus {
-    DeliveryStatus::Pending
-}
-```
-It takes no `delivery_id`, reads no storage, and returns a `DeliveryStatus` value — a type that conceptually belongs to `delivery_contract`, not `escrow_contract` (which owns `EscrowStatus`/`EscrowState`). No test file references it, and no other contract calls it.
-
-**Problem Statement:** Any off-chain integration or future contract code that calls `escrow_contract.get_status()` expecting a meaningful answer will silently always get `Pending`, regardless of the escrow's actual `Locked`/`Released`/`Refunded`/`Paused` state. Because it compiles and is part of the public contract interface, it looks like a supported query.
-
-**Proposed Solution:** Remove the function if it is confirmed dead, or, if it was meant to expose escrow state, replace it with a parameterized function that returns the actual `EscrowStatus` for a given `delivery_id` (duplicating what `get_escrow(delivery_id).status` already provides, so removal is the more likely correct fix).
-
-**Acceptance Criteria:**
-- [ ] `get_status` is either removed from the public contract interface or reimplemented to take a `delivery_id` and return the real, current `EscrowStatus`.
-- [ ] No caller in the codebase silently relies on the current hardcoded behavior.
-
-**Technical Notes:** Removing a public contract function changes the contract's ABI; if any deployed client already calls it, coordinate the removal with a deprecation note in `CHANGELOG.md`.
-
-**Relevant Files:** `contracts/escrow_contract/lib.rs:214-216`
-
-**Testing Requirements:** If kept, add a test that creates an escrow, transitions it through at least two states, and asserts `get_status`/its replacement reflects each transition. If removed, confirm `cargo build` and `cargo test` still pass with no dangling references.
-
-**Definition of Done:** The function either accurately reflects escrow state or no longer exists; `cargo clippy` and the full test suite pass.
-
-**Suggested Labels:** `bug`
-
----
-
-### 32. `create_escrow` accepts any token address, making `get_token()` misleading
-
-**Summary:** `create_escrow` takes a caller-supplied `token: Address` with no check against the protocol's configured `ProtocolConfig.token`, so escrows can be funded in a completely different asset than the one `get_token()` reports.
-
-**Background:** `contracts/escrow_contract/lib.rs:293-330` accepts `token: Address` as a parameter and stores it directly on the `EscrowRecord`, independent of `ProtocolConfig.token` set at `init` (`lib.rs:159-182`). `get_token()` (`lib.rs:225-227`) only ever returns the `ProtocolConfig` value, not the per-escrow token.
-
-**Problem Statement:** A sender can call `create_escrow` with an arbitrary token contract (including a worthless or malicious one) regardless of what the protocol claims to support. Meanwhile, any off-chain system, dashboard, or `docs/MONITORING.md`-style TVL calculator that trusts `get_token()` as "the asset used by this protocol" will misreport or mis-aggregate value for escrows funded in other tokens. There is also no admin allowlist of acceptable tokens.
-
-**Proposed Solution:** Either (a) enforce `token == load_protocol_config(&env).token` in `create_escrow` and drop the redundant parameter, or (b) if multi-token support is intentional, add an admin-managed token allowlist and change `get_token()`/monitoring guidance to be explicit that it returns only the *default* token, not an exhaustive list of tokens in use.
-
-**Acceptance Criteria:**
-- [ ] `create_escrow`'s accepted tokens are either restricted to the configured token or explicitly governed by an allowlist.
-- [ ] `get_token()`'s documented meaning matches its actual guarantee.
-- [ ] A test asserts that an unsupported/unlisted token is rejected (if allowlist approach) or that the `token` argument is validated against config (if single-token approach).
-
-**Technical Notes:** If an allowlist is chosen, consider a `DataKey::AllowedToken(Address) -> bool` pattern consistent with `identity_reputation_contract`'s existing `AuthorizedContract(Address)` pattern (see issue #37).
-
-**Relevant Files:** `contracts/escrow_contract/lib.rs:159-182, 225-227, 293-330`
-
-**Testing Requirements:** Test that `create_escrow` with a token other than the configured/allowed one is rejected with a typed error (or, if intentionally multi-token, that `get_token()`'s docs and behavior are reconciled and a new `get_escrow(id).token` is the documented way to discover per-escrow assets).
-
-**Definition of Done:** Token acceptance policy is explicit, enforced, and documented; `get_token()` cannot mislead a caller about what asset a given escrow actually holds.
-
-**Suggested Labels:** `bug`, `security`
-
----
-
-### 33. `register_fleet` permanently fails for any owner already registered as a driver
-
-**Summary:** `register_fleet`'s cross-call into `identity_reputation_contract::register_driver` is unconditional; if the fleet owner already has a driver profile, `register_driver` panics with `AlreadyInitialized`, which unwinds and rolls back the *entire* `register_fleet` call — including the fleet counter increment and profile write.
-
-**Background:** `contracts/fleet_management_contract/lib.rs:135-145` calls `register_driver` on the configured identity contract whenever one is set, with no existence check first:
-```rust
-if let Some(identity_addr) = env.storage().instance().get::<DataKey, Address>(&DataKey::IdentityContract) {
-    let _: () = env.invoke_contract(&identity_addr, &Symbol::new(&env, "register_driver"), ...);
-}
-```
-`identity_reputation_contract::register_driver` (`lib.rs:108-113`) panics with `FaniLabError::AlreadyInitialized` if a `DriverProfile` already exists for that address. Soroban propagates a panic in a cross-contract call as a failure of the entire top-level transaction.
-
-**Problem Statement:** Once `set_identity_contract` is configured (a normal, expected admin action per the contract's own doc comments), any address that is already a registered driver — or that registers a *second* fleet after its first successful `register_fleet` call already auto-registered it as a driver — can never successfully call `register_fleet` again. There is no way to work around this without unsetting the identity contract entirely, which defeats the feature for everyone.
-
-**Proposed Solution:** Before calling `register_driver`, check whether the owner already has a driver profile (e.g., expose a `has_driver_profile`/`try`-style read on `identity_reputation_contract`, or catch the specific error) and skip the cross-call if one exists, rather than letting the panic propagate.
-
-**Acceptance Criteria:**
-- [ ] Registering a second fleet under the same owner succeeds when an identity contract is configured.
-- [ ] Registering a fleet for an owner who is already a registered driver succeeds.
-- [ ] A regression test covers both scenarios end-to-end (identity contract wired, owner registers fleet twice / owner pre-registered as driver).
-
-**Technical Notes:** Since Soroban contracts can't easily catch cross-contract panics today, the cleanest fix is a query-first pattern: read-only "does this driver profile exist" check before the mutating call, keeping `identity_reputation_contract`'s existing invariant (`register_driver` still panics for direct callers) intact.
-
-**Relevant Files:** `contracts/fleet_management_contract/lib.rs:105-154`, `contracts/identity_reputation_contract/lib.rs:108-128`
-
-**Testing Requirements:** Add a `fleet_management_contract` test (with `identity_reputation_contract` as a dev-dependency, see also issue #78) that: sets an identity contract, registers fleet A for owner X, then registers fleet B for the same owner X, and asserts both succeed.
-
-**Definition of Done:** `register_fleet` is idempotent with respect to driver-profile auto-registration; multi-fleet owners are not blocked.
-
-**Suggested Labels:** `bug`
-
----
-
-### 34. `dispute_resolution_contract::remove_admin` can remove the last admin, bricking governance
-
-**Summary:** `remove_admin` lets any current admin remove any other admin — including themself if they are the sole remaining admin — with no floor on admin count, permanently locking every admin-gated function in the contract.
-
-**Background:** `contracts/dispute_resolution_contract/lib.rs:79-85`:
-```rust
-pub fn remove_admin(env: Env, caller: Address, old_admin: Address) {
-    caller.require_auth();
-    if !Self::is_admin(env.clone(), caller.clone()) { panic_with_error!(&env, FaniLabError::Unauthorized); }
-    env.storage().instance().remove(&DataKey::Admin(old_admin));
-}
-```
-Unlike `escrow_contract`'s single-`Admin`-address model (which always has exactly one admin who can propose a successor), this contract models admins as an open-ended `DataKey::Admin(Address) -> bool` set with no minimum-count invariant, and `add_admin` (`lib.rs:69-77`) itself requires being an existing admin to add a new one.
-
-**Problem Statement:** If `old_admin == caller` and `caller` is the only address with `is_admin() == true`, this call succeeds and leaves the contract with zero admins. Every admin-gated function afterward (`add_admin`, `resolve_dispute_refund_sender`, `resolve_dispute_split_funds`, `resolve_dispute_pay_driver`, `set_identity_reputation_contract`) becomes permanently uncallable — there is no owner-of-last-resort, no timelock, and no redeploy-free recovery path. This can happen accidentally (an admin cleaning up their own access) or as a griefing vector if a single admin key is ever briefly compromised and the attacker's only goal is disruption rather than theft.
-
-**Proposed Solution:** Track an admin count (or iterate is unnecessary — a simple counter suffices) and reject `remove_admin` when it would bring the count to zero. Alternatively, require at least one other function (e.g., a separate "retire contract" ADR-level action) to explicitly acknowledge zero-admin state before allowing it.
-
-**Acceptance Criteria:**
-- [ ] `remove_admin` rejects any call that would leave the contract with zero admins, with a dedicated typed error.
-- [ ] A test asserts that removing the sole admin fails, and that removing one of two-or-more admins still succeeds.
-
-**Technical Notes:** A `DataKey::AdminCount(u32)` instance value, incremented in `add_admin` / decremented in `remove_admin`, is the simplest implementation and also directly enables issue #70 (admin enumeration).
-
-**Relevant Files:** `contracts/dispute_resolution_contract/lib.rs:69-92`
-
-**Testing Requirements:** Unit test: single admin calls `remove_admin(self, self)` → must fail. Unit test: two admins, one removes the other → must succeed and leave exactly one admin.
-
-**Definition of Done:** It is structurally impossible to leave `dispute_resolution_contract` with zero admins via any public entry point.
-
-**Suggested Labels:** `bug`, `security`
-
----
-
-### 35. Two divergent `UserProfile` definitions with different field names
-
-**Summary:** `shared_types::UserProfile` and `identity_reputation_contract::UserProfile` are two independently-declared, structurally-different types with the same name, mirroring the already-tracked `DriverProfile` duplication ([GitHub #9](https://github.com/fanilabs/fanilab-smartcontract/issues/9)-adjacent context) but for a different struct entirely.
-
-**Background:** `contracts/shared_types/lib.rs:551-555`:
-```rust
-pub struct UserProfile {
-    pub address: Address,
-    pub registered_at: u64,
-}
-```
-`contracts/identity_reputation_contract/lib.rs:9-12`:
-```rust
-pub struct UserProfile {
-    pub address: Address,
-    pub join_date: u64,
-}
-```
-The two structs are not interchangeable (different field name, `registered_at` vs `join_date`), and `identity_reputation_contract::register_user`/`get_user_profile` (`lib.rs:130-162`) exclusively use the *local* definition, never `shared_types::UserProfile`.
-
-**Problem Statement:** Off-chain SDKs or other contracts that build against `shared_types::UserProfile` (the type one would expect to be canonical, given `shared_types`' stated purpose per ADR-003) will get field-name mismatches against what `identity_reputation_contract` actually returns. This is the same class of "no single source of truth" problem already flagged for `DriverProfile` in GitHub #24, but affects an entirely separate type that issue does not mention.
-
-**Proposed Solution:** Delete one of the two `UserProfile` definitions and have `identity_reputation_contract` use `shared_types::UserProfile` exclusively (consistent with the direction already recommended for `DriverProfile`).
-
-**Acceptance Criteria:**
-- [ ] Only one `UserProfile` type exists in the workspace.
-- [ ] `identity_reputation_contract::register_user`/`get_user_profile` use the shared type.
-- [ ] Existing tests referencing `join_date` are updated to the shared field name.
-
-**Technical Notes:** This is a breaking storage-schema change if any `UserProfile` records already exist on a deployed network; treat it like the `DriverProfile` consolidation recommended in GitHub #24 and land both in the same migration window.
-
-**Relevant Files:** `contracts/shared_types/lib.rs:551-555`, `contracts/identity_reputation_contract/lib.rs:9-12, 130-162`
-
-**Testing Requirements:** Update `contracts/identity_reputation_contract/test.rs` (currently has zero tests for `register_user`/`get_user_profile` at all — see also issue #69) to use the consolidated type and verify field values round-trip correctly.
-
-**Definition of Done:** A single canonical `UserProfile` type is used protocol-wide; `cargo test` passes.
-
-**Suggested Labels:** `bug`
-
----
-
-### 36. `DeliveryDetails` and `PartyAddresses` are fully-defined dead types
-
-**Summary:** `shared_types` declares two fully-documented public structs, `DeliveryDetails` and `PartyAddresses`, that are never constructed or consumed by any contract — only by `shared_types`' own unit tests.
-
-**Background:** `contracts/shared_types/lib.rs:230-235` (`PartyAddresses { sender, driver, recipient }`) and `lib.rs:282-288` (`DeliveryDetails { id, driver: String, status: DeliveryStatus }`) are both public, `#[contracttype]`-annotated structs. A workspace-wide search shows their only usages are in `shared_types/lib.rs`'s own `#[cfg(test)]` module (`party_addresses_preserve_fields` test); no contract in `contracts/escrow_contract`, `delivery_contract`, `dispute_resolution_contract`, `fleet_management_contract`, `identity_reputation_contract`, or `settlement_contract` references either type.
-
-**Problem Statement:** `DeliveryDetails` even encodes `driver` as a `String` rather than an `Address`, which is inconsistent with every other place a driver is represented in the codebase (`Address` everywhere else) — a strong signal this is either an abandoned early draft of `DeliveryRecord` or a placeholder that was never wired up. Dead public types in a shared library inflate the WASM-adjacent surface area contracts must be audited against and confuse anyone trying to understand the "real" cross-contract data model.
-
-**Proposed Solution:** Remove both types if confirmed unused, or, if `DeliveryDetails` was meant as a lightweight summary view (id + driver + status) for a future pagination/enumeration API (see GitHub #27), fix its `driver` field to `Address` and actually wire it into a query function.
-
-**Acceptance Criteria:**
-- [ ] `DeliveryDetails` and `PartyAddresses` are either removed or given at least one real caller.
-- [ ] If removed, their unit tests in `shared_types/lib.rs`'s test module are removed too.
-
-**Technical Notes:** Grep confirms zero non-test references: `grep -rn "DeliveryDetails\|PartyAddresses" contracts/ | grep -v shared_types/lib.rs` returns nothing.
-
-**Relevant Files:** `contracts/shared_types/lib.rs:230-235, 282-288, 323-338`
-
-**Testing Requirements:** After removal, `cargo build --workspace` and `cargo test --workspace` must still pass with no dangling references.
-
-**Definition of Done:** No public type in `shared_types` is unreferenced outside its own test module.
-
-**Suggested Labels:** `refactor`
-
----
-
-### 37. `AuthorizedContract` allowlist is built but never consulted
-
-**Summary:** `identity_reputation_contract` implements a complete admin-gated allowlist (`set_authorized_contract`/`is_authorized_contract`) for which contracts may call it, but not a single mutating function in the contract actually checks it.
-
-**Background:** `contracts/identity_reputation_contract/lib.rs:84-106` implements:
-```rust
-pub fn set_authorized_contract(env: Env, admin: Address, contract_addr: Address, authorized: bool) { ... }
-pub fn is_authorized_contract(env: Env, contract_addr: Address) -> bool { ... }
-```
-Instead, `register_driver`, `increase_reputation`, `decrease_reputation`, and `update_driver_kyc_status` each independently check `caller == delivery_contract || caller == dispute_contract` against the two fixed addresses set once in `initialize` (`lib.rs:224-227, 257-270`). The `AuthorizedContract` storage key and its setter/getter are entirely orthogonal to that check.
-
-**Problem Statement:** This is a genuine access-control primitive that looks load-bearing (it's admin-gated, has a dedicated storage key, and a public getter) but provides zero actual protection — an admin can call `set_authorized_contract(addr, true)` believing they've granted `addr` write access to reputation data, and nothing changes, because no code path reads `is_authorized_contract`. Conversely, the two hardcoded addresses from `initialize` can never be revoked or rotated without a full contract migration, since nothing consults the allowlist that exists specifically to make that flexible.
-
-**Proposed Solution:** Either (a) delete the unused allowlist functions and storage key as dead code, or (b) replace the hardcoded `delivery_contract`/`dispute_contract` equality checks in `increase_reputation`/`decrease_reputation`/`register_driver`/`update_driver_kyc_status` with `is_authorized_contract(caller)`, and have `initialize` call `set_authorized_contract` for the initial two contracts — making the allowlist the actual, sole source of truth and enabling future contracts to be authorized without a redeploy.
-
-**Acceptance Criteria:**
-- [ ] Either the allowlist is removed, or all caller-authorization checks in the contract route through `is_authorized_contract`.
-- [ ] If wired up, a test confirms a newly-authorized contract can call `increase_reputation`/`decrease_reputation` and a de-authorized one cannot.
-
-**Technical Notes:** Option (b) is strictly more valuable since it also fixes the "hardcoded, unrotatable authorized callers" limitation implicit in the current design, and costs little given the storage plumbing already exists.
-
-**Relevant Files:** `contracts/identity_reputation_contract/lib.rs:84-106, 108-128, 174-203, 205-254, 256-289`
-
-**Testing Requirements:** Add tests for: an authorized third contract successfully calling `increase_reputation`; a de-authorized former caller being rejected; `set_authorized_contract`/`is_authorized_contract` themselves (currently have zero test coverage — see issue #69 for the broader identity-contract coverage gap).
-
-**Definition of Done:** The `AuthorizedContract` mechanism is either gone or is the single enforced authorization path for reputation-mutating calls.
-
-**Suggested Labels:** `security`, `bug`
-
----
-
-### 38. Driver tier system is never wired into `assign_driver` despite being documented
-
-**Summary:** `identity_reputation_contract::get_driver_tier`/`is_eligible_for_enterprise` exist, are tested in isolation, and are described in `docs/architecture/smart-contract-architecture.md` as governing job eligibility — but `delivery_contract::assign_driver` never calls either, so tier has zero effect on which deliveries a driver can take.
-
-**Background:** `docs/architecture/smart-contract-architecture.md:16` states `delivery_contract` "**Interacts with**: `identity_reputation_contract` (to verify driver tier)". In reality, `contracts/delivery_contract/lib.rs:166-196` (`assign_driver`) only checks `is_admin` or self-assignment (`caller == driver`) — it never invokes `identity_reputation_contract` at all. `get_driver_tier` and `is_eligible_for_enterprise` (`identity_reputation_contract/lib.rs:291-306`) are exercised only by that contract's own unit tests (`contracts/identity_reputation_contract/test.rs:143-191`); a workspace-wide search confirms no other contract calls them.
-
-**Problem Statement:** The entire tiering/enterprise-eligibility feature — the mechanism the architecture doc positions as the reason `identity_reputation_contract` and `delivery_contract` are coupled — has no effect on the actual delivery-assignment flow. Any Bronze-tier driver can be assigned to (and self-assign for) any delivery, including whatever "high-paying enterprise jobs" `PLAN.md`'s reputation description alludes to. This is a documented, load-bearing cross-contract relationship that doesn't exist in code.
-
-**Proposed Solution:** Add an optional tier/eligibility gate to `assign_driver` (e.g., a `min_tier: Option<DriverTier>` on delivery metadata, or a simpler enterprise-flag check via `is_eligible_for_enterprise`) that cross-calls `identity_reputation_contract` before allowing assignment, or — if tiering isn't ready for this release — update the architecture doc to describe it as planned rather than implemented.
-
-**Acceptance Criteria:**
-- [ ] Either `assign_driver` enforces a tier/eligibility check via a real cross-contract call, or the architecture documentation is corrected to not claim this integration exists today.
-- [ ] If implemented, a test demonstrates a Bronze-tier driver being rejected from an enterprise-flagged delivery and a Gold-tier driver being accepted.
-
-**Technical Notes:** Wiring this requires `delivery_contract` to know the address of `identity_reputation_contract`, which it currently does not store anywhere (only `EscrowContract` address is stored in `DataKey::EscrowContract`) — a new instance storage key and admin setter (mirroring `fleet_management_contract::set_identity_contract`) would be needed.
-
-**Relevant Files:** `contracts/delivery_contract/lib.rs:166-196`, `contracts/identity_reputation_contract/lib.rs:291-306`, `docs/architecture/smart-contract-architecture.md:13-16`
-
-**Testing Requirements:** New test(s) in `delivery_contract/test.rs` covering tier-gated and non-gated assignment paths, plus a doc-accuracy check if the "won't implement now" path is chosen.
-
-**Definition of Done:** Documentation and code agree on whether driver tier affects job assignment; if it does, the enforcement is tested.
-
-**Suggested Labels:** `feature`
-
----
-
-### 39. `DeliveryMetadata.delivery_id` is never validated against the real `DeliveryId`
-
-**Summary:** The caller-supplied `DeliveryMetadata.delivery_id: u64` field is stored verbatim and never checked against the actual `DeliveryId` the contract assigns via its own counter, so a delivery's storage key and its embedded metadata can permanently disagree.
-
-**Background:** `contracts/delivery_contract/lib.rs:78-120` (`create_delivery`) generates the real `delivery_id` from an internal counter (`DataKey::DeliveryCounter`), but the `metadata: DeliveryMetadata` parameter (defined in `contracts/shared_types/lib.rs:577-584`) carries its *own*, independent `delivery_id: u64` field supplied entirely by the caller. Nothing in `create_delivery` cross-checks `metadata.delivery_id` against the freshly-minted `delivery_id`.
-
-**Problem Statement:** A sender can call `create_delivery` with `metadata.delivery_id` set to any arbitrary value — 0, a different delivery's ID, or a value that collides with an unrelated record — and the contract will happily store it under the *real* `DeliveryId` key while the metadata blob inside claims to belong to a different delivery entirely. Any off-chain consumer that trusts `metadata.delivery_id` as authoritative (rather than the outer `DeliveryRecord.delivery_id`) will misattribute cargo details to the wrong delivery.
-
-**Proposed Solution:** Either derive `metadata.delivery_id` from the real counter inside `create_delivery` (overwriting whatever the caller passed) rather than trusting caller input, or drop the redundant field from `DeliveryMetadata` entirely since `DeliveryRecord.delivery_id` already serves that purpose.
-
-**Acceptance Criteria:**
-- [ ] `metadata.delivery_id` (if kept) always equals `DeliveryRecord.delivery_id` for every stored record, enforced by the contract rather than trusted from the caller.
-- [ ] A test creates a delivery with a mismatched `metadata.delivery_id` and asserts the contract either rejects it or overwrites it to the correct value.
-
-**Technical Notes:** Overwriting is the lower-risk fix since it requires no signature changes to `create_delivery`, whereas removing the field is a breaking change to `DeliveryMetadata`'s shape used across `shared_types`.
-
-**Relevant Files:** `contracts/delivery_contract/lib.rs:78-120`, `contracts/shared_types/lib.rs:577-584`
-
-**Testing Requirements:** Add a test asserting `get_delivery(id).metadata.delivery_id == id` always holds, regardless of what the caller passed in.
-
-**Definition of Done:** It is impossible to create a delivery whose stored metadata disagrees with its own storage key about which delivery it describes.
-
-**Suggested Labels:** `bug`
-
----
-
-### 40. `FaniLabError::DeliveryNotFound` and `EscrowError::DeliveryNotFound` carry different discriminants
-
-**Summary:** The protocol has two separately-defined "delivery not found" error variants with the same name but different numeric codes (`FaniLabError::DeliveryNotFound = 4` vs `EscrowError::DeliveryNotFound = 2`), undermining any attempt at a single canonical error-code table for off-chain clients.
-
-**Background:** `contracts/shared_types/lib.rs:8-29` defines the shared `FaniLabError` enum used by `delivery_contract`, `dispute_resolution_contract`, `fleet_management_contract` (partially), and `identity_reputation_contract`. `contracts/escrow_contract/lib.rs:127-136` separately defines its own `EscrowError` enum, whose `DeliveryNotFound` variant is numbered `2`, not `4`. `docs/API.md:502-518` documents `FaniLabError` as *the* protocol error table with `DeliveryNotFound = 4`, but escrow errors returned to a client for the exact same conceptual failure ("no record for this ID") will show up as code `2`.
-
-**Problem Statement:** An off-chain SDK or dashboard that builds a single "error code → human message" lookup table (exactly what `docs/API.md:539-544`'s "Error Handling Best Practices" recommends: "Parse error discriminant... Match against error enum values") cannot do so correctly across contracts, because the same semantic error means different numbers depending which contract raised it. This is a distinct problem from GitHub #24 (which is about the `DriverProfile` *data* type being duplicated, not error *codes*).
-
-**Proposed Solution:** Either have `escrow_contract` reuse `shared_types::FaniLabError::DeliveryNotFound` directly instead of defining its own overlapping variant, or clearly document that each contract's error codes are contract-scoped (not globally unique) and off-chain clients must key error tables by `(contract, code)` rather than `code` alone.
-
-**Acceptance Criteria:**
-- [ ] Either `EscrowError` is reconciled with `FaniLabError` for overlapping concepts, or `docs/API.md` explicitly documents that error codes are per-contract, not global.
-- [ ] The chosen approach is applied consistently to `FleetError`/`DeliveryError` too, which have the same overlap problem (e.g., `FleetError::Unauthorized = 3` vs `FaniLabError::Unauthorized = 1`).
-
-**Technical Notes:** Full consolidation onto one enum may not be desirable (each contract's error space benefits from independent evolution), so the documentation-first fix is the pragmatic default; full consolidation is the higher-effort, more correct fix.
-
-**Relevant Files:** `contracts/shared_types/lib.rs:8-29`, `contracts/escrow_contract/lib.rs:127-136`, `contracts/fleet_management_contract/lib.rs:13-24`, `docs/API.md:502-518`
-
-**Testing Requirements:** If enums are consolidated, update all `try_*` test assertions across every `test.rs` that match on the affected variants.
-
-**Definition of Done:** Off-chain consumers have an unambiguous, documented way to interpret error codes across every contract.
-
-**Suggested Labels:** `refactor`
-
----
-
-### 41. Typed event payload structs and topic constants in `shared_types::events` are unused
-
-**Summary:** `shared_types` defines a complete typed-event system (`events::escrow_funded()`-style topic helpers plus `DeliveryCreatedEvent`, `EscrowFundedEvent`, `DriverAssignedEvent`, etc. payload structs) that ADR-007 presents as the protocol's event architecture, but almost every contract bypasses it and publishes raw tuples with inline, ad hoc `Symbol::new(&env, "...")` topics instead.
-
-**Background:** `contracts/shared_types/lib.rs:32-153` defines seven topic-helper functions (`delivery_created`, `escrow_funded`, etc.) and seven matching payload structs. `contracts/escrow_contract/lib.rs` does use the topic helpers (`events::escrow_funded(&env)` etc., e.g. `lib.rs:326-329`) but publishes plain tuples `(sender, recipient, amount)` rather than the matching `EscrowFundedEvent` struct. `contracts/delivery_contract/lib.rs`, `contracts/fleet_management_contract/lib.rs`, and `contracts/dispute_resolution_contract/lib.rs` don't use the shared topic helpers *or* the payload structs at all — they inline their own `Symbol::new(&env, "fleet_registered")`, `Symbol::new(&env, "dispute_raised")`, `Symbol::new(&env, "driver_invited")`, etc. directly at each call site.
-
-**Problem Statement:** ADR-007 ("Event-Driven Architecture") frames this as a deliberate, centralized design for off-chain indexing consistency, but in practice topic strings for most events exist only as scattered string literals with no central registry, and none of the seven documented payload struct shapes are ever actually put on the wire. An indexer built against the `shared_types::events` API (as `docs/API.md`'s "Events" section implies is possible) would get nothing usable for most event types, and a typo in one of the many inline `Symbol::new` calls (e.g., renaming `"fleet_registered"` in one place but not another) would silently break event consumers with no compiler check.
-
-**Proposed Solution:** Either (a) fully commit to the shared event system — move every inline topic string into `shared_types::events` and have every `publish()` call use the matching typed struct — or (b) remove the unused payload structs and topic helpers that aren't being adopted, and document that each contract owns its own event shapes.
-
-**Acceptance Criteria:**
-- [ ] Every contract's `events().publish()` calls consistently either use `shared_types::events`/payload structs, or the shared module is trimmed to only what's actually used, with no silent partial adoption.
-- [ ] `docs/architecture/event-system.md` (currently empty — see issue #60) documents whichever approach is chosen.
-
-**Technical Notes:** Given `#[allow(deprecated)]` is already present everywhere for `events().publish()` (per `SOROBAN_SDK_27_MIGRATION.md`), this is a good opportunity to land the fix alongside a future migration to the SDK's `#[contractevent]` macro once it's stable.
-
-**Relevant Files:** `contracts/shared_types/lib.rs:32-153`, `contracts/escrow_contract/lib.rs` (multiple `events().publish()` sites), `contracts/delivery_contract/lib.rs`, `contracts/fleet_management_contract/lib.rs`, `contracts/dispute_resolution_contract/lib.rs`
-
-**Testing Requirements:** For any event call site changed to use a typed struct, update the corresponding test assertions (several tests already assert on emitted event tuples/topics and would need adjusting).
-
-**Definition of Done:** The protocol has one, consistently-applied event convention, either fully centralized in `shared_types` or explicitly documented as per-contract.
-
-**Suggested Labels:** `refactor`
-
----
-
-### 42. No reputation decay for inactive drivers despite being a named roadmap item
-
-**Summary:** `PLAN.md` explicitly lists "Create reputation decay mechanism for inactive drivers" as a Medium-High priority feature; no such mechanism exists anywhere in `identity_reputation_contract` or any other contract.
-
-**Background:** `PLAN.md:19` lists the decay feature under "New Features." `contracts/identity_reputation_contract/lib.rs` has no time-based decay logic anywhere — `reputation_score` only ever changes via `increase_reputation`/`decrease_reputation`, both invoked exclusively as a direct result of a delivery event, never on a schedule or based on elapsed time since a driver's last activity.
-
-**Problem Statement:** A driver who earns a high reputation score and then goes permanently inactive retains Gold-tier status (`get_driver_tier`, `≥75`) and enterprise eligibility (`is_eligible_for_enterprise`) indefinitely, with no mechanism to reflect that their reliability signal is stale. This undermines the reputation system's usefulness for its stated purpose (gating access to "high-paying enterprise jobs" per the architecture doc) since an inactive account looks identical to an actively-good one.
-
-**Proposed Solution:** Add a `last_active_at: u64` field to `DriverProfile`, updated whenever `increase_reputation`/`decrease_reputation` fires, and a permissionless or admin-triggered `apply_decay(driver)` function that reduces `reputation_score` based on elapsed time since `last_active_at` (e.g., a fixed point decay per 30-day period beyond some grace window).
-
-**Acceptance Criteria:**
-- [ ] `DriverProfile` tracks last-activity time.
-- [ ] A decay function exists, is callable (permissionless is simplest, since it can't be abused to *harm* the driver beyond a fair, time-based formula), and reduces `reputation_score` for drivers inactive beyond a defined threshold.
-- [ ] Decay never reduces `reputation_score` below 0 (`saturating_sub`, consistent with `decrease_reputation`'s existing pattern).
-
-**Technical Notes:** Because Soroban has no native cron/scheduled execution, decay must be applied lazily — e.g., computed on read in `get_driver_profile`/`get_driver_tier`, or via an explicit external trigger — rather than assumed to run automatically.
-
-**Relevant Files:** `contracts/identity_reputation_contract/lib.rs:14-22, 205-289, 291-306`, `PLAN.md:19`
-
-**Testing Requirements:** Tests for: no decay within the grace window; decay applied correctly after N periods of inactivity; decay resets/pauses correctly once a driver becomes active again; decay never underflows.
-
-**Definition of Done:** Reputation scores measurably decline for provably inactive drivers, closing the gap between `PLAN.md`'s stated roadmap and the shipped contract.
-
-**Suggested Labels:** `feature`
-
----
-
-### 43. `add_evidence_hash` allows unbounded growth of a single storage entry
-
-**Summary:** `dispute_resolution_contract::add_evidence_hash` lets either party to a dispute push an unlimited number of `BytesN<32>` hashes onto a single `Vec` stored under one persistent key, with no cap — a straightforward storage-growth griefing vector against a specific dispute record.
-
-**Background:** `contracts/dispute_resolution_contract/lib.rs:205-245`:
-```rust
-dispute.evidence_hashes.push_back(evidence_hash.clone());
-env.storage().persistent().set(&dispute_key, &dispute);
-```
-There is no limit on how many times `add_evidence_hash` can be called for a given `delivery_id` while `dispute.status == DisputeStatus::Open`, and no cap on `DisputeCase.evidence_hashes`'s length.
-
-**Problem Statement:** `docs/API.md:550-555` documents a 64 KB max storage entry size for Soroban. Either the sender or recipient on a disputed delivery (both are authorized callers per the function's own check) can call `add_evidence_hash` in a loop until the `DisputeCase` entry approaches or exceeds that limit, at which point further writes to it fail and the dispute becomes unresolvable — exactly the "no unbounded data structures" / "no griefing attacks possible" failure mode that `docs/SECURITY_AUDIT.md`'s own Denial-of-Service checklist (section 10) calls out as something to verify. This is a self-inflicted DoS: a party unhappy with how a dispute is going could deliberately corrupt their own dispute record to stall resolution.
-
-**Proposed Solution:** Add a maximum evidence-hash count (a small, sane constant, e.g. 20) enforced in `add_evidence_hash`, returning a typed error once exceeded.
-
-**Acceptance Criteria:**
-- [ ] `add_evidence_hash` rejects submissions once a defined cap is reached, with a dedicated error variant.
-- [ ] A test adds evidence up to the cap successfully and confirms the next call is rejected.
-
-**Technical Notes:** Consider whether large volumes of evidence belong on-chain at all versus storing only a Merkle root or IPFS/off-chain pointer hash per submission — the cap doesn't need to be generous since the hash itself is just a pointer to off-chain content.
-
-**Relevant Files:** `contracts/dispute_resolution_contract/lib.rs:205-245`, `docs/SECURITY_AUDIT.md:108-113`
-
-**Testing Requirements:** Boundary test at cap, cap+1, and confirm existing `add_evidence_hash` happy-path tests still pass unmodified below the cap.
-
-**Definition of Done:** No dispute's evidence list can grow without bound; the cap is documented and tested.
-
-**Suggested Labels:** `security`, `performance`
-
----
-
-### 44. No automated dispute evidence verification system despite being a named roadmap item
-
-**Summary:** `PLAN.md` lists "Build automated dispute evidence verification system" as a Medium-High priority feature; today, `add_evidence_hash` stores raw 32-byte hashes with zero verification logic of any kind.
-
-**Background:** `PLAN.md:18`. `contracts/dispute_resolution_contract/lib.rs:205-245` stores whatever `BytesN<32>` value the caller supplies — there is no hash-format validation, no linkage to an expected commitment scheme, no oracle callback, and no distinction between "hash of a real photo of the damaged package" and "32 random bytes."
-
-**Problem Statement:** The evidence mechanism currently provides no more integrity guarantee than an unstructured free-text field would — anyone can submit an arbitrary hash claiming it "is" evidence, and admins resolving disputes (`resolve_dispute_pay_driver`, `resolve_dispute_refund_sender`, `resolve_dispute_split_funds`) have no on-chain signal about evidence validity, only an off-chain promise that the hash corresponds to something real. This gap is explicitly acknowledged as unsolved by the project's own roadmap.
-
-**Proposed Solution:** At minimum, require evidence submissions to reference a pre-registered commitment scheme (e.g., a hash-of-hash reveal pattern, or an admin/oracle-signed attestation that a specific hash was reviewed and found valid before dispute resolution can proceed), building toward the "automated" verification PLAN.md describes as a longer-term goal.
-
-**Acceptance Criteria:**
-- [ ] A defined verification step (even a minimal admin-attestation one) exists between "evidence submitted" and "dispute resolved," rather than resolution being entirely independent of evidence content.
-- [ ] The chosen design is documented in `docs/ARCHITECTURE_DECISION_RECORDS.md`.
-
-**Technical Notes:** This is intentionally scoped as "at least a first verifiable step," since a fully automated, trustless evidence-verification oracle is a substantial, multi-contract undertaking (likely its own ADR and possibly its own contract) — this issue tracks closing the gap between the roadmap claim and the current zero-verification baseline, not delivering the entire long-term vision in one PR.
-
-**Relevant Files:** `contracts/dispute_resolution_contract/lib.rs:205-245`, `PLAN.md:18`
-
-**Testing Requirements:** Tests covering the new verification gate: unverified evidence blocks resolution (if that's the chosen design), verified evidence unblocks it.
-
-**Definition of Done:** Dispute resolution is provably influenced by evidence verification status, not purely by admin discretion over opaque hashes.
-
-**Suggested Labels:** `feature`
-
----
-
-### 45. Dispute resolution's reputation-penalty cross-call is never exercised by any test
-
-**Summary:** `resolve_dispute_refund_sender`'s call into `identity_reputation_contract::decrease_reputation` has zero test coverage, because `identity_reputation_contract` isn't even a dev-dependency of `dispute_resolution_contract`.
-
-**Background:** `contracts/dispute_resolution_contract/lib.rs:280-295` conditionally cross-calls `decrease_reputation` on a configured `IdentityReputationContract` address. `contracts/dispute_resolution_contract/Cargo.toml`'s `[dev-dependencies]` section lists only `delivery_contract` and `escrow_contract` — not `identity_reputation_contract`. A search of `contracts/dispute_resolution_contract/test.rs` confirms `set_identity_reputation_contract` is never called in any test, and the only occurrence of the word "reputation" in the file is a comment (`test.rs:365`) acknowledging the penalty exists without actually testing it.
-
-**Problem Statement:** Every existing test for `resolve_dispute_refund_sender` exercises only the `None`-branch of `if let Some(reputation_addr) = ...` (`lib.rs:280`), meaning the code path that actually penalizes a driver's reputation after a lost dispute — arguably the single most consequential side effect of a refund resolution — has never been run in CI. A regression here (e.g., wrong argument order, wrong penalty amount, or a broken cross-call) would ship undetected.
-
-**Proposed Solution:** Add `identity_reputation_contract` as a dev-dependency of `dispute_resolution_contract`, and add integration tests that wire a real `identity_reputation_contract` instance, register a driver, raise and resolve a dispute against them via `resolve_dispute_refund_sender`, and assert the driver's `reputation_score` actually decreased by `DISPUTE_REPUTATION_PENALTY` (10).
-
-**Acceptance Criteria:**
-- [ ] `identity_reputation_contract` is a dev-dependency of `dispute_resolution_contract`.
-- [ ] A new test wires `set_identity_reputation_contract` and asserts the reputation penalty is applied end-to-end.
-
-**Technical Notes:** This mirrors the pattern `dispute_resolution_contract/test.rs` already uses for its `escrow_contract`/`delivery_contract` integration tests — no new test infrastructure needs inventing, just an additional dev-dependency and setup step.
-
-**Relevant Files:** `contracts/dispute_resolution_contract/Cargo.toml`, `contracts/dispute_resolution_contract/lib.rs:280-295`, `contracts/dispute_resolution_contract/test.rs`
-
-**Testing Requirements:** As described in Proposed Solution; also add a test confirming the resolution still succeeds gracefully when no identity contract is configured (the current, only-tested branch), so both paths have coverage going forward.
-
-**Definition of Done:** The reputation-penalty side effect of dispute resolution is verified by an automated test, not just a code comment.
-
-**Suggested Labels:** `test`
-
----
-
-### 46. No `proptest` dependency anywhere despite extensive property-testing documentation
-
-**Summary:** `docs/TESTING.md`, `docs/SECURITY_AUDIT.md`, and `PLAN.md` each describe property-based testing (via `proptest`) as part of the project's testing practice, complete with example code — but `proptest` is not a dependency of any crate in the workspace.
-
-**Background:** `docs/TESTING.md:178-200` shows a full `proptest!` example and instructs `cargo add proptest --dev`. `docs/SECURITY_AUDIT.md:183-187` lists `cargo test proptest` as part of the security test suite. `PLAN.md:32` lists "Write property-based tests for fee calculations" as a Critical-priority testing task. A check of every contract's `Cargo.toml` `[dev-dependencies]` section confirms none declare `proptest`.
-
-**Problem Statement:** Anyone following `docs/TESTING.md`'s instructions to run `cargo test proptest` will simply find nothing, since no property tests exist. `PRODUCTION_READINESS.md`'s Testing section explicitly claims "[x] Property-based testing framework" as already implemented — a claim this finding directly contradicts, independent of the broader documentation-accuracy concerns already raised in GitHub #34.
-
-**Proposed Solution:** Add `proptest` as a dev-dependency to at least `escrow_contract` (the contract with the most fee-calculation arithmetic) and implement the exact property the docs already describe as an example: fee is always `< amount` and `>= 0` across the full valid input space.
-
-**Acceptance Criteria:**
-- [ ] `proptest` is a declared dev-dependency of at least `escrow_contract`.
-- [ ] At least one property-based test exists and passes, covering `calculate_fee`'s invariants across a wide range of `amount`/`platform_fee_bps` values.
-
-**Technical Notes:** `calculate_fee` (`escrow_contract/lib.rs:52-54`) is a pure function, making it the lowest-friction starting point for property testing without needing `Env`/storage setup.
-
-**Relevant Files:** `contracts/escrow_contract/Cargo.toml`, `contracts/escrow_contract/lib.rs:52-54`, `docs/TESTING.md:178-200`, `docs/SECURITY_AUDIT.md:183-187`, `PLAN.md:32`
-
-**Testing Requirements:** The proptest itself is the deliverable; also verify `cargo test` runtime doesn't regress unacceptably (property tests can be slow — tune case counts if needed).
-
-**Definition of Done:** Running the exact commands `docs/TESTING.md` and `docs/SECURITY_AUDIT.md` already document actually exercises real property-based tests.
-
-**Suggested Labels:** `test`
-
----
-
-### 47. No fuzz targets despite `SECURITY_AUDIT.md` prescribing `cargo fuzz` commands
-
-**Summary:** `docs/SECURITY_AUDIT.md` instructs running `cargo fuzz run escrow_operations`, `cargo fuzz run state_transitions`, and `cargo fuzz run fee_calculations` as part of the security testing process — none of these fuzz targets, nor a `fuzz/` directory, nor a `cargo-fuzz` setup of any kind exists in the repository.
-
-**Background:** `docs/SECURITY_AUDIT.md:158-167`. A workspace-wide search for `fuzz` finds no `fuzz/` directory, no `#![no_main]` libfuzzer harness, and no fuzz-related dev-dependency anywhere. `PLAN.md:33` also lists "Add fuzzing tests for state machine transitions" as a Critical-priority open task, consistent with this being unimplemented rather than removed.
-
-**Problem Statement:** State-machine transition logic (`delivery_contract::validate_transition`, the escrow status guards) and fee-calculation arithmetic are exactly the kind of logic fuzzing is best at catching edge cases in, and the project's own security documentation asserts this practice is in place. It is not; anyone attempting to follow the documented security-testing procedure verbatim will hit a wall immediately.
-
-**Proposed Solution:** Add a `fuzz/` directory with `cargo-fuzz`, and implement at least the `state_transitions` target `SECURITY_AUDIT.md` already names, fuzzing `delivery_contract::validate_transition` across the full `DeliveryStatus` state space to confirm it never allows an undocumented transition and never panics.
-
-**Acceptance Criteria:**
-- [ ] A `fuzz/` directory exists with at least one working fuzz target matching one of the three named in `docs/SECURITY_AUDIT.md`.
-- [ ] The fuzz target runs cleanly for a reasonable duration (e.g., 60 seconds) in CI or as a documented manual step without crashing.
-
-**Technical Notes:** `validate_transition` (`delivery_contract/lib.rs:35-53`) is a pure, `no_std`-compatible function taking two `DeliveryStatus` enum values — an ideal, low-effort first fuzz target requiring no `Env`/storage scaffolding.
-
-**Relevant Files:** `contracts/delivery_contract/lib.rs:35-53`, `docs/SECURITY_AUDIT.md:158-167`, `PLAN.md:33`
-
-**Testing Requirements:** N/A beyond the fuzz target itself; consider wiring a time-boxed fuzz run into CI as a non-blocking job.
-
-**Definition of Done:** At least one of the three fuzz targets `docs/SECURITY_AUDIT.md` documents actually exists and runs.
-
-**Suggested Labels:** `test`
-
----
-
-### 48. Two-step admin transfer (`propose_admin`/`accept_admin`) has zero test coverage
-
-**Summary:** `escrow_contract`'s entire two-step admin-transfer mechanism — explicitly called out as a security feature in ADR-005, `docs/GOVERNANCE.md`, and `PRODUCTION_READINESS.md` — has no test in `escrow_contract/test.rs` at all.
-
-**Background:** `contracts/escrow_contract/lib.rs:245-289` implements `propose_admin` and `accept_admin`. A search of `contracts/escrow_contract/test.rs` for `propose_admin`/`accept_admin` returns zero matches. `docs/ARCHITECTURE_DECISION_RECORDS.md`'s ADR-005 specifically frames this as a deliberate security design ("Prevents accidental transfers... New admin must prove access"), and `PRODUCTION_READINESS.md`'s Security section lists "[x] Two-step admin transfer mechanism" as already-verified.
-
-**Problem Statement:** This is the sole mechanism for ever changing who controls `update_platform_fee`, `set_settlement_contract`, `resolve_dispute`, and `resolve_dispute_split` on a live deployment — an untested regression here (e.g., someone accidentally allowing a third party other than the pending admin to call `accept_admin`, or breaking the `propose_admin` authorization check) could lock out or hand control of the entire escrow contract to the wrong party, and nothing in CI would catch it. It is also the only place in this contract using raw `panic!("...")` instead of the contract's own typed `EscrowError`/`FaniLabError` (`lib.rs:253, 272`), compounding the risk since a test relying on a specific panic string is more brittle than one matching a typed error.
-
-**Proposed Solution:** Add tests covering: successful propose → accept flow updates `get_admin()`; a non-admin calling `propose_admin` is rejected; a non-pending address calling `accept_admin` is rejected; `accept_admin` with no pending proposal is rejected; the old admin loses privileges immediately after a successful transfer.
-
-**Acceptance Criteria:**
-- [ ] All five scenarios above have passing tests.
-- [ ] (Optional but recommended alongside this fix) the two raw `panic!` calls at `lib.rs:253, 272` are converted to typed errors so the new tests can assert on structured error values rather than panic message strings.
-
-**Technical Notes:** This pairs naturally with a broader "typed errors everywhere" pass, but the test-coverage gap is real and valuable independent of that refactor.
-
-**Relevant Files:** `contracts/escrow_contract/lib.rs:245-289`, `contracts/escrow_contract/test.rs`
-
-**Testing Requirements:** As listed in Proposed Solution.
-
-**Definition of Done:** The two-step admin transfer path, the sole recovery mechanism for a compromised or rotating admin key, is fully covered by automated tests.
-
-**Suggested Labels:** `test`
-
----
-
-### 49. `settlement_contract` test suite only exercises `init`
-
-**Summary:** `settlement_contract`'s entire test module consists of a single test (`test_init`) that calls `init` and asserts nothing about its return value or any subsequent state — `get_driver_preference` and `execute_settlement_swap` have no tests whatsoever, including no test of the one piece of real logic the contract currently has: `execute_settlement_swap`'s `caller.require_auth()` check.
-
-**Background:** `contracts/settlement_contract/src/lib.rs:43-59` is the entire test module:
-```rust
-#[test]
-fn test_init() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let admin = Address::generate(&env);
-    let contract_id = env.register(SettlementContract, ());
-    let client = SettlementContractClient::new(&env, &contract_id);
-    client.init(&admin);
-}
-```
-No test calls `get_driver_preference` or `execute_settlement_swap` at all.
-
-**Problem Statement:** Even accounting for the fact that `settlement_contract`'s real swap logic is intentionally deferred to "Phase 3" (per its own header comment, and per GitHub #30), the contract *today* still has real, testable behavior: `get_driver_preference` always returning `None`, and `execute_settlement_swap` enforcing `caller.require_auth()` before doing nothing else. Neither is verified. If a future change to `execute_settlement_swap` accidentally weakens or removes the auth check while adding Phase 3 logic, there is no existing test that would catch the regression, because there's no baseline test establishing the auth check's current behavior.
-
-**Proposed Solution:** Add tests for `get_driver_preference` (asserts `None` today, giving a clear "this changed" signal once Phase 3 lands) and for `execute_settlement_swap`'s auth requirement (asserts an unauthorized caller is rejected).
-
-**Acceptance Criteria:**
-- [ ] A test asserts `get_driver_preference` returns `None` for an arbitrary address.
-- [ ] A test asserts `execute_settlement_swap` requires the caller's authorization (fails without it, per Soroban's `require_auth` test patterns).
-
-**Technical Notes:** This is a small, low-risk addition that also gives the "settlement is a live no-op stub already wired into the payout path" tracking issue (GitHub #30) a concrete regression net for the one piece of behavior that does exist today.
-
-**Relevant Files:** `contracts/settlement_contract/src/lib.rs:14-59`
-
-**Testing Requirements:** As described above.
-
-**Definition of Done:** Both public functions of `settlement_contract` beyond `init` have at least one test each.
-
-**Suggested Labels:** `test`
-
----
-
-### 50. `deploy-all-contracts.sh` still builds with the pre-migration `wasm32-unknown-unknown` target
-
-**Summary:** The deployment script builds contracts with `cargo build --target wasm32-unknown-unknown --release`, the exact target `SOROBAN_SDK_27_MIGRATION.md` documents as replaced by `wasm32v1-none` — every CI workflow was updated for the migration, but this script was not.
-
-**Background:** `scripts/deploy-all-contracts.sh:46` (`cargo build --target wasm32-unknown-unknown --release`) and `:59` (reads WASM files from `target/wasm32-unknown-unknown/release/`). Compare with `.github/workflows/ci.yml:24,34,37`, `release.yml:23,26`, and `deploy-testnet.yml:36,46`, all of which use `wasm32v1-none`, and `SOROBAN_SDK_27_MIGRATION.md:13-16`, which states plainly: "**Reason**: Soroban SDK 27.0.0 requires the new `wasm32v1-none` target."
-
-**Problem Statement:** Since the workspace's `Cargo.toml` pins `soroban-sdk = "27.0.0"`, running this script as-is will either fail to build against the old target, or (worse, if it happens to build) produce a `.wasm` artifact using an unsupported/incorrect target ABI for the SDK version actually in use — meaning the one script `docs/DEPLOYMENT.md` and `PRODUCTION_READINESS.md` point to as evidence of "automated deployment scripts" is presently broken for the exact SDK version the codebase runs on.
-
-**Proposed Solution:** Update both the build command and the WASM path glob in `deploy-all-contracts.sh` to `wasm32v1-none`, matching every CI workflow.
-
-**Acceptance Criteria:**
-- [ ] `deploy-all-contracts.sh` builds and locates artifacts using `wasm32v1-none`, consistent with CI.
-- [ ] A local dry run (or a CI smoke-test job) confirms the script finds and would deploy the correct WASM files.
-
-**Technical Notes:** This is a pure find/replace of `wasm32-unknown-unknown` → `wasm32v1-none` in two spots; see also issue #51 for the same bug in `Makefile`.
-
-**Relevant Files:** `scripts/deploy-all-contracts.sh:46, 59`
-
-**Testing Requirements:** Add a lightweight CI job or pre-commit check that greps deployment scripts for `wasm32-unknown-unknown` to prevent this drift from recurring after future target changes.
-
-**Definition of Done:** `deploy-all-contracts.sh` builds against the same target every CI workflow already uses.
-
-**Suggested Labels:** `bug`
+A follow-up review pass covering cross-contract architecture, admin/governance models, test-coverage gaps, CI/CD and deployment tooling, and documentation accuracy — building on the initial pass now filed as GitHub #7–#36 and this follow-up pass's own first batch, now filed as GitHub #37–#56, without duplicating any of those findings.
 
 ---
 
@@ -697,7 +117,7 @@ No test calls `get_driver_preference` or `execute_settlement_swap` at all.
 
 **Summary:** Every build target in the root `Makefile` — `build`, `build-escrow`, `build-delivery`, `build-dispute` — compiles against the stale `wasm32-unknown-unknown` target, and there are no equivalent per-contract targets for `fleet_management_contract`, `identity_reputation_contract`, or `settlement_contract`.
 
-**Background:** `Makefile:9-19` shows all four build targets using `--target wasm32-unknown-unknown`, the same stale target flagged in issue #50 but in a separate file with its own independent drift. `PRODUCTION_READINESS.md:221` cites the Makefile as evidence of "Developer Experience 10/10" ("Windows-friendly Makefile"), yet running `make build` today would target an ABI the current `soroban-sdk = "27.0.0"` dependency was migrated away from.
+**Background:** `Makefile:9-19` shows all four build targets using `--target wasm32-unknown-unknown`, the same stale target flagged in GitHub #56 but in a separate file with its own independent drift. `PRODUCTION_READINESS.md:221` cites the Makefile as evidence of "Developer Experience 10/10" ("Windows-friendly Makefile"), yet running `make build` today would target an ABI the current `soroban-sdk = "27.0.0"` dependency was migrated away from.
 
 **Problem Statement:** Contributors following the most obvious entry point (`make build` or `make test`, both documented at the top of the file) get a build that doesn't match what CI actually verifies (`wasm32v1-none`), risking "works on my machine, fails in CI" confusion, or a WASM artifact that silently doesn't match the SDK version in use. The missing `build-fleet`/`build-identity`/`build-settlement` targets are a smaller but related gap — half the contracts have no convenient single-contract build shortcut at all.
 
@@ -968,13 +388,13 @@ Scanning the full document (`docs/API.md`, 588 lines) confirms `## Escrow Contra
 
 **Background:** All three files are present in the `docs/` tree structure (implying they were intentionally scaffolded) but reading any of them returns an empty file. `docs/architecture/smart-contract-architecture.md` (a sibling file in the same `docs/architecture/` directory) is fully written, showing the directory structure is real and actively maintained — these three are the exception, not evidence the whole area is abandoned.
 
-**Problem Statement:** `event-system.md` is exactly the document that should resolve the ambiguity flagged in issue #41 (whether `shared_types::events` or ad hoc inline topics is the intended pattern) but currently offers nothing. `escrow-design.md` and `delivery-protocol.md` are presumably meant to be the deep-dive design rationale for the two most financially/logically critical contracts in the protocol, and both are blank. A new contributor or auditor navigating `docs/` by directory structure would reasonably expect these files to contain the project's most important design context, only to find nothing.
+**Problem Statement:** `event-system.md` is exactly the document that should resolve the ambiguity flagged in GitHub #47 (whether `shared_types::events` or ad hoc inline topics is the intended pattern) but currently offers nothing. `escrow-design.md` and `delivery-protocol.md` are presumably meant to be the deep-dive design rationale for the two most financially/logically critical contracts in the protocol, and both are blank. A new contributor or auditor navigating `docs/` by directory structure would reasonably expect these files to contain the project's most important design context, only to find nothing.
 
 **Proposed Solution:** Populate each file with real content, or remove them if they're confirmed placeholders with no near-term content plan (an empty file that looks intentional is worse than no file, since it implies completeness that doesn't exist).
 
 **Acceptance Criteria:**
 - [ ] Each of the three files either contains substantive content or is removed from the repository.
-- [ ] If populated, `event-system.md` explicitly resolves the shared-event-system-vs-inline-topics question raised in issue #41.
+- [ ] If populated, `event-system.md` explicitly resolves the shared-event-system-vs-inline-topics question raised in GitHub #47.
 
 **Technical Notes:** `docs/contract-design/escrow-design.md` and `docs/protocol/delivery-protocol.md` could reasonably be derived from the already-thorough inline doc comments in `escrow_contract/lib.rs` and `delivery_contract/lib.rs` (e.g., the state-machine transition table already documented in `delivery_contract/lib.rs:27-34`).
 
@@ -1036,7 +456,7 @@ fn is_admin(env: &Env, caller: &Address) -> bool {
 ```
 Both read the same `shared_types::StorageKey::Admin` key; the only functional difference is that `escrow_contract`'s version panics via `.expect()` if uninitialized while `delivery_contract`'s returns `false` — an inconsistency that is itself a small correctness smell (the two contracts disagree on what "is the caller admin" should do before `init` has ever run).
 
-**Problem Statement:** This is the exact kind of small, easy-to-miss divergence that produces subtly different behavior across contracts for what should be identical logic — if one copy is fixed or hardened in the future (e.g., issue #34's admin-model work) and the other isn't, the two contracts will silently drift further apart. `shared_types` (per ADR-003's own stated rationale, "Single source of truth... Easier maintenance") is the obvious place to centralize this.
+**Problem Statement:** This is the exact kind of small, easy-to-miss divergence that produces subtly different behavior across contracts for what should be identical logic — if one copy is fixed or hardened in the future (e.g., GitHub #40's admin-model work) and the other isn't, the two contracts will silently drift further apart. `shared_types` (per ADR-003's own stated rationale, "Single source of truth... Easier maintenance") is the obvious place to centralize this.
 
 **Proposed Solution:** Add a single `pub fn is_admin(env: &Env, caller: &Address) -> bool` helper to `shared_types`, decide on one consistent pre-init behavior (returning `false` is safer and matches `delivery_contract`'s current choice), and have both contracts call the shared version.
 
@@ -1224,13 +644,13 @@ Both read the same `shared_types::StorageKey::Admin` key; the only functional di
 
 **Problem Statement:** This is a fully-built, seemingly-intentional feature (it has its own event, its own duplicate-guard, and a query function — not a stub) with no integration anywhere and no test coverage, making its actual purpose in the protocol unclear. Either it's meant to track senders/recipients (in which case `create_delivery` should be registering/checking users) and that wiring was never completed, or it's vestigial from an earlier design and should be removed.
 
-**Proposed Solution:** Determine intent: if senders/recipients are meant to have on-chain profiles, wire `create_delivery` (or an onboarding flow) to call `register_user`, and use `UserProfile` data for something concrete (e.g., a "new user" flag for UX purposes, or a KYC-adjacent check mirroring `DriverProfile.kyc_verified`). If there's no near-term use, remove the function and its storage key as dead code, consistent with the resolution direction for issue #36.
+**Proposed Solution:** Determine intent: if senders/recipients are meant to have on-chain profiles, wire `create_delivery` (or an onboarding flow) to call `register_user`, and use `UserProfile` data for something concrete (e.g., a "new user" flag for UX purposes, or a KYC-adjacent check mirroring `DriverProfile.kyc_verified`). If there's no near-term use, remove the function and its storage key as dead code, consistent with the resolution direction for GitHub #42.
 
 **Acceptance Criteria:**
 - [ ] `register_user`/`UserProfile` either gain at least one real caller/consumer in the protocol, or are removed.
 - [ ] Whichever direction is chosen, `contracts/identity_reputation_contract/test.rs` has test coverage matching the final decision (either testing real integration, or confirming clean removal via `cargo build`/`cargo test`).
 
-**Technical Notes:** This should be resolved together with issue #35 (the duplicate `UserProfile` type), since fixing one without considering the other risks solving a type-consistency problem for a feature that gets deleted immediately after.
+**Technical Notes:** This should be resolved together with GitHub #41 (the duplicate `UserProfile` type), since fixing one without considering the other risks solving a type-consistency problem for a feature that gets deleted immediately after.
 
 **Relevant Files:** `contracts/identity_reputation_contract/lib.rs:9-12, 130-162`, `contracts/identity_reputation_contract/test.rs`
 
@@ -1254,9 +674,9 @@ Both read the same `shared_types::StorageKey::Admin` key; the only functional di
 
 **Acceptance Criteria:**
 - [ ] A query function returns the complete current admin roster.
-- [ ] The roster stays accurate through add/remove cycles, including the last-admin protection from issue #34.
+- [ ] The roster stays accurate through add/remove cycles, including the last-admin protection from GitHub #40.
 
-**Technical Notes:** Since issue #34 already proposes tracking an admin *count* to prevent removing the last admin, this issue's roster can piggyback on the same data-structure change rather than requiring a separate implementation effort.
+**Technical Notes:** Since GitHub #40 already proposes tracking an admin *count* to prevent removing the last admin, this issue's roster can piggyback on the same data-structure change rather than requiring a separate implementation effort.
 
 **Relevant Files:** `contracts/dispute_resolution_contract/lib.rs:69-92`
 
@@ -1274,7 +694,7 @@ Both read the same `shared_types::StorageKey::Admin` key; the only functional di
 
 **Background:** Confirmed by direct inspection: `escrow_contract/lib.rs:163` (`StorageKey::Admin` single address, with `propose_admin`/`accept_admin` for rotation), `delivery_contract/lib.rs:64` (same single-address pattern, no rotation mechanism at all), `fleet_management_contract/lib.rs:74` (single address, no rotation), `identity_reputation_contract/lib.rs:55,68` (single address, no rotation, and two different init entry points besides — tracked separately as GH #10). `dispute_resolution_contract/lib.rs:33-40,66` uses `DataKey::Admin(Address) -> bool`, an entirely different shape supporting an arbitrary number of admins with no owner-of-record at all.
 
-**Problem Statement:** This isn't just cosmetic inconsistency — it means the *security properties* of "who controls this contract" differ meaningfully depending which of the six contracts you're looking at: four contracts have exactly one admin with a secure two-step-or-nothing rotation story (and no rotation at all for three of the four), while the fifth has an unbounded admin set with the single-point-of-failure risk from issue #34 (last-admin removal) that the single-admin contracts structurally cannot have (since none of them support *removing* the sole admin without a replacement already being designated via `propose_admin`/`accept_admin` — except `delivery_contract` and `fleet_management_contract`, which have no rotation mechanism at all and would require a full migration to ever change admins). A protocol-wide governance model, even a simple one, would let every contract share the same well-understood security properties instead of six-going-on-two independently-reasoned-about designs.
+**Problem Statement:** This isn't just cosmetic inconsistency — it means the *security properties* of "who controls this contract" differ meaningfully depending which of the six contracts you're looking at: four contracts have exactly one admin with a secure two-step-or-nothing rotation story (and no rotation at all for three of the four), while the fifth has an unbounded admin set with the single-point-of-failure risk from GitHub #40 (last-admin removal) that the single-admin contracts structurally cannot have (since none of them support *removing* the sole admin without a replacement already being designated via `propose_admin`/`accept_admin` — except `delivery_contract` and `fleet_management_contract`, which have no rotation mechanism at all and would require a full migration to ever change admins). A protocol-wide governance model, even a simple one, would let every contract share the same well-understood security properties instead of six-going-on-two independently-reasoned-about designs.
 
 **Proposed Solution:** Design one shared governance primitive in `shared_types` (e.g., a multi-admin set with a minimum-count floor and a consistent propose/accept rotation pattern) and migrate all six contracts onto it, documented as a new ADR.
 
@@ -1283,7 +703,7 @@ Both read the same `shared_types::StorageKey::Admin` key; the only functional di
 - [ ] All six contracts use it, with consistent security properties (rotation mechanism, minimum-admin-count floor) across the board.
 - [ ] The design is documented as a new entry in `docs/ARCHITECTURE_DECISION_RECORDS.md`.
 
-**Technical Notes:** This is a large, cross-cutting refactor best sequenced after issue #34 (last-admin protection) and issue #62 (duplicated `is_admin` helper) land individually, since both are natural building blocks toward this consolidation rather than competing with it.
+**Technical Notes:** This is a large, cross-cutting refactor best sequenced after GitHub #40 (last-admin protection) and issue #62 (duplicated `is_admin` helper) land individually, since both are natural building blocks toward this consolidation rather than competing with it.
 
 **Relevant Files:** `contracts/escrow_contract/lib.rs:159-289`, `contracts/delivery_contract/lib.rs:60-76`, `contracts/fleet_management_contract/lib.rs:70-96`, `contracts/identity_reputation_contract/lib.rs:51-75`, `contracts/dispute_resolution_contract/lib.rs:33-92`
 
@@ -1396,7 +816,7 @@ as the documented state-migration mechanism. No contract in `contracts/` has a f
 
 **Problem Statement:** The upgrade guide presents a specific, concrete recommendation as though it's an established pattern in this codebase, but it is purely illustrative/aspirational — there is no working example anywhere to base a real migration on, and no tooling exists to help generate or validate one when the time comes. Given several issues in this backlog (e.g., #25's `UserProfile` consolidation, #61's governance-model unification) would themselves require exactly this kind of state migration to land safely on a live deployment, the absence of any real, tested migration pattern is a concrete blocker for shipping those fixes without a full redeploy-and-data-loss cycle.
 
-**Proposed Solution:** Implement one real, tested migration function for an actual pending change already identified in this backlog (e.g., the `UserProfile` field rename from issue #35) as a template others can follow, and document any lessons learned back into `docs/UPGRADE_GUIDE.md`.
+**Proposed Solution:** Implement one real, tested migration function for an actual pending change already identified in this backlog (e.g., the `UserProfile` field rename from GitHub #41) as a template others can follow, and document any lessons learned back into `docs/UPGRADE_GUIDE.md`.
 
 **Acceptance Criteria:**
 - [ ] At least one contract has a real, tested state-migration function following (or knowingly improving upon) the pattern `docs/UPGRADE_GUIDE.md` documents.
@@ -1477,7 +897,7 @@ as the documented state-migration mechanism. No contract in `contracts/` has a f
 
 **Problem Statement:** `fleet_management_contract::get_payout_address` exists specifically to answer "where should escrow route this driver's payout," but nothing in the test suite actually exercises that question end-to-end against a real `escrow_contract`. Every one of `fleet_management_contract/test.rs`'s existing `get_payout_address` tests (`:512-597`) tests the function in isolation, asserting only the address it *returns* — never that `escrow_contract` actually *uses* that address when paying out. This is precisely the integration surface GitHub #12 already flags as broken, and there is currently no test infrastructure in place to verify a fix for it once landed.
 
-**Proposed Solution:** Add `escrow_contract` (and `identity_reputation_contract`, needed for issue #33's fix) as dev-dependencies of `fleet_management_contract`, and write at least one true end-to-end test: register a fleet, add and activate a driver, create and release an escrow for that driver, and assert the funds actually land in the fleet's treasury (once GitHub #12 is fixed) rather than the driver's own address.
+**Proposed Solution:** Add `escrow_contract` (and `identity_reputation_contract`, needed for GitHub #39's fix) as dev-dependencies of `fleet_management_contract`, and write at least one true end-to-end test: register a fleet, add and activate a driver, create and release an escrow for that driver, and assert the funds actually land in the fleet's treasury (once GitHub #12 is fixed) rather than the driver's own address.
 
 **Acceptance Criteria:**
 - [ ] `fleet_management_contract/Cargo.toml` declares `escrow_contract` as a dev-dependency.
@@ -1514,7 +934,7 @@ as the documented state-migration mechanism. No contract in `contracts/` has a f
 
 **Testing Requirements:** As described above.
 
-**Definition of Done:** Every non-trivial public struct in `shared_types` that isn't already flagged as dead code (issue #36) has direct field-level test coverage at the `shared_types` level.
+**Definition of Done:** Every non-trivial public struct in `shared_types` that isn't already flagged as dead code (GitHub #42) has direct field-level test coverage at the `shared_types` level.
 
 **Suggested Labels:** `test`
 
@@ -1549,29 +969,29 @@ as the documented state-migration mechanism. No contract in `contracts/` has a f
 
 | Label | Count | Issues |
 |---|---|---|
-| `bug` | 12 | 31, 32, 33, 34, 35, 37, 39, 50, 51, 52, 53, 54 |
-| `security` | 7 | 32, 34, 37, 43, 63, 64, 67 |
-| `feature` | 10 | 38, 42, 44, 65, 66, 67, 68, 70, 74, 75 |
+| `bug` | 4 | 51, 52, 53, 54 |
+| `security` | 3 | 63, 64, 67 |
+| `feature` | 7 | 65, 66, 67, 68, 70, 74, 75 |
 | `enhancement` | 5 | 57, 63, 64, 69, 77 |
-| `refactor` | 6 | 36, 40, 41, 62, 71, 76 |
-| `test` | 7 | 45, 46, 47, 48, 49, 78, 79 |
+| `refactor` | 3 | 62, 71, 76 |
+| `test` | 2 | 78, 79 |
 | `documentation` | 7 | 58, 59, 60, 61, 72, 73, 80 |
-| `performance` | 3 | 43, 55, 56 |
+| `performance` | 2 | 55, 56 |
 
-(Several issues carry two labels — e.g. `bug`+`security` or `feature`+`security` — and are counted in both rows above. Issues #11–#30 were filed to GitHub in a later pass — see `Pushed to GitHub` above — and no longer appear here.)
+(Several issues carry two labels — e.g. `enhancement`+`security` or `feature`+`security` — and are counted in both rows above. Issues #11–#50 were filed to GitHub across two passes — see `Pushed to GitHub` above — and no longer appear here.)
 
 ## Summary by Contract
 
 | Contract / Area | Issues in this doc | Filed on GitHub |
 |---|---|---|
-| `escrow_contract` | 31, 32, 48, 49, 55, 62, 67, 68, 76 | #7, #11, #12, #13, #14, #15, #16, #17, #18, #25, #26, #31 |
-| `delivery_contract` | 38, 39, 62 | #19, #20, #23, #24, #27, #33 |
-| `dispute_resolution_contract` | 34, 43, 44, 45, 70, 71 | #8, #21, #22, #32 |
-| `identity_reputation_contract` | 35, 37, 38, 42, 69 | #9, #10, #24 |
-| `fleet_management_contract` | 33, 63, 64, 65, 77, 78 | #12, #26, #27, #28 |
-| `settlement_contract` | 49 | #15, #30, #35 |
-| `shared_types` | 35, 36, 40, 41, 79 | #24, #26, #33 |
-| Docs (`docs/`, root `*.md`) | 55, 58, 59, 60, 61, 72, 73, 75, 80 | — |
-| CI/CD (`.github/workflows/`) | 50, 51, 56, 57 | — |
-| Scripts/tooling (`scripts/`, `Makefile`, `.env.example`) | 50, 51, 52, 53, 54 | — |
-| Cross-cutting / process | 40, 41, 46, 47, 71, 74 | #7, #8, #19, #27, #31, #34, #36 |
+| `escrow_contract` | 55, 62, 67, 68, 76 | #7, #11, #12, #13, #14, #15, #16, #17, #18, #25, #26, #31, #37, #38, #54, #55 |
+| `delivery_contract` | 62 | #19, #20, #23, #24, #27, #33, #44, #45 |
+| `dispute_resolution_contract` | 70, 71 | #8, #21, #22, #32, #40, #49, #50, #51 |
+| `identity_reputation_contract` | 69 | #9, #10, #24, #41, #43, #44, #48 |
+| `fleet_management_contract` | 63, 64, 65, 77, 78 | #12, #26, #27, #28, #39 |
+| `settlement_contract` | — | #15, #30, #35, #55 |
+| `shared_types` | 79 | #24, #26, #33, #41, #42, #46, #47 |
+| Docs (`docs/`, root `*.md`) | 58, 59, 60, 61, 72, 73, 75, 80 | — |
+| CI/CD (`.github/workflows/`) | 51, 56, 57 | #56 |
+| Scripts/tooling (`scripts/`, `Makefile`, `.env.example`) | 51, 52, 53, 54 | #56 |
+| Cross-cutting / process | 71, 74 | #7, #8, #19, #27, #31, #34, #36, #46, #47, #52, #53 |

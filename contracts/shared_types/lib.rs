@@ -278,6 +278,7 @@ pub struct EscrowRecord {
     pub created_at: u64,
     pub disputed_by: Option<Address>,
     pub disputed_at: Option<u64>,
+    pub fleet_id: Option<u64>,
 }
 
 #[contracttype]

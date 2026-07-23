@@ -240,6 +240,7 @@ pub struct ProtocolConfig {
     pub token: Address,
     pub platform_fee_bps: u32,
     pub protocol_version: u32,
+    pub slippage_tolerance_bps: u32,
 }
 
 #[contracttype]

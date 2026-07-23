@@ -403,3 +403,31 @@ fn test_set_settlement_contract_emits_event() {
 
     assert_eq!(client.get_settlement_contract(), Some(settlement_contract.clone()));
 }
+
+#[test]
+fn test_default_slippage_tolerance_initialized() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+
+    client.init(&admin, &token, &0);
+    assert_eq!(client.get_slippage_tolerance(), 500); // Default 5%
+}
+
+#[test]
+fn test_update_slippage_tolerance() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+
+    client.init(&admin, &token, &0);
+    client.update_slippage_tolerance(&admin, &1000); // 10%
+
+    assert_eq!(client.get_slippage_tolerance(), 1000);
+}

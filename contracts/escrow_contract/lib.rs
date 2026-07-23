@@ -71,6 +71,8 @@ fn payout_driver(env: &Env, token: &Address, driver: &Address, amount: i128) {
 
         if let Some(preferred_asset) = preferred_asset {
             if preferred_asset != token.clone() {
+                let slippage_tolerance_bps: u32 = load_protocol_config(env).slippage_tolerance_bps;
+                let min_amount_out = amount.saturating_mul(10000 - slippage_tolerance_bps as i128) / 10000;
                 let _: () = env.invoke_contract(
                     &settlement_addr,
                     &Symbol::new(env, "execute_settlement_swap"),
@@ -81,7 +83,7 @@ fn payout_driver(env: &Env, token: &Address, driver: &Address, amount: i128) {
                         preferred_asset.into_val(env),
                         driver.into_val(env),
                         amount.into_val(env),
-                        0i128.into_val(env),
+                        min_amount_out.into_val(env),
                     ],
                 );
                 return;
@@ -175,6 +177,7 @@ impl EscrowContract {
                 token: token.clone(),
                 platform_fee_bps,
                 protocol_version: constants::PROTOCOL_VERSION,
+                slippage_tolerance_bps: 500, // Default 5% slippage tolerance
             },
         );
 
@@ -236,6 +239,28 @@ impl EscrowContract {
 
     pub fn get_protocol_version(env: Env) -> u32 {
         load_protocol_config(&env).protocol_version
+    }
+
+    pub fn update_slippage_tolerance(env: Env, admin: Address, new_slippage_bps: u32) {
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&StorageKey::Admin)
+            .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::NotInitialized));
+        if admin != stored_admin {
+            panic_with_error!(&env, FaniLabError::Unauthorized);
+        }
+        admin.require_auth();
+        if new_slippage_bps > 10000 {
+            panic_with_error!(&env, EscrowError::InvalidFee);
+        }
+        let mut config = load_protocol_config(&env);
+        config.slippage_tolerance_bps = new_slippage_bps;
+        save_protocol_config(&env, &config);
+    }
+
+    pub fn get_slippage_tolerance(env: Env) -> u32 {
+        load_protocol_config(&env).slippage_tolerance_bps
     }
 
     pub fn set_settlement_contract(env: Env, admin: Address, settlement_contract: Address) {

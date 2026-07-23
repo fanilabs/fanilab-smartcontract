@@ -8,6 +8,11 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 soroban-sdk = { workspace = true }
+# TODO(phase-3): Not yet imported by src/lib.rs — the init/get_driver_preference/
+# execute_settlement_swap stubs are unimplemented pending Phase 3. Reserved here
+# because the Phase 3 settlement swap logic will need shared_types::FaniLabError
+# and DeliveryId, matching how delivery_contract/escrow_contract/
+# dispute_resolution_contract/identity_reputation_contract already use it.
 shared_types = { path = "../shared_types" }
 
 [dev-dependencies]

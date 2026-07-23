@@ -700,3 +700,38 @@ fn test_init_with_minimum_dispute_time_limit() {
     let limit = dispute_client.get_dispute_time_limit();
     assert_eq!(limit, 86400);
 }
+
+// ── SPLIT RESOLUTION PRECONDITION (Issue #22) ────────────────────────────────
+
+#[test]
+#[should_panic(expected = "HostError: Error(Contract, #5)")] // InvalidState
+fn test_split_resolve_with_non_paused_escrow_fails() {
+    let (env, admin, sender, recipient, driver, delivery_id, escrow_id, dispute_client) =
+        setup_test();
+
+    let token = Address::generate(&env);
+    let escrow_record = create_mock_escrow_record(
+        sender.clone(),
+        recipient.clone(),
+        driver.clone(),
+        token,
+        shared_types::EscrowStatus::Locked, // NOT Paused
+    );
+    set_mock_escrow(&env, &escrow_id, 10, &escrow_record);
+
+    let delivery_record = create_mock_delivery_record(
+        &env,
+        did(10),
+        sender.clone(),
+        recipient.clone(),
+        DeliveryStatus::Disputed,
+        None,
+    );
+    set_mock_delivery(&env, &delivery_id, did(10), &delivery_record);
+
+    // Raise dispute to create the dispute case
+    dispute_client.raise_dispute(&sender, &did(10));
+
+    // Attempt to split-resolve with non-Paused escrow should fail loudly
+    dispute_client.resolve_dispute_split_funds(&admin, &did(10), &5000);
+}

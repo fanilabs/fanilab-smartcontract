@@ -180,6 +180,10 @@ impl DeliveryContract {
             .get(&key)
             .unwrap_or_else(|| panic!("DeliveryNotFound"));
 
+        if driver == delivery.sender || driver == delivery.recipient {
+            panic!("InvalidDriver");
+        }
+
         validate_transition(delivery.status.clone(), DeliveryStatus::Active)
             .unwrap_or_else(|_| panic!("InvalidState"));
 
@@ -241,6 +245,12 @@ impl DeliveryContract {
 
         if recipient != delivery.recipient {
             panic!("NotAuthorized");
+        }
+
+        if let Some(driver) = &delivery.driver {
+            if driver == &recipient || driver == &delivery.sender {
+                panic!("InvalidDelivery");
+            }
         }
 
         validate_transition(delivery.status.clone(), DeliveryStatus::Delivered)

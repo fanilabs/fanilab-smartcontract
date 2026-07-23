@@ -36,6 +36,19 @@ fn is_admin(env: &Env, caller: &Address) -> bool {
     *caller == stored_admin
 }
 
+fn is_protocol_paused(env: &Env) -> bool {
+    env.storage()
+        .instance()
+        .get(&DataKey::Paused)
+        .unwrap_or(false)
+}
+
+fn require_not_paused(env: &Env) {
+    if is_protocol_paused(env) {
+        panic_with_error!(env, FaniLabError::ProtocolPaused);
+    }
+}
+
 fn load_protocol_config(env: &Env) -> ProtocolConfig {
     env.storage()
         .instance()
@@ -122,6 +135,7 @@ fn load_escrow(env: &Env, delivery_id: u64) -> EscrowRecord {
 enum DataKey {
     PendingAdmin,
     SettlementContract,
+    Paused,
 }
 
 #[contracterror]
@@ -288,6 +302,20 @@ impl EscrowContract {
         );
     }
 
+    pub fn set_paused(env: Env, admin: Address, paused: bool) {
+        admin.require_auth();
+        require_admin(&env, &admin);
+        env.storage().instance().set(&DataKey::Paused, &paused);
+        env.events().publish(
+            (Symbol::new(&env, "ProtocolPauseStatusChanged"),),
+            (admin, paused),
+        );
+    }
+
+    pub fn is_paused(env: Env) -> bool {
+        is_protocol_paused(&env)
+    }
+
     // ── Escrow lifecycle ──────────────────────────────────────────────────────
 
     pub fn create_escrow(
@@ -331,6 +359,7 @@ impl EscrowContract {
 
     pub fn release_escrow(env: Env, caller: Address, delivery_id: u64) {
         caller.require_auth();
+        require_not_paused(&env);
         let mut record = load_escrow(&env, delivery_id);
         let admin_authorized = is_admin(&env, &caller);
         let recipient_authorized = caller == record.recipient;
@@ -380,6 +409,7 @@ impl EscrowContract {
 
     pub fn refund_escrow(env: Env, caller: Address, delivery_id: u64) {
         caller.require_auth();
+        require_not_paused(&env);
         let mut record = load_escrow(&env, delivery_id);
         let admin_authorized = is_admin(&env, &caller);
         let sender_authorized = caller == record.sender;
@@ -430,6 +460,7 @@ impl EscrowContract {
 
     pub fn resolve_dispute(env: Env, caller: Address, delivery_id: u64, release_to_driver: bool) {
         caller.require_auth();
+        require_not_paused(&env);
         require_admin(&env, &caller);
         let mut record = load_escrow(&env, delivery_id);
         if record.status != EscrowStatus::Paused {
@@ -485,6 +516,7 @@ impl EscrowContract {
         sender_share_bps: u32,
     ) {
         caller.require_auth();
+        require_not_paused(&env);
         require_admin(&env, &caller);
         if sender_share_bps > 10000 {
             panic_with_error!(&env, EscrowError::InvalidFee);

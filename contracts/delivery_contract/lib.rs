@@ -15,6 +15,7 @@ use soroban_sdk::{
 pub enum DataKey {
     DeliveryCounter,
     EscrowContract,
+    IdentityReputationContract,
 }
 
 #[contracterror]
@@ -73,6 +74,31 @@ impl DeliveryContract {
             (Symbol::new(&env, "DeliveryContractInitialized"),),
             (admin, escrow_contract),
         );
+    }
+
+    pub fn set_identity_reputation_contract(
+        env: Env,
+        admin: Address,
+        identity_contract: Address,
+    ) {
+        admin.require_auth();
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&StorageKey::Admin)
+            .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::NotInitialized));
+        if admin != stored_admin {
+            panic_with_error!(&env, FaniLabError::Unauthorized);
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::IdentityReputationContract, &identity_contract);
+    }
+
+    pub fn get_identity_reputation_contract(env: Env) -> Option<Address> {
+        env.storage()
+            .instance()
+            .get(&DataKey::IdentityReputationContract)
     }
 
     pub fn create_delivery(
@@ -270,26 +296,21 @@ impl DeliveryContract {
         env.storage().persistent().extend_ttl(&key, 518400, 518400);
 
         if let Some(driver_addr) = &delivery.driver {
-            let driver_key = StorageKey::DriverProfile(driver_addr.clone());
-            let mut profile: DriverProfile = env
-                .storage()
-                .persistent()
-                .get(&driver_key)
-                .unwrap_or_else(|| DriverProfile {
-                    address: driver_addr.clone(),
-                    deliveries_completed: 0,
-                    reputation_score: 0,
-                    registered_at: env.ledger().timestamp(),
-                    kyc_verified: false,
-                });
-
-            profile.deliveries_completed += 1;
-            profile.reputation_score += 1;
-
-            env.storage().persistent().set(&driver_key, &profile);
-            env.storage()
-                .persistent()
-                .extend_ttl(&driver_key, 518400, 518400);
+            if let Some(identity_contract) = Self::get_identity_reputation_contract(env.clone()) {
+                let cargo_desc = &delivery.metadata.cargo_description;
+                let _: () = env.invoke_contract(
+                    &identity_contract,
+                    &Symbol::new(&env, "increase_reputation"),
+                    soroban_sdk::vec![
+                        &env,
+                        env.current_contract_address().into_val(&env),
+                        driver_addr.into_val(&env),
+                        u64::from(delivery_id).into_val(&env),
+                        cargo_desc.weight_grams.into_val(&env),
+                        cargo_desc.fragile.into_val(&env),
+                    ],
+                );
+            }
         }
 
         env.events().publish(

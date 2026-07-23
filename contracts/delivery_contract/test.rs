@@ -38,6 +38,7 @@ pub struct MockReputationContract;
 impl MockReputationContract {
     pub fn increase_reputation(
         _env: Env,
+        _caller: Address,
         driver: Address,
         _delivery_id: u64,
         _weight_grams: u32,
@@ -48,7 +49,7 @@ impl MockReputationContract {
             .set(&Symbol::new(&_env, "rep_inc"), &driver);
     }
 
-    pub fn decrease_reputation(_env: Env, driver: Address, _points: u32) {
+    pub fn decrease_reputation(_env: Env, _caller: Address, driver: Address, _points: u32) {
         _env.storage()
             .temporary()
             .set(&Symbol::new(&_env, "rep_dec"), &driver);
@@ -76,6 +77,7 @@ fn setup_full(
     let driver = Address::generate(env);
     let recipient = Address::generate(env);
     client.init(&shipper, &escrow_id);
+    client.set_identity_reputation_contract(&shipper, &reputation_id);
     (client, shipper, driver, recipient, escrow_id, reputation_id)
 }
 
@@ -400,4 +402,30 @@ fn test_create_delivery_missing_fields() {
 
     let delivery_id = client.create_delivery(&shipper, &recipient, &metadata);
     assert_eq!(delivery_id, 1);
+}
+
+#[test]
+fn test_confirm_delivery_calls_increase_reputation() {
+    let env = Env::default();
+    let (client, shipper, driver, recipient, _, reputation_id) = setup_full(&env);
+    let metadata = get_test_metadata(&env, 1);
+    let delivery_id = client.create_delivery(&shipper, &recipient, &metadata);
+    client.assign_driver(&driver, &delivery_id, &driver);
+    client.mark_in_transit(&driver, &delivery_id);
+
+    client.confirm_delivery(&recipient, &delivery_id);
+
+    let delivery = client.get_delivery(&delivery_id);
+    assert_eq!(delivery.status, DeliveryStatus::Delivered);
+
+    let stored_driver: Address = env.as_contract(&reputation_id, || {
+        env.storage()
+            .temporary()
+            .get(&Symbol::new(&env, "rep_inc"))
+            .unwrap_or(driver.clone())
+    });
+    assert_eq!(
+        stored_driver, driver,
+        "Expected reputation increase to be called for driver on delivery confirmation"
+    );
 }

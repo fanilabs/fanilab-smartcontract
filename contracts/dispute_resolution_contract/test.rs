@@ -72,7 +72,7 @@ impl MockEscrowContract {
         }
     }
 
-    pub fn freeze_funds(env: Env, delivery_id: u64) {
+    pub fn freeze_funds(env: Env, _caller: Address, delivery_id: u64) {
         if env.storage().instance().has(&delivery_id) {
             let mut record: shared_types::EscrowRecord =
                 env.storage().instance().get(&delivery_id).unwrap();
@@ -644,4 +644,56 @@ fn test_unauthorized_resolve_pay_driver_fails() {
 
     // Attacker (sender) tries to resolve dispute pay driver
     dispute_client.resolve_dispute_pay_driver(&sender, &did(9));
+}
+
+#[test]
+fn test_post_delivery_dispute_can_be_raised_and_resolved() {
+    let (env, admin, sender, recipient, driver, delivery_id, escrow_id, dispute_client) =
+        setup_test();
+
+    // Setup mock delivery as Delivered (post-delivery state)
+    let delivered_at = env.ledger().timestamp();
+    let mut delivery_record = create_mock_delivery_record(
+        &env,
+        did(10),
+        sender.clone(),
+        recipient.clone(),
+        DeliveryStatus::Delivered,
+        Some(delivered_at),
+    );
+    delivery_record.driver = Some(driver.clone());
+    set_mock_delivery(&env, &delivery_id, did(10), &delivery_record);
+
+    // Setup mock escrow as Holdback (post-delivery, before release)
+    let token = Address::generate(&env);
+    let escrow_record = create_mock_escrow_record(
+        sender.clone(),
+        recipient.clone(),
+        driver.clone(),
+        token.clone(),
+        shared_types::EscrowStatus::Holdback,
+    );
+    set_mock_escrow(&env, &escrow_id, 10, &escrow_record);
+
+    // Raise dispute on delivered delivery within time limit
+    dispute_client.raise_dispute(&sender, &did(10));
+
+    // Verify dispute is created
+    let case = dispute_client.get_dispute(&did(10));
+    assert_eq!(case.status, DisputeStatus::Open);
+
+    // Verify escrow is paused (frozen for dispute)
+    let escrow = MockEscrowContractClient::new(&env, &escrow_id).get_escrow(&10);
+    assert_eq!(escrow.status, shared_types::EscrowStatus::Paused);
+
+    // Resolve dispute refunding sender
+    dispute_client.resolve_dispute_refund_sender(&admin, &did(10));
+
+    // Verify dispute is resolved
+    let case = dispute_client.get_dispute(&did(10));
+    assert_eq!(case.status, DisputeStatus::ResolvedRefund);
+
+    // Verify escrow is refunded
+    let escrow = MockEscrowContractClient::new(&env, &escrow_id).get_escrow(&10);
+    assert_eq!(escrow.status, shared_types::EscrowStatus::Refunded);
 }

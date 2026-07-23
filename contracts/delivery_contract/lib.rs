@@ -281,7 +281,7 @@ impl DeliveryContract {
         use soroban_sdk::IntoVal;
         let _: () = env.invoke_contract(
             &escrow_address,
-            &soroban_sdk::Symbol::new(&env, "release_escrow"),
+            &soroban_sdk::Symbol::new(&env, "mark_holdback_escrow"),
             soroban_sdk::vec![
                 &env,
                 recipient.into_val(&env),

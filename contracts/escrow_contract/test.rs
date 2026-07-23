@@ -387,3 +387,19 @@ fn test_create_escrow_negative_amount_rejected() {
         _ => panic!("Expected EscrowError::InvalidAmount"),
     }
 }
+
+#[test]
+fn test_set_settlement_contract_emits_event() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+    let settlement_contract = Address::generate(&env);
+
+    client.init(&admin, &token, &0);
+    client.set_settlement_contract(&admin, &settlement_contract);
+
+    assert_eq!(client.get_settlement_contract(), Some(settlement_contract.clone()));
+}

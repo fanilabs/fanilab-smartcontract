@@ -152,6 +152,13 @@ pub struct ProtocolInitialized {
     pub protocol_version: u32,
 }
 
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SettlementContractUpdated {
+    pub old_address: Option<Address>,
+    pub new_address: Address,
+}
+
 #[contract]
 pub struct EscrowContract;
 
@@ -234,9 +241,17 @@ impl EscrowContract {
     pub fn set_settlement_contract(env: Env, admin: Address, settlement_contract: Address) {
         admin.require_auth();
         require_admin(&env, &admin);
+        let old_address = get_settlement_contract(&env);
         env.storage()
             .instance()
             .set(&DataKey::SettlementContract, &settlement_contract);
+        env.events().publish(
+            (Symbol::new(&env, "SettlementContractUpdated"),),
+            SettlementContractUpdated {
+                old_address,
+                new_address: settlement_contract,
+            },
+        );
     }
 
     pub fn get_settlement_contract(env: Env) -> Option<Address> {

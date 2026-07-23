@@ -222,6 +222,7 @@ pub enum EscrowState {
     Released,
     Refunded,
     Paused,
+    Split,
 }
 
 pub type EscrowStatus = EscrowState;
@@ -318,6 +319,7 @@ mod test {
         assert_eq!(EscrowState::Released, EscrowState::Released);
         assert_eq!(EscrowState::Refunded, EscrowState::Refunded);
         assert_eq!(EscrowState::Paused, EscrowState::Paused);
+        assert_eq!(EscrowState::Split, EscrowState::Split);
     }
 
     #[test]

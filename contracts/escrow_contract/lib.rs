@@ -521,7 +521,7 @@ impl EscrowContract {
             );
         }
 
-        record.status = EscrowStatus::Refunded;
+        record.status = EscrowStatus::Split;
         save_escrow(&env, delivery_id, &record);
 
         env.events().publish(

@@ -122,6 +122,7 @@ fn load_escrow(env: &Env, delivery_id: u64) -> EscrowRecord {
 enum DataKey {
     PendingAdmin,
     SettlementContract,
+    DisputeResolutionContract,
 }
 
 #[contracterror]
@@ -240,6 +241,24 @@ impl EscrowContract {
 
     pub fn get_settlement_contract(env: Env) -> Option<Address> {
         get_settlement_contract(&env)
+    }
+
+    pub fn set_dispute_resolution_contract(
+        env: Env,
+        admin: Address,
+        dispute_contract: Address,
+    ) {
+        admin.require_auth();
+        require_admin(&env, &admin);
+        env.storage()
+            .instance()
+            .set(&DataKey::DisputeResolutionContract, &dispute_contract);
+    }
+
+    pub fn get_dispute_resolution_contract(env: Env) -> Option<Address> {
+        env.storage()
+            .instance()
+            .get(&DataKey::DisputeResolutionContract)
     }
 
     pub fn propose_admin(env: Env, current_admin: Address, new_admin: Address) {
@@ -533,12 +552,25 @@ impl EscrowContract {
         load_escrow(&env, delivery_id)
     }
 
-    pub fn freeze_funds(env: Env, delivery_id: u64) {
+    pub fn freeze_funds(env: Env, caller: Address, delivery_id: u64) {
+        caller.require_auth();
+        let dispute_contract = env
+            .storage()
+            .instance()
+            .get(&DataKey::DisputeResolutionContract)
+            .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::NotInitialized));
+        if caller != dispute_contract {
+            panic_with_error!(&env, FaniLabError::Unauthorized);
+        }
         let mut record = load_escrow(&env, delivery_id);
         if record.status == EscrowStatus::Locked {
             record.status = EscrowStatus::Paused;
             record.disputed_at = Some(env.ledger().timestamp());
             save_escrow(&env, delivery_id, &record);
+            env.events().publish(
+                (Symbol::new(&env, "funds_frozen"), delivery_id),
+                (caller, env.ledger().timestamp()),
+            );
         }
     }
 }

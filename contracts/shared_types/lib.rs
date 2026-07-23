@@ -222,6 +222,7 @@ pub enum EscrowState {
     Released,
     Refunded,
     Paused,
+    Split,
 }
 
 pub type EscrowStatus = EscrowState;
@@ -277,6 +278,7 @@ pub struct EscrowRecord {
     pub created_at: u64,
     pub disputed_by: Option<Address>,
     pub disputed_at: Option<u64>,
+    pub fleet_id: Option<u64>,
 }
 
 #[contracttype]
@@ -318,6 +320,7 @@ mod test {
         assert_eq!(EscrowState::Released, EscrowState::Released);
         assert_eq!(EscrowState::Refunded, EscrowState::Refunded);
         assert_eq!(EscrowState::Paused, EscrowState::Paused);
+        assert_eq!(EscrowState::Split, EscrowState::Split);
     }
 
     #[test]

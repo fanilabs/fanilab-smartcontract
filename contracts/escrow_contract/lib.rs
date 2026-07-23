@@ -133,6 +133,7 @@ pub enum EscrowError {
     InsufficientFunds = 3,
     DuplicateDelivery = 4,
     InvalidFee = 5,
+    InvalidAmount = 6,
 }
 
 #[contracttype]
@@ -300,6 +301,9 @@ impl EscrowContract {
         amount: i128,
     ) {
         sender.require_auth();
+        if amount <= 0 {
+            panic_with_error!(&env, EscrowError::InvalidAmount);
+        }
         if env.storage().persistent().has(&escrow_key(delivery_id)) {
             panic_with_error!(&env, EscrowError::DuplicateDelivery);
         }

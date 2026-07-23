@@ -349,6 +349,43 @@ fn test_insufficient_funds_guard_on_release() {
 }
 
 #[test]
+fn test_resolve_dispute_refund_with_insufficient_funds() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let driver = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+
+    client.init(&admin, &token, &0);
+    mint(&env, &token, &sender, 200);
+    client.create_escrow(&sender, &recipient, &driver, &11u64, &token, &200);
+
+    client.raise_dispute(&sender, &11u64);
+
+    env.as_contract(&contract_id, || {
+        let mut record: EscrowRecord = env
+            .storage()
+            .persistent()
+            .get(&shared_types::escrow_key(11u64))
+            .unwrap();
+        record.amount = 500;
+        env.storage()
+            .persistent()
+            .set(&shared_types::escrow_key(11u64), &record);
+    });
+
+    let result = client.try_resolve_dispute(&admin, &11u64, &false);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, EscrowError::InsufficientFunds.into()),
+        _ => panic!("Expected EscrowError::InsufficientFunds"),
+    }
+}
+
+#[test]
 fn test_get_escrow_not_found() {
     let (env, contract_id) = setup_env();
     let client = EscrowContractClient::new(&env, &contract_id);

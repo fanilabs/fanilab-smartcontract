@@ -466,6 +466,11 @@ impl EscrowContract {
 
             record.status = EscrowStatus::Released;
         } else {
+            let contract_balance =
+                token::Client::new(&env, &record.token).balance(&env.current_contract_address());
+            if contract_balance < record.amount {
+                panic_with_error!(&env, EscrowError::InsufficientFunds);
+            }
             token::Client::new(&env, &record.token).transfer(
                 &env.current_contract_address(),
                 &record.sender,

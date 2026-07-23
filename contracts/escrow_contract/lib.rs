@@ -14,6 +14,7 @@ pub mod constants {
     pub const ESCROW_TTL_THRESHOLD: u32 = 518400;
     pub const ESCROW_TTL_EXTEND_TO: u32 = 518400;
     pub const PROTOCOL_VERSION: u32 = 1;
+    pub const MAX_PLATFORM_FEE_BPS: u32 = 1000;
 }
 
 fn require_admin(env: &Env, caller: &Address) {
@@ -160,6 +161,9 @@ impl EscrowContract {
         if env.storage().instance().has(&StorageKey::Admin) {
             panic_with_error!(&env, FaniLabError::AlreadyInitialized);
         }
+        if platform_fee_bps > constants::MAX_PLATFORM_FEE_BPS {
+            panic_with_error!(&env, EscrowError::InvalidFee);
+        }
         env.storage().instance().set(&StorageKey::Admin, &admin);
         save_protocol_config(
             &env,
@@ -191,7 +195,7 @@ impl EscrowContract {
             panic_with_error!(&env, FaniLabError::Unauthorized);
         }
         admin.require_auth();
-        if new_fee_bps > 1000 {
+        if new_fee_bps > constants::MAX_PLATFORM_FEE_BPS {
             panic_with_error!(&env, EscrowError::InvalidFee);
         }
         let mut config = load_protocol_config(&env);

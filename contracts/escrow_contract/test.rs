@@ -72,6 +72,22 @@ fn test_update_platform_fee_invalid_value() {
 }
 
 #[test]
+fn test_init_with_invalid_platform_fee_panics() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+    let result = client.try_init(&admin, &token, &10000);
+
+    match result {
+        Err(Ok(err)) => assert_eq!(err, EscrowError::InvalidFee.into()),
+        _ => panic!("Expected EscrowError::InvalidFee"),
+    }
+}
+
+#[test]
 fn test_create_escrow_locks_funds_and_persists_record() {
     let (env, contract_id) = setup_env();
     let client = EscrowContractClient::new(&env, &contract_id);

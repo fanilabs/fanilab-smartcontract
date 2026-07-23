@@ -8,6 +8,7 @@ use soroban_sdk::{
 };
 
 const DISPUTE_REPUTATION_PENALTY: u32 = 10;
+const MIN_DISPUTE_TIME_LIMIT: u64 = 86400; // 1 day in seconds
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -53,6 +54,9 @@ impl DisputeResolutionContract {
     ) {
         if env.storage().instance().has(&DataKey::DeliveryContract) {
             panic_with_error!(&env, FaniLabError::AlreadyInitialized);
+        }
+        if dispute_time_limit < MIN_DISPUTE_TIME_LIMIT {
+            panic_with_error!(&env, FaniLabError::InvalidState);
         }
         env.storage()
             .instance()

@@ -645,3 +645,58 @@ fn test_unauthorized_resolve_pay_driver_fails() {
     // Attacker (sender) tries to resolve dispute pay driver
     dispute_client.resolve_dispute_pay_driver(&sender, &did(9));
 }
+
+// ── DISPUTE TIME LIMIT VALIDATION (Issue #21) ────────────────────────────────
+
+#[test]
+#[should_panic(expected = "HostError: Error(Contract, #5)")] // InvalidState
+fn test_init_with_zero_dispute_time_limit() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let delivery_id = env.register(MockDeliveryContract, ());
+    let escrow_id = env.register(MockEscrowContract, ());
+    let dispute_id = env.register(DisputeResolutionContract, ());
+
+    let dispute_client = DisputeResolutionContractClient::new(&env, &dispute_id);
+
+    // Attempt to init with dispute_time_limit = 0 (should fail)
+    dispute_client.init(&admin, &delivery_id, &escrow_id, &0);
+}
+
+#[test]
+#[should_panic(expected = "HostError: Error(Contract, #5)")] // InvalidState
+fn test_init_with_below_minimum_dispute_time_limit() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let delivery_id = env.register(MockDeliveryContract, ());
+    let escrow_id = env.register(MockEscrowContract, ());
+    let dispute_id = env.register(DisputeResolutionContract, ());
+
+    let dispute_client = DisputeResolutionContractClient::new(&env, &dispute_id);
+
+    // Attempt to init with dispute_time_limit below minimum (should fail)
+    dispute_client.init(&admin, &delivery_id, &escrow_id, &1000);
+}
+
+#[test]
+fn test_init_with_minimum_dispute_time_limit() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let delivery_id = env.register(MockDeliveryContract, ());
+    let escrow_id = env.register(MockEscrowContract, ());
+    let dispute_id = env.register(DisputeResolutionContract, ());
+
+    let dispute_client = DisputeResolutionContractClient::new(&env, &dispute_id);
+
+    // Init with minimum dispute_time_limit should succeed
+    dispute_client.init(&admin, &delivery_id, &escrow_id, &86400);
+
+    let limit = dispute_client.get_dispute_time_limit();
+    assert_eq!(limit, 86400);
+}

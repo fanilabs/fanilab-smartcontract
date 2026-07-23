@@ -16,7 +16,7 @@ fn setup() -> (
     let admin = Address::generate(&env);
     let delivery_contract = Address::generate(&env);
     let dispute_contract = Address::generate(&env);
-    client.initialize(&admin, &delivery_contract, &dispute_contract);
+    client.init(&admin, &delivery_contract, &dispute_contract);
     (env, admin, client, delivery_contract, dispute_contract)
 }
 
@@ -215,4 +215,24 @@ fn test_reputation_deduction_sequence() {
 
     let profile = client.get_driver_profile(&driver);
     assert_eq!(profile.reputation_score, 55);
+}
+
+#[test]
+fn test_init_already_initialized_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(IdentityReputationContract, ());
+    let client = IdentityReputationContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let delivery_contract = Address::generate(&env);
+    let dispute_contract = Address::generate(&env);
+
+    client.init(&admin, &delivery_contract, &dispute_contract);
+
+    let admin2 = Address::generate(&env);
+    let result = client.try_init(&admin2, &delivery_contract, &dispute_contract);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::AlreadyInitialized.into()),
+        _ => panic!("Expected AlreadyInitialized error"),
+    }
 }

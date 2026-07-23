@@ -431,3 +431,111 @@ fn test_update_slippage_tolerance() {
 
     assert_eq!(client.get_slippage_tolerance(), 1000);
 }
+
+#[test]
+fn test_escrow_expires_after_ttl() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let driver = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+
+    client.init(&admin, &token, &0);
+    mint(&env, &token, &sender, 1000);
+
+    client.create_escrow(&sender, &recipient, &driver, &200u64, &token, &1000);
+    let record = client.get_escrow(&200u64);
+
+    assert!(record.expires_at.is_some());
+    let created_at = record.created_at;
+    let expires_at = record.expires_at.unwrap();
+    assert_eq!(expires_at, created_at + 30 * 24 * 60 * 60);
+}
+
+#[test]
+fn test_reclaim_expired_escrow_refunds_sender() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let driver = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+
+    client.init(&admin, &token, &0);
+    mint(&env, &token, &sender, 1000);
+
+    client.create_escrow(&sender, &recipient, &driver, &201u64, &token, &1000);
+
+    // Verify funds are in contract
+    assert_eq!(balance(&env, &token, &contract_id), 1000);
+    assert_eq!(balance(&env, &token, &sender), 0);
+
+    // Jump time past expiry
+    env.ledger().set_timestamp(env.ledger().timestamp() + 31 * 24 * 60 * 60);
+
+    // Reclaim the expired escrow
+    client.reclaim_expired_escrow(&201u64);
+
+    // Verify funds are returned to sender
+    assert_eq!(balance(&env, &token, &sender), 1000);
+    assert_eq!(balance(&env, &token, &contract_id), 0);
+    assert_eq!(client.get_escrow(&201u64).status, EscrowStatus::Refunded);
+}
+
+#[test]
+fn test_cannot_reclaim_non_expired_escrow() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let driver = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+
+    client.init(&admin, &token, &0);
+    mint(&env, &token, &sender, 1000);
+
+    client.create_escrow(&sender, &recipient, &driver, &202u64, &token, &1000);
+
+    let result = client.try_reclaim_expired_escrow(&202u64);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, EscrowError::InvalidState.into()),
+        _ => panic!("Expected EscrowError::InvalidState"),
+    }
+}
+
+#[test]
+fn test_cannot_reclaim_released_escrow() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let driver = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+
+    client.init(&admin, &token, &0);
+    mint(&env, &token, &sender, 1000);
+
+    client.create_escrow(&sender, &recipient, &driver, &203u64, &token, &1000);
+    client.release_escrow(&recipient, &203u64);
+
+    env.ledger().set_timestamp(env.ledger().timestamp() + 31 * 24 * 60 * 60);
+
+    let result = client.try_reclaim_expired_escrow(&203u64);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, EscrowError::InvalidState.into()),
+        _ => panic!("Expected EscrowError::InvalidState"),
+    }
+}

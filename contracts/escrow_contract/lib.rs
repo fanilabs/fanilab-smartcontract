@@ -14,6 +14,7 @@ pub mod constants {
     pub const ESCROW_TTL_THRESHOLD: u32 = 518400;
     pub const ESCROW_TTL_EXTEND_TO: u32 = 518400;
     pub const PROTOCOL_VERSION: u32 = 1;
+    pub const DEFAULT_ESCROW_EXPIRY_SECONDS: u64 = 30 * 24 * 60 * 60; // 30 days
 }
 
 fn require_admin(env: &Env, caller: &Address) {
@@ -352,6 +353,8 @@ impl EscrowContract {
             &env.current_contract_address(),
             &amount,
         );
+        let created_at = env.ledger().timestamp();
+        let expires_at = created_at.saturating_add(constants::DEFAULT_ESCROW_EXPIRY_SECONDS);
         save_escrow(
             &env,
             delivery_id,
@@ -362,7 +365,8 @@ impl EscrowContract {
                 token,
                 amount,
                 status: EscrowStatus::Locked,
-                created_at: env.ledger().timestamp(),
+                created_at,
+                expires_at: Some(expires_at),
                 disputed_by: None,
                 disputed_at: None,
             },
@@ -584,6 +588,37 @@ impl EscrowContract {
             record.disputed_at = Some(env.ledger().timestamp());
             save_escrow(&env, delivery_id, &record);
         }
+    }
+
+    pub fn reclaim_expired_escrow(env: Env, delivery_id: u64) {
+        let mut record = load_escrow(&env, delivery_id);
+        if record.status != EscrowStatus::Locked {
+            panic_with_error!(&env, EscrowError::InvalidState);
+        }
+        if let Some(expires_at) = record.expires_at {
+            let current_timestamp = env.ledger().timestamp();
+            if current_timestamp <= expires_at {
+                panic_with_error!(&env, EscrowError::InvalidState);
+            }
+        } else {
+            panic_with_error!(&env, EscrowError::InvalidState);
+        }
+        let contract_balance =
+            token::Client::new(&env, &record.token).balance(&env.current_contract_address());
+        if contract_balance < record.amount {
+            panic_with_error!(&env, EscrowError::InsufficientFunds);
+        }
+        token::Client::new(&env, &record.token).transfer(
+            &env.current_contract_address(),
+            &record.sender,
+            &record.amount,
+        );
+        record.status = EscrowStatus::Refunded;
+        save_escrow(&env, delivery_id, &record);
+        env.events().publish(
+            (events::escrow_refunded(&env), delivery_id),
+            (record.sender, record.amount),
+        );
     }
 }
 

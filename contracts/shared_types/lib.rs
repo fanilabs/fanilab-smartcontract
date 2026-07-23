@@ -276,6 +276,7 @@ pub struct EscrowRecord {
     pub amount: i128,
     pub status: EscrowState,
     pub created_at: u64,
+    pub expires_at: Option<u64>,
     pub disputed_by: Option<Address>,
     pub disputed_at: Option<u64>,
 }

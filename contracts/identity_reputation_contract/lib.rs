@@ -48,14 +48,7 @@ pub struct IdentityReputationContract;
 
 #[contractimpl]
 impl IdentityReputationContract {
-    pub fn init(env: Env, admin: Address) {
-        if env.storage().instance().has(&DataKey::Admin) {
-            panic_with_error!(&env, FaniLabError::AlreadyInitialized);
-        }
-        env.storage().instance().set(&DataKey::Admin, &admin);
-    }
-
-    pub fn initialize(
+    pub fn init(
         env: Env,
         admin: Address,
         delivery_contract: Address,

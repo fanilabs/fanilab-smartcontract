@@ -219,6 +219,7 @@ pub struct DeliveryRecord {
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 pub enum EscrowState {
     Locked,
+    Holdback,
     Released,
     Refunded,
     Paused,

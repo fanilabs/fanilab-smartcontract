@@ -175,7 +175,11 @@ impl DisputeResolutionContract {
         let _: () = env.invoke_contract(
             &escrow_addr,
             &Symbol::new(&env, "freeze_funds"),
-            soroban_sdk::vec![&env, u64::from(delivery_id).into_val(&env)],
+            soroban_sdk::vec![
+                &env,
+                env.current_contract_address().into_val(&env),
+                u64::from(delivery_id).into_val(&env),
+            ],
         );
 
         let dispute_key = DataKey::Dispute(delivery_id);

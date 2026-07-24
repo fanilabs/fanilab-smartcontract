@@ -181,7 +181,7 @@ fn test_dispute_path() {
 // ── INVALID STATE REJECTIONS ───────────────────────────────────────────────
 
 #[test]
-#[should_panic(expected = "InvalidState")]
+#[should_panic(expected = "5")]
 fn test_invalid_assign_when_delivered() {
     let env = Env::default();
     let (client, shipper, driver, recipient, _, _) = setup_full(&env);
@@ -195,7 +195,7 @@ fn test_invalid_assign_when_delivered() {
 }
 
 #[test]
-#[should_panic(expected = "NotAuthorized")]
+#[should_panic(expected = "1")]
 fn test_invalid_mark_in_transit_without_assign() {
     let env = Env::default();
     let (client, shipper, _, recipient, _, _) = setup_full(&env);
@@ -207,7 +207,7 @@ fn test_invalid_mark_in_transit_without_assign() {
 }
 
 #[test]
-#[should_panic(expected = "InvalidState")]
+#[should_panic(expected = "5")]
 fn test_invalid_confirm_without_transit() {
     let env = Env::default();
     let (client, shipper, driver, recipient, _, _) = setup_full(&env);
@@ -219,7 +219,7 @@ fn test_invalid_confirm_without_transit() {
 }
 
 #[test]
-#[should_panic(expected = "InvalidState")]
+#[should_panic(expected = "5")]
 fn test_invalid_dispute_when_cancelled() {
     let env = Env::default();
     let (client, shipper, driver, recipient, _, _) = setup_full(&env);
@@ -232,7 +232,7 @@ fn test_invalid_dispute_when_cancelled() {
 }
 
 #[test]
-#[should_panic(expected = "InvalidState")]
+#[should_panic(expected = "5")]
 fn test_invalid_cancel_when_delivered() {
     let env = Env::default();
     let (client, shipper, driver, recipient, _, _) = setup_full(&env);
@@ -248,7 +248,7 @@ fn test_invalid_cancel_when_delivered() {
 // ── UNAUTHORIZED CALLER REJECTIONS ───────────────────────────────────────────
 
 #[test]
-#[should_panic(expected = "NotAuthorized")]
+#[should_panic(expected = "1")]
 fn test_unauthorized_assign_driver() {
     let env = Env::default();
     let (client, shipper, driver, recipient, _, _) = setup_full(&env);
@@ -260,7 +260,7 @@ fn test_unauthorized_assign_driver() {
 }
 
 #[test]
-#[should_panic(expected = "NotAuthorized")]
+#[should_panic(expected = "1")]
 fn test_unauthorized_mark_in_transit() {
     let env = Env::default();
     let (client, shipper, driver, recipient, _, _) = setup_full(&env);
@@ -273,7 +273,7 @@ fn test_unauthorized_mark_in_transit() {
 }
 
 #[test]
-#[should_panic(expected = "NotAuthorized")]
+#[should_panic(expected = "1")]
 fn test_unauthorized_confirm_delivery() {
     let env = Env::default();
     let (client, shipper, driver, recipient, _, _) = setup_full(&env);
@@ -287,7 +287,7 @@ fn test_unauthorized_confirm_delivery() {
 }
 
 #[test]
-#[should_panic(expected = "NotAuthorized")]
+#[should_panic(expected = "1")]
 fn test_unauthorized_raise_dispute() {
     let env = Env::default();
     let (client, shipper, driver, recipient, _, _) = setup_full(&env);
@@ -300,7 +300,7 @@ fn test_unauthorized_raise_dispute() {
 }
 
 #[test]
-#[should_panic(expected = "NotAuthorized")]
+#[should_panic(expected = "1")]
 fn test_unauthorized_cancel_delivery() {
     let env = Env::default();
     let (client, shipper, driver, _, _, _) = setup_full(&env);

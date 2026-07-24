@@ -26,6 +26,8 @@ pub enum FaniLabError {
     ProviderNotFound = 9,
     /// Address argument is invalid for the requested operation.
     InvalidAddress = 10,
+    /// Protocol is paused and fund movements are halted.
+    ProtocolPaused = 11,
 }
 
 // Event topic constants for on-chain event tracking

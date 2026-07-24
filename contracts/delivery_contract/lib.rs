@@ -22,6 +22,12 @@ pub enum DataKey {
 #[repr(u32)]
 pub enum DeliveryError {
     InvalidState = 1,
+    InvalidMetadata = 2,
+}
+
+mod constants {
+    pub const MAX_LOCATION_LEN: u32 = 256;
+    pub const MAX_WEIGHT_GRAMS: u32 = 1_000_000;
 }
 
 /// Validate whether a status transition is permitted by the delivery state machine.
@@ -50,6 +56,19 @@ pub fn validate_transition(from: DeliveryStatus, to: DeliveryStatus) -> Result<(
     } else {
         Err(DeliveryError::InvalidState)
     }
+}
+
+fn validate_delivery_metadata(env: &Env, metadata: &DeliveryMetadata) -> Result<(), DeliveryError> {
+    if metadata.origin.len() > constants::MAX_LOCATION_LEN {
+        return Err(DeliveryError::InvalidMetadata);
+    }
+    if metadata.destination.len() > constants::MAX_LOCATION_LEN {
+        return Err(DeliveryError::InvalidMetadata);
+    }
+    if metadata.cargo_description.weight_grams > constants::MAX_WEIGHT_GRAMS {
+        return Err(DeliveryError::InvalidMetadata);
+    }
+    Ok(())
 }
 
 #[contract]
@@ -82,6 +101,9 @@ impl DeliveryContract {
         metadata: DeliveryMetadata,
     ) -> DeliveryId {
         sender.require_auth();
+
+        validate_delivery_metadata(&env, &metadata)
+            .unwrap_or_else(|_| panic_with_error!(&env, DeliveryError::InvalidMetadata));
 
         let mut counter: u64 = env
             .storage()

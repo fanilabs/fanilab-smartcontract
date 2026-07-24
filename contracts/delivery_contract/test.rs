@@ -401,3 +401,123 @@ fn test_create_delivery_missing_fields() {
     let delivery_id = client.create_delivery(&shipper, &recipient, &metadata);
     assert_eq!(delivery_id, 1);
 }
+
+// ── METADATA VALIDATION ───────────────────────────────────────────────────────
+
+#[test]
+#[should_panic(expected = "InvalidMetadata")]
+fn test_reject_origin_exceeds_max_length() {
+    let env = Env::default();
+    let (client, shipper, _, recipient, _, _) = setup_full(&env);
+
+    use shared_types::{CargoCategory, CargoDescriptor};
+    let long_string = String::from_str(&env, &"x".repeat(257));
+    let metadata = DeliveryMetadata {
+        delivery_id: 1,
+        origin: long_string,
+        destination: String::from_str(&env, "Destination"),
+        cargo_description: CargoDescriptor {
+            weight_grams: 100,
+            category: CargoCategory::General,
+            fragile: false,
+        },
+        created_at: env.ledger().timestamp(),
+        estimated_delivery: env.ledger().timestamp() + 86400,
+    };
+
+    client.create_delivery(&shipper, &recipient, &metadata);
+}
+
+#[test]
+#[should_panic(expected = "InvalidMetadata")]
+fn test_reject_destination_exceeds_max_length() {
+    let env = Env::default();
+    let (client, shipper, _, recipient, _, _) = setup_full(&env);
+
+    use shared_types::{CargoCategory, CargoDescriptor};
+    let long_string = String::from_str(&env, &"x".repeat(257));
+    let metadata = DeliveryMetadata {
+        delivery_id: 1,
+        origin: String::from_str(&env, "Origin"),
+        destination: long_string,
+        cargo_description: CargoDescriptor {
+            weight_grams: 100,
+            category: CargoCategory::General,
+            fragile: false,
+        },
+        created_at: env.ledger().timestamp(),
+        estimated_delivery: env.ledger().timestamp() + 86400,
+    };
+
+    client.create_delivery(&shipper, &recipient, &metadata);
+}
+
+#[test]
+#[should_panic(expected = "InvalidMetadata")]
+fn test_reject_weight_exceeds_max() {
+    let env = Env::default();
+    let (client, shipper, _, recipient, _, _) = setup_full(&env);
+
+    use shared_types::{CargoCategory, CargoDescriptor};
+    let metadata = DeliveryMetadata {
+        delivery_id: 1,
+        origin: String::from_str(&env, "Origin"),
+        destination: String::from_str(&env, "Destination"),
+        cargo_description: CargoDescriptor {
+            weight_grams: 1_000_001,
+            category: CargoCategory::General,
+            fragile: false,
+        },
+        created_at: env.ledger().timestamp(),
+        estimated_delivery: env.ledger().timestamp() + 86400,
+    };
+
+    client.create_delivery(&shipper, &recipient, &metadata);
+}
+
+#[test]
+fn test_accept_location_at_max_length() {
+    let env = Env::default();
+    let (client, shipper, _, recipient, _, _) = setup_full(&env);
+
+    use shared_types::{CargoCategory, CargoDescriptor};
+    let max_string = String::from_str(&env, &"x".repeat(256));
+    let metadata = DeliveryMetadata {
+        delivery_id: 1,
+        origin: max_string.clone(),
+        destination: max_string,
+        cargo_description: CargoDescriptor {
+            weight_grams: 100,
+            category: CargoCategory::General,
+            fragile: false,
+        },
+        created_at: env.ledger().timestamp(),
+        estimated_delivery: env.ledger().timestamp() + 86400,
+    };
+
+    let delivery_id = client.create_delivery(&shipper, &recipient, &metadata);
+    assert_eq!(delivery_id, 1);
+}
+
+#[test]
+fn test_accept_weight_at_max() {
+    let env = Env::default();
+    let (client, shipper, _, recipient, _, _) = setup_full(&env);
+
+    use shared_types::{CargoCategory, CargoDescriptor};
+    let metadata = DeliveryMetadata {
+        delivery_id: 1,
+        origin: String::from_str(&env, "Origin"),
+        destination: String::from_str(&env, "Destination"),
+        cargo_description: CargoDescriptor {
+            weight_grams: 1_000_000,
+            category: CargoCategory::General,
+            fragile: false,
+        },
+        created_at: env.ledger().timestamp(),
+        estimated_delivery: env.ledger().timestamp() + 86400,
+    };
+
+    let delivery_id = client.create_delivery(&shipper, &recipient, &metadata);
+    assert_eq!(delivery_id, 1);
+}

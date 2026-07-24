@@ -133,6 +133,20 @@ impl DisputeResolutionContract {
             .unwrap_or(0)
     }
 
+    pub fn update_dispute_time_limit(env: Env, caller: Address, new_limit: u64) {
+        caller.require_auth();
+        if !Self::is_admin(env.clone(), caller.clone()) {
+            panic_with_error!(&env, FaniLabError::Unauthorized);
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::DisputeTimeLimit, &new_limit);
+        env.events().publish(
+            (Symbol::new(&env, "dispute_time_limit_updated"),),
+            (caller, new_limit),
+        );
+    }
+
     pub fn raise_dispute(env: Env, caller: Address, delivery_id: DeliveryId) {
         caller.require_auth();
 

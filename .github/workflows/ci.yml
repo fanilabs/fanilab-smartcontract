@@ -31,13 +31,13 @@ jobs:
       run: cargo fmt --all -- --check
 
     - name: Run Clippy (Linter)
-      run: cargo clippy --all-targets --all-features --target wasm32v1-none -- -D warnings
+      run: cargo clippy --locked --all-targets --all-features --target wasm32v1-none -- -D warnings
 
     - name: Build Contracts (WASM)
-      run: cargo build --target wasm32v1-none --release
+      run: cargo build --locked --target wasm32v1-none --release
 
     - name: Run Tests
-      run: cargo test --verbose
+      run: cargo test --locked --verbose
 
     - name: Run Tests with Coverage
       run: |

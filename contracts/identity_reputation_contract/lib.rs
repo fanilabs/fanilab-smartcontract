@@ -1,7 +1,7 @@
 #![no_std]
 #![allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional
 
-use shared_types::FaniLabError;
+use shared_types::{DriverProfile, FaniLabError};
 use soroban_sdk::{contract, contractimpl, contracttype, panic_with_error, Address, Env, Symbol};
 
 #[contracttype]
@@ -9,16 +9,6 @@ use soroban_sdk::{contract, contractimpl, contracttype, panic_with_error, Addres
 pub struct UserProfile {
     pub address: Address,
     pub join_date: u64,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, PartialEq)]
-pub struct DriverProfile {
-    pub address: Address,
-    pub deliveries_completed: u32,
-    pub reputation_score: u32,
-    pub registered_at: u64,
-    pub kyc_verified: bool,
 }
 
 #[contracttype]

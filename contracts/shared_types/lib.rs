@@ -73,6 +73,11 @@ pub mod events {
     }
 }
 
+pub mod ttl {
+    pub const LEDGER_TTL_THRESHOLD: u32 = 518400;
+    pub const LEDGER_TTL_EXTEND_TO: u32 = 1036800;
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DeliveryCreatedEvent {

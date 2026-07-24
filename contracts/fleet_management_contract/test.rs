@@ -1,6 +1,7 @@
 extern crate std;
 
 use super::*;
+use identity_reputation_contract::IdentityReputationContract;
 use soroban_sdk::{
     testutils::{Address as _, Events},
     Address, Env, Symbol, TryFromVal,
@@ -561,6 +562,52 @@ fn test_get_payout_address_returns_driver_after_removal() {
 }
 
 #[test]
+// ── Issue #73 tests — register_fleet with identity contract ──────────────────
+
+#[test]
+fn test_register_fleet_twice_same_owner_with_identity_contract() {
+    let (env, client, admin) = setup_test();
+
+    let identity_id = env.register(IdentityReputationContract, ());
+    let identity_client =
+        identity_reputation_contract::Client::new(&env, &identity_id);
+
+    client.set_identity_contract(&admin, &identity_id);
+
+    let owner = Address::generate(&env);
+    let treasury_a = Address::generate(&env);
+    let treasury_b = Address::generate(&env);
+
+    let fleet_id_a = client.register_fleet(&owner, &treasury_a);
+    assert_eq!(fleet_id_a, 1);
+    assert_eq!(client.get_fleet(&fleet_id_a).owner, owner);
+
+    let fleet_id_b = client.register_fleet(&owner, &treasury_b);
+    assert_eq!(fleet_id_b, 2);
+    assert_eq!(client.get_fleet(&fleet_id_b).owner, owner);
+
+    assert!(identity_client.has_driver_profile(&owner));
+}
+
+#[test]
+fn test_register_fleet_for_existing_driver_succeeds() {
+    let (env, client, admin) = setup_test();
+
+    let identity_id = env.register(IdentityReputationContract, ());
+    let identity_client =
+        identity_reputation_contract::Client::new(&env, &identity_id);
+
+    client.set_identity_contract(&admin, &identity_id);
+
+    let owner = Address::generate(&env);
+    identity_client.register_driver(&owner);
+
+    let treasury = Address::generate(&env);
+    let fleet_id = client.register_fleet(&owner, &treasury);
+    assert_eq!(fleet_id, 1);
+    assert!(identity_client.has_driver_profile(&owner));
+}
+
 fn test_get_payout_address_treasury_updates_are_reflected() {
     let (env, client, _admin) = setup_test();
     let (fleet_id, owner, _old_treasury) = register_fleet(&env, &client);

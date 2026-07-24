@@ -137,11 +137,18 @@ impl FleetManagementContract {
             .instance()
             .get::<DataKey, Address>(&DataKey::IdentityContract)
         {
-            let _: () = env.invoke_contract(
+            let has_profile: bool = env.invoke_contract(
                 &identity_addr,
-                &Symbol::new(&env, "register_driver"),
+                &Symbol::new(&env, "has_driver_profile"),
                 soroban_sdk::vec![&env, owner.clone().into_val(&env)],
             );
+            if !has_profile {
+                let _: () = env.invoke_contract(
+                    &identity_addr,
+                    &Symbol::new(&env, "register_driver"),
+                    soroban_sdk::vec![&env, owner.clone().into_val(&env)],
+                );
+            }
         }
 
         // Emit event: topic = "fleet_registered", data = (fleet_id, owner, treasury).

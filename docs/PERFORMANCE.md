@@ -183,12 +183,12 @@ for item in items {
 
 ```rust
 // Bad: Multiple calls
-let status1 = escrow.get_status(&id1);
-let status2 = escrow.get_status(&id2);
-let status3 = escrow.get_status(&id3);
+let escrow1 = escrow.get_escrow(&id1);
+let escrow2 = escrow.get_escrow(&id2);
+let escrow3 = escrow.get_escrow(&id3);
 
 // Better: Batch query (if supported)
-let statuses = escrow.get_status_batch(&[id1, id2, id3]);
+let escrows = escrow.get_escrow_batch(&[id1, id2, id3]);
 ```
 
 ### 2. Cache Results

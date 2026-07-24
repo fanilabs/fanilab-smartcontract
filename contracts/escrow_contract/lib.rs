@@ -2,8 +2,7 @@
 #![allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional
 
 use shared_types::{
-    escrow_key, events, DeliveryStatus, EscrowRecord, EscrowStatus, FaniLabError, ProtocolConfig,
-    StorageKey,
+    escrow_key, events, EscrowRecord, EscrowStatus, FaniLabError, ProtocolConfig, StorageKey,
 };
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, token, Address, Env,
@@ -133,6 +132,7 @@ pub enum EscrowError {
     InsufficientFunds = 3,
     DuplicateDelivery = 4,
     InvalidFee = 5,
+    InvalidToken = 6,
 }
 
 #[contracttype]
@@ -209,10 +209,6 @@ impl EscrowContract {
 
     pub fn get_platform_fee(env: Env) -> u32 {
         load_protocol_config(&env).platform_fee_bps
-    }
-
-    pub fn get_status(_env: Env) -> DeliveryStatus {
-        DeliveryStatus::Pending
     }
 
     pub fn get_admin(env: Env) -> Address {
@@ -302,6 +298,10 @@ impl EscrowContract {
         sender.require_auth();
         if env.storage().persistent().has(&escrow_key(delivery_id)) {
             panic_with_error!(&env, EscrowError::DuplicateDelivery);
+        }
+        let config = load_protocol_config(&env);
+        if token != config.token {
+            panic_with_error!(&env, EscrowError::InvalidToken);
         }
         token::Client::new(&env, &token).transfer(
             &sender,

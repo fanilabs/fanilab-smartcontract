@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Production-ready CI/CD pipeline with security audits
+- CI: coverage upload now fails the build on error (`fail_ci_if_error: true`)
+- CI: `cargo machete` step to detect unused dependencies automatically
+- CI: `cargo outdated` step is now a hard gate (removed `continue-on-error`)
+- `identity_reputation_contract::has_driver_profile` query function for driver existence checks
+
+### Changed
+- `escrow_contract::create_escrow` now validates `token` matches the protocol-configured token
+- `fleet_management_contract::register_fleet` checks driver profile existence before calling `register_driver`, preventing panic for already-registered drivers
+
+### Removed
+- `escrow_contract::get_status` — dead stub that always returned `DeliveryStatus::Pending`. Use `get_escrow(id).status` instead.
 - Comprehensive deployment documentation
 - API reference documentation
 - Security audit checklist

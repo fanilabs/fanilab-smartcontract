@@ -13,3 +13,4 @@ shared_types = { path = "../shared_types" }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
+proptest = "1"

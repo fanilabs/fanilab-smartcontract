@@ -18,6 +18,10 @@ pub const MAX_BATCH_SIZE: u32 = 100;
 pub enum DataKey {
     DeliveryCounter,
     EscrowContract,
+    /// Secondary index: deliveries created by sender (Vec<DeliveryId>).
+    DeliveriesBySender(Address),
+    /// Secondary index: deliveries with recipient (Vec<DeliveryId>).
+    DeliveriesByRecipient(Address),
 }
 
 #[contracterror]
@@ -101,7 +105,7 @@ impl DeliveryContract {
         let record = DeliveryRecord {
             delivery_id,
             sender: sender.clone(),
-            recipient,
+            recipient: recipient.clone(),
             driver: None,
             status: DeliveryStatus::Pending,
             metadata,
@@ -113,6 +117,31 @@ impl DeliveryContract {
         let key = delivery_key(delivery_id);
         env.storage().persistent().set(&key, &record);
         env.storage().persistent().extend_ttl(&key, 518400, 518400);
+
+        // Update secondary indexes.
+        let sender_key = DataKey::DeliveriesBySender(sender.clone());
+        let mut sender_deliveries: soroban_sdk::Vec<DeliveryId> = env
+            .storage()
+            .persistent()
+            .get(&sender_key)
+            .unwrap_or_else(|| soroban_sdk::Vec::new(&env));
+        sender_deliveries.push_back(delivery_id);
+        env.storage()
+            .persistent()
+            .set(&sender_key, &sender_deliveries);
+        env.storage().persistent().extend_ttl(&sender_key, 518400, 518400);
+
+        let recipient_key = DataKey::DeliveriesByRecipient(recipient.clone());
+        let mut recipient_deliveries: soroban_sdk::Vec<DeliveryId> = env
+            .storage()
+            .persistent()
+            .get(&recipient_key)
+            .unwrap_or_else(|| soroban_sdk::Vec::new(&env));
+        recipient_deliveries.push_back(delivery_id);
+        env.storage()
+            .persistent()
+            .set(&recipient_key, &recipient_deliveries);
+        env.storage().persistent().extend_ttl(&recipient_key, 518400, 518400);
 
         env.events().publish(
             (soroban_sdk::Symbol::new(&env, "delivery_created"),),
@@ -146,6 +175,21 @@ impl DeliveryContract {
 
         let timestamp = env.ledger().timestamp();
 
+        // Pre-load sender and recipient indexes for efficient batch updates.
+        let sender_key = DataKey::DeliveriesBySender(sender.clone());
+        let mut sender_deliveries: soroban_sdk::Vec<DeliveryId> = env
+            .storage()
+            .persistent()
+            .get(&sender_key)
+            .unwrap_or_else(|| soroban_sdk::Vec::new(&env));
+
+        let recipient_key = DataKey::DeliveriesByRecipient(recipient.clone());
+        let mut recipient_deliveries: soroban_sdk::Vec<DeliveryId> = env
+            .storage()
+            .persistent()
+            .get(&recipient_key)
+            .unwrap_or_else(|| soroban_sdk::Vec::new(&env));
+
         for i in 0..metadata_list.len() {
             if let Some(metadata) = metadata_list.get(i) {
                 counter += 1;
@@ -171,6 +215,9 @@ impl DeliveryContract {
                 env.storage().persistent().set(&key, &record);
                 env.storage().persistent().extend_ttl(&key, 518400, 518400);
 
+                sender_deliveries.push_back(delivery_id);
+                recipient_deliveries.push_back(delivery_id);
+
                 env.events().publish(
                     (soroban_sdk::Symbol::new(&env, "delivery_created"),),
                     (delivery_id, sender.clone()),
@@ -179,6 +226,17 @@ impl DeliveryContract {
                 result.push_back(delivery_id);
             }
         }
+
+        // Save updated indexes.
+        env.storage()
+            .persistent()
+            .set(&sender_key, &sender_deliveries);
+        env.storage().persistent().extend_ttl(&sender_key, 518400, 518400);
+
+        env.storage()
+            .persistent()
+            .set(&recipient_key, &recipient_deliveries);
+        env.storage().persistent().extend_ttl(&recipient_key, 518400, 518400);
 
         result
     }
@@ -447,6 +505,24 @@ impl DeliveryContract {
             .persistent()
             .get(&key)
             .unwrap_or_else(|| panic!("DeliveryNotFound"))
+    }
+
+    /// Get all delivery IDs created by a sender.
+    pub fn get_deliveries_by_sender(env: Env, sender: Address) -> soroban_sdk::Vec<DeliveryId> {
+        let key = DataKey::DeliveriesBySender(sender);
+        env.storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| soroban_sdk::Vec::new(&env))
+    }
+
+    /// Get all delivery IDs with a specific recipient.
+    pub fn get_deliveries_by_recipient(env: Env, recipient: Address) -> soroban_sdk::Vec<DeliveryId> {
+        let key = DataKey::DeliveriesByRecipient(recipient);
+        env.storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| soroban_sdk::Vec::new(&env))
     }
 }
 

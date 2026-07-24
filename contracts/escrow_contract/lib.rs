@@ -123,6 +123,12 @@ fn load_escrow(env: &Env, delivery_id: u64) -> EscrowRecord {
 enum DataKey {
     PendingAdmin,
     SettlementContract,
+    /// Secondary index: escrows by sender (Vec<u64> delivery IDs).
+    EscrowsBySender(Address),
+    /// Secondary index: escrows by recipient (Vec<u64> delivery IDs).
+    EscrowsByRecipient(Address),
+    /// Secondary index: escrows by driver (Vec<u64> delivery IDs).
+    EscrowsByDriver(Address),
 }
 
 #[contracterror]
@@ -315,7 +321,7 @@ impl EscrowContract {
             &EscrowRecord {
                 sender: sender.clone(),
                 recipient: recipient.clone(),
-                driver,
+                driver: driver.clone(),
                 token,
                 amount,
                 status: EscrowStatus::Locked,
@@ -324,6 +330,56 @@ impl EscrowContract {
                 disputed_at: None,
             },
         );
+
+        // Update secondary indexes.
+        let sender_key = DataKey::EscrowsBySender(sender.clone());
+        let mut sender_escrows: soroban_sdk::Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&sender_key)
+            .unwrap_or_else(|| soroban_sdk::Vec::new(&env));
+        sender_escrows.push_back(delivery_id);
+        env.storage()
+            .persistent()
+            .set(&sender_key, &sender_escrows);
+        env.storage().persistent().extend_ttl(
+            &sender_key,
+            constants::ESCROW_TTL_THRESHOLD,
+            constants::ESCROW_TTL_EXTEND_TO,
+        );
+
+        let recipient_key = DataKey::EscrowsByRecipient(recipient.clone());
+        let mut recipient_escrows: soroban_sdk::Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&recipient_key)
+            .unwrap_or_else(|| soroban_sdk::Vec::new(&env));
+        recipient_escrows.push_back(delivery_id);
+        env.storage()
+            .persistent()
+            .set(&recipient_key, &recipient_escrows);
+        env.storage().persistent().extend_ttl(
+            &recipient_key,
+            constants::ESCROW_TTL_THRESHOLD,
+            constants::ESCROW_TTL_EXTEND_TO,
+        );
+
+        let driver_key = DataKey::EscrowsByDriver(driver.clone());
+        let mut driver_escrows: soroban_sdk::Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&driver_key)
+            .unwrap_or_else(|| soroban_sdk::Vec::new(&env));
+        driver_escrows.push_back(delivery_id);
+        env.storage()
+            .persistent()
+            .set(&driver_key, &driver_escrows);
+        env.storage().persistent().extend_ttl(
+            &driver_key,
+            constants::ESCROW_TTL_THRESHOLD,
+            constants::ESCROW_TTL_EXTEND_TO,
+        );
+
         env.events().publish(
             (events::escrow_funded(&env), delivery_id),
             (sender, recipient, amount),
@@ -346,6 +402,23 @@ impl EscrowContract {
             panic_with_error!(&env, EscrowError::InvalidState);
         }
 
+        // Pre-load indexes for efficient batch updates.
+        let sender_key = DataKey::EscrowsBySender(sender.clone());
+        let mut sender_escrows: soroban_sdk::Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&sender_key)
+            .unwrap_or_else(|| soroban_sdk::Vec::new(&env));
+
+        let recipient_key = DataKey::EscrowsByRecipient(recipient.clone());
+        let mut recipient_escrows: soroban_sdk::Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&recipient_key)
+            .unwrap_or_else(|| soroban_sdk::Vec::new(&env));
+
+        let mut driver_indexes = soroban_sdk::Map::new(&env);
+
         let mut count = 0u32;
         for i in 0..escrow_list.len() {
             if let Some((delivery_id, driver, amount)) = escrow_list.get(i) {
@@ -363,7 +436,7 @@ impl EscrowContract {
                     &EscrowRecord {
                         sender: sender.clone(),
                         recipient: recipient.clone(),
-                        driver,
+                        driver: driver.clone(),
                         token: token.clone(),
                         amount,
                         status: EscrowStatus::Locked,
@@ -372,11 +445,61 @@ impl EscrowContract {
                         disputed_at: None,
                     },
                 );
+                sender_escrows.push_back(delivery_id);
+                recipient_escrows.push_back(delivery_id);
+
+                // Track drivers separately for efficient index updates.
+                let driver_key = DataKey::EscrowsByDriver(driver.clone());
+                if !driver_indexes.contains_key(&driver_key) {
+                    let existing: soroban_sdk::Vec<u64> = env
+                        .storage()
+                        .persistent()
+                        .get(&driver_key)
+                        .unwrap_or_else(|| soroban_sdk::Vec::new(&env));
+                    driver_indexes.set(driver_key, existing);
+                }
+                if let Some(mut driver_escrows_vec) = driver_indexes.get(&driver_key) {
+                    driver_escrows_vec.push_back(delivery_id);
+                    driver_indexes.set(driver_key, driver_escrows_vec);
+                }
+
                 env.events().publish(
                     (events::escrow_funded(&env), delivery_id),
                     (sender.clone(), recipient.clone(), amount),
                 );
                 count += 1;
+            }
+        }
+
+        // Save all updated indexes.
+        env.storage()
+            .persistent()
+            .set(&sender_key, &sender_escrows);
+        env.storage().persistent().extend_ttl(
+            &sender_key,
+            constants::ESCROW_TTL_THRESHOLD,
+            constants::ESCROW_TTL_EXTEND_TO,
+        );
+
+        env.storage()
+            .persistent()
+            .set(&recipient_key, &recipient_escrows);
+        env.storage().persistent().extend_ttl(
+            &recipient_key,
+            constants::ESCROW_TTL_THRESHOLD,
+            constants::ESCROW_TTL_EXTEND_TO,
+        );
+
+        for i in 0..driver_indexes.len() {
+            if let Some((driver_key, driver_escrows_vec)) = driver_indexes.get_index(i) {
+                env.storage()
+                    .persistent()
+                    .set(&driver_key, &driver_escrows_vec);
+                env.storage().persistent().extend_ttl(
+                    &driver_key,
+                    constants::ESCROW_TTL_THRESHOLD,
+                    constants::ESCROW_TTL_EXTEND_TO,
+                );
             }
         }
 
@@ -594,6 +717,33 @@ impl EscrowContract {
             record.disputed_at = Some(env.ledger().timestamp());
             save_escrow(&env, delivery_id, &record);
         }
+    }
+
+    /// Get all escrow delivery IDs for a sender.
+    pub fn get_escrows_by_sender(env: Env, sender: Address) -> soroban_sdk::Vec<u64> {
+        let key = DataKey::EscrowsBySender(sender);
+        env.storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| soroban_sdk::Vec::new(&env))
+    }
+
+    /// Get all escrow delivery IDs for a recipient.
+    pub fn get_escrows_by_recipient(env: Env, recipient: Address) -> soroban_sdk::Vec<u64> {
+        let key = DataKey::EscrowsByRecipient(recipient);
+        env.storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| soroban_sdk::Vec::new(&env))
+    }
+
+    /// Get all escrow delivery IDs for a driver.
+    pub fn get_escrows_by_driver(env: Env, driver: Address) -> soroban_sdk::Vec<u64> {
+        let key = DataKey::EscrowsByDriver(driver);
+        env.storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| soroban_sdk::Vec::new(&env))
     }
 }
 

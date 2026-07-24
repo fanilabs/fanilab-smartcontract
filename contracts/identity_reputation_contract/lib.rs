@@ -105,6 +105,11 @@ impl IdentityReputationContract {
         env.storage().persistent().get(&key).unwrap_or(false)
     }
 
+    pub fn has_driver_profile(env: Env, driver: Address) -> bool {
+        let key = DataKey::DriverProfile(driver);
+        env.storage().persistent().get::<_, DriverProfile>(&key).is_some()
+    }
+
     pub fn register_driver(env: Env, driver: Address) {
         driver.require_auth();
         let key = DataKey::DriverProfile(driver.clone());

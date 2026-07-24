@@ -1,4 +1,5 @@
 use super::*;
+use proptest::prelude::*;
 use shared_types::FaniLabError;
 use soroban_sdk::{
     testutils::Address as _,
@@ -341,5 +342,35 @@ fn test_get_escrow_not_found() {
     match result {
         Err(Ok(err)) => assert_eq!(err, EscrowError::DeliveryNotFound.into()),
         _ => panic!("Expected DeliveryNotFound"),
+    }
+}
+
+// ── Property-based tests ─────────────────────────────────────────────────────
+
+proptest! {
+    #[test]
+    fn test_calculate_fee_non_negative_and_bounded(
+        amount in 0i128..i128::MAX,
+        platform_fee_bps in 0u32..=10000u32,
+    ) {
+        let fee = calculate_fee(amount, platform_fee_bps);
+        assert!(fee >= 0, "fee must be non-negative: got {fee} for amount={amount} bps={platform_fee_bps}");
+        assert!(fee <= amount, "fee {fee} must not exceed amount {amount} for bps={platform_fee_bps}");
+    }
+
+    #[test]
+    fn test_calculate_fee_zero_bps_yields_zero(
+        amount in 0i128..i128::MAX,
+    ) {
+        let fee = calculate_fee(amount, 0);
+        assert_eq!(fee, 0, "fee must be zero when bps=0, got {fee} for amount={amount}");
+    }
+
+    #[test]
+    fn test_calculate_fee_zero_amount_yields_zero(
+        platform_fee_bps in 0u32..=10000u32,
+    ) {
+        let fee = calculate_fee(0, platform_fee_bps);
+        assert_eq!(fee, 0, "fee must be zero when amount=0, got {fee} for bps={platform_fee_bps}");
     }
 }

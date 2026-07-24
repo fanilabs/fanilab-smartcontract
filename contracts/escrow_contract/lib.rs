@@ -2,8 +2,8 @@
 #![allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional
 
 use shared_types::{
-    escrow_key, events, DeliveryStatus, EscrowRecord, EscrowStatus, FaniLabError, ProtocolConfig,
-    StorageKey,
+    escrow_key, events, ttl, DeliveryStatus, EscrowRecord, EscrowStatus, FaniLabError,
+    ProtocolConfig, StorageKey,
 };
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, token, Address, Env,
@@ -11,8 +11,6 @@ use soroban_sdk::{
 };
 
 pub mod constants {
-    pub const ESCROW_TTL_THRESHOLD: u32 = 518400;
-    pub const ESCROW_TTL_EXTEND_TO: u32 = 518400;
     pub const PROTOCOL_VERSION: u32 = 1;
 }
 
@@ -97,8 +95,8 @@ fn save_escrow(env: &Env, delivery_id: u64, record: &EscrowRecord) {
     env.storage().persistent().set(&key, record);
     env.storage().persistent().extend_ttl(
         &key,
-        constants::ESCROW_TTL_THRESHOLD,
-        constants::ESCROW_TTL_EXTEND_TO,
+        ttl::LEDGER_TTL_THRESHOLD,
+        ttl::LEDGER_TTL_EXTEND_TO,
     );
 }
 
@@ -111,8 +109,8 @@ fn load_escrow(env: &Env, delivery_id: u64) -> EscrowRecord {
         .unwrap_or_else(|| panic_with_error!(env, EscrowError::DeliveryNotFound));
     env.storage().persistent().extend_ttl(
         &key,
-        constants::ESCROW_TTL_THRESHOLD,
-        constants::ESCROW_TTL_EXTEND_TO,
+        ttl::LEDGER_TTL_THRESHOLD,
+        ttl::LEDGER_TTL_EXTEND_TO,
     );
     record
 }
@@ -179,6 +177,11 @@ impl EscrowContract {
                 protocol_version: constants::PROTOCOL_VERSION,
             },
         );
+
+        env.storage().instance().extend_ttl(
+            ttl::LEDGER_TTL_THRESHOLD,
+            ttl::LEDGER_TTL_EXTEND_TO,
+        );
     }
 
     pub fn update_platform_fee(env: Env, admin: Address, new_fee_bps: u32) {
@@ -204,6 +207,11 @@ impl EscrowContract {
                 old_fee,
                 new_fee: new_fee_bps,
             },
+        );
+
+        env.storage().instance().extend_ttl(
+            ttl::LEDGER_TTL_THRESHOLD,
+            ttl::LEDGER_TTL_EXTEND_TO,
         );
     }
 
@@ -236,6 +244,11 @@ impl EscrowContract {
         env.storage()
             .instance()
             .set(&DataKey::SettlementContract, &settlement_contract);
+
+        env.storage().instance().extend_ttl(
+            ttl::LEDGER_TTL_THRESHOLD,
+            ttl::LEDGER_TTL_EXTEND_TO,
+        );
     }
 
     pub fn get_settlement_contract(env: Env) -> Option<Address> {
@@ -256,8 +269,8 @@ impl EscrowContract {
             .instance()
             .set(&DataKey::PendingAdmin, &new_admin);
         env.storage().instance().extend_ttl(
-            constants::ESCROW_TTL_THRESHOLD,
-            constants::ESCROW_TTL_EXTEND_TO,
+            ttl::LEDGER_TTL_THRESHOLD,
+            ttl::LEDGER_TTL_EXTEND_TO,
         );
     }
 
@@ -279,8 +292,8 @@ impl EscrowContract {
         env.storage().instance().set(&StorageKey::Admin, &new_admin);
         env.storage().instance().remove(&DataKey::PendingAdmin);
         env.storage().instance().extend_ttl(
-            constants::ESCROW_TTL_THRESHOLD,
-            constants::ESCROW_TTL_EXTEND_TO,
+            ttl::LEDGER_TTL_THRESHOLD,
+            ttl::LEDGER_TTL_EXTEND_TO,
         );
         env.events().publish(
             (Symbol::new(&env, "AdminTransferred"),),

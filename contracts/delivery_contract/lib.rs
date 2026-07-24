@@ -180,6 +180,10 @@ impl DeliveryContract {
             .get(&key)
             .unwrap_or_else(|| panic!("DeliveryNotFound"));
 
+        if driver == delivery.sender || driver == delivery.recipient {
+            panic!("InvalidDriver");
+        }
+
         validate_transition(delivery.status.clone(), DeliveryStatus::Active)
             .unwrap_or_else(|_| panic!("InvalidState"));
 
@@ -241,6 +245,12 @@ impl DeliveryContract {
 
         if recipient != delivery.recipient {
             panic!("NotAuthorized");
+        }
+
+        if let Some(driver) = &delivery.driver {
+            if driver == &recipient || driver == &delivery.sender {
+                panic!("InvalidDelivery");
+            }
         }
 
         validate_transition(delivery.status.clone(), DeliveryStatus::Delivered)
@@ -383,6 +393,59 @@ impl DeliveryContract {
             .persistent()
             .get(&key)
             .unwrap_or_else(|| panic!("DeliveryNotFound"))
+    }
+
+    /// Returns combined delivery and escrow state, and flags known-invalid combinations.
+    /// Validates that delivery and escrow states are synchronized according to protocol invariants.
+    pub fn get_combined_state(
+        env: Env,
+        delivery_id: DeliveryId,
+    ) -> (DeliveryRecord, shared_types::EscrowRecord, bool) {
+        let delivery = Self::get_delivery(env.clone(), delivery_id);
+
+        let escrow_address: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::EscrowContract)
+            .unwrap_or_else(|| panic!("EscrowNotConfigured"));
+
+        use soroban_sdk::IntoVal;
+        let escrow: shared_types::EscrowRecord = env.invoke_contract(
+            &escrow_address,
+            &Symbol::new(&env, "get_escrow"),
+            soroban_sdk::vec![&env, u64::from(delivery_id).into_val(&env)],
+        );
+
+        let is_synchronized = Self::validate_state_sync(&delivery, &escrow);
+        (delivery, escrow, is_synchronized)
+    }
+
+    /// Validates that delivery and escrow states match expected protocol invariants.
+    /// Returns true if states are synchronized, false if a mismatch is detected.
+    fn validate_state_sync(
+        delivery: &DeliveryRecord,
+        escrow: &shared_types::EscrowRecord,
+    ) -> bool {
+        match (&delivery.status, &escrow.status) {
+            // Pending/Active: escrow should be Locked
+            (DeliveryStatus::Pending, shared_types::EscrowStatus::Locked) => true,
+            (DeliveryStatus::Active, shared_types::EscrowStatus::Locked) => true,
+
+            // InTransit: escrow should still be Locked
+            (DeliveryStatus::InTransit, shared_types::EscrowStatus::Locked) => true,
+
+            // Delivered: escrow must be Released (funds moved to driver)
+            (DeliveryStatus::Delivered, shared_types::EscrowStatus::Released) => true,
+
+            // Disputed: escrow must be Paused
+            (DeliveryStatus::Disputed, shared_types::EscrowStatus::Paused) => true,
+
+            // Cancelled: escrow should be Refunded
+            (DeliveryStatus::Cancelled, shared_types::EscrowStatus::Refunded) => true,
+
+            // Any other combination is a mismatch
+            _ => false,
+        }
     }
 }
 

@@ -401,3 +401,84 @@ fn test_create_delivery_missing_fields() {
     let delivery_id = client.create_delivery(&shipper, &recipient, &metadata);
     assert_eq!(delivery_id, 1);
 }
+
+// ── SELF-ASSIGNMENT REJECTION (Issue #20) ─────────────────────────────────
+
+#[test]
+#[should_panic(expected = "InvalidDriver")]
+fn test_reject_assign_driver_as_sender() {
+    let env = Env::default();
+    let (client, shipper, _, recipient, _, _) = setup_full(&env);
+    let metadata = get_test_metadata(&env, 1);
+    let delivery_id = client.create_delivery(&shipper, &recipient, &metadata);
+
+    client.assign_driver(&shipper, &delivery_id, &shipper);
+}
+
+#[test]
+#[should_panic(expected = "InvalidDriver")]
+fn test_reject_assign_driver_as_recipient() {
+    let env = Env::default();
+    let (client, shipper, _, recipient, _, _) = setup_full(&env);
+    let metadata = get_test_metadata(&env, 1);
+    let delivery_id = client.create_delivery(&shipper, &recipient, &metadata);
+
+    client.assign_driver(&shipper, &delivery_id, &recipient);
+}
+
+#[test]
+#[should_panic(expected = "InvalidDelivery")]
+fn test_reject_confirm_delivery_from_driver() {
+    let env = Env::default();
+    let (client, shipper, driver, recipient, _, _) = setup_full(&env);
+    let metadata = get_test_metadata(&env, 1);
+    let delivery_id = client.create_delivery(&shipper, &recipient, &metadata);
+    client.assign_driver(&driver, &delivery_id, &driver);
+    client.mark_in_transit(&driver, &delivery_id);
+
+    client.confirm_delivery(&driver, &delivery_id);
+}
+
+// ── STATE SYNCHRONIZATION VALIDATION (Issue #19) ──────────────────────────────
+
+#[test]
+fn test_get_combined_state_pending_delivery() {
+    let env = Env::default();
+    let (client, shipper, driver, recipient, escrow_id, _) = setup_full(&env);
+    let metadata = get_test_metadata(&env, 1);
+    let delivery_id = client.create_delivery(&shipper, &recipient, &metadata);
+
+    let (delivery, _escrow, is_synchronized) = client.get_combined_state(&delivery_id);
+
+    assert_eq!(delivery.status, DeliveryStatus::Pending);
+    assert!(is_synchronized, "Pending delivery should be synchronized with escrow");
+}
+
+#[test]
+fn test_get_combined_state_active_delivery() {
+    let env = Env::default();
+    let (client, shipper, driver, recipient, escrow_id, _) = setup_full(&env);
+    let metadata = get_test_metadata(&env, 1);
+    let delivery_id = client.create_delivery(&shipper, &recipient, &metadata);
+    client.assign_driver(&driver, &delivery_id, &driver);
+
+    let (delivery, _escrow, is_synchronized) = client.get_combined_state(&delivery_id);
+
+    assert_eq!(delivery.status, DeliveryStatus::Active);
+    assert!(is_synchronized, "Active delivery should be synchronized with escrow");
+}
+
+#[test]
+fn test_get_combined_state_in_transit_delivery() {
+    let env = Env::default();
+    let (client, shipper, driver, recipient, escrow_id, _) = setup_full(&env);
+    let metadata = get_test_metadata(&env, 1);
+    let delivery_id = client.create_delivery(&shipper, &recipient, &metadata);
+    client.assign_driver(&driver, &delivery_id, &driver);
+    client.mark_in_transit(&driver, &delivery_id);
+
+    let (delivery, _escrow, is_synchronized) = client.get_combined_state(&delivery_id);
+
+    assert_eq!(delivery.status, DeliveryStatus::InTransit);
+    assert!(is_synchronized, "InTransit delivery should be synchronized with escrow");
+}

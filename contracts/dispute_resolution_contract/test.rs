@@ -645,3 +645,93 @@ fn test_unauthorized_resolve_pay_driver_fails() {
     // Attacker (sender) tries to resolve dispute pay driver
     dispute_client.resolve_dispute_pay_driver(&sender, &did(9));
 }
+
+// ── DISPUTE TIME LIMIT VALIDATION (Issue #21) ────────────────────────────────
+
+#[test]
+#[should_panic(expected = "HostError: Error(Contract, #5)")] // InvalidState
+fn test_init_with_zero_dispute_time_limit() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let delivery_id = env.register(MockDeliveryContract, ());
+    let escrow_id = env.register(MockEscrowContract, ());
+    let dispute_id = env.register(DisputeResolutionContract, ());
+
+    let dispute_client = DisputeResolutionContractClient::new(&env, &dispute_id);
+
+    // Attempt to init with dispute_time_limit = 0 (should fail)
+    dispute_client.init(&admin, &delivery_id, &escrow_id, &0);
+}
+
+#[test]
+#[should_panic(expected = "HostError: Error(Contract, #5)")] // InvalidState
+fn test_init_with_below_minimum_dispute_time_limit() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let delivery_id = env.register(MockDeliveryContract, ());
+    let escrow_id = env.register(MockEscrowContract, ());
+    let dispute_id = env.register(DisputeResolutionContract, ());
+
+    let dispute_client = DisputeResolutionContractClient::new(&env, &dispute_id);
+
+    // Attempt to init with dispute_time_limit below minimum (should fail)
+    dispute_client.init(&admin, &delivery_id, &escrow_id, &1000);
+}
+
+#[test]
+fn test_init_with_minimum_dispute_time_limit() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let delivery_id = env.register(MockDeliveryContract, ());
+    let escrow_id = env.register(MockEscrowContract, ());
+    let dispute_id = env.register(DisputeResolutionContract, ());
+
+    let dispute_client = DisputeResolutionContractClient::new(&env, &dispute_id);
+
+    // Init with minimum dispute_time_limit should succeed
+    dispute_client.init(&admin, &delivery_id, &escrow_id, &86400);
+
+    let limit = dispute_client.get_dispute_time_limit();
+    assert_eq!(limit, 86400);
+}
+
+// ── SPLIT RESOLUTION PRECONDITION (Issue #22) ────────────────────────────────
+
+#[test]
+#[should_panic(expected = "HostError: Error(Contract, #5)")] // InvalidState
+fn test_split_resolve_with_non_paused_escrow_fails() {
+    let (env, admin, sender, recipient, driver, delivery_id, escrow_id, dispute_client) =
+        setup_test();
+
+    let token = Address::generate(&env);
+    let escrow_record = create_mock_escrow_record(
+        sender.clone(),
+        recipient.clone(),
+        driver.clone(),
+        token,
+        shared_types::EscrowStatus::Locked, // NOT Paused
+    );
+    set_mock_escrow(&env, &escrow_id, 10, &escrow_record);
+
+    let delivery_record = create_mock_delivery_record(
+        &env,
+        did(10),
+        sender.clone(),
+        recipient.clone(),
+        DeliveryStatus::Disputed,
+        None,
+    );
+    set_mock_delivery(&env, &delivery_id, did(10), &delivery_record);
+
+    // Raise dispute to create the dispute case
+    dispute_client.raise_dispute(&sender, &did(10));
+
+    // Attempt to split-resolve with non-Paused escrow should fail loudly
+    dispute_client.resolve_dispute_split_funds(&admin, &did(10), &5000);
+}

@@ -268,6 +268,49 @@ Add optional settlement contract for currency swaps.
 
 ---
 
+## ADR-010: Delivery-Escrow State Machine Coupling
+
+**Date**: 2025-01-15  
+**Status**: Accepted
+
+### Context
+Delivery completion and fund release involve two separate contracts (delivery_contract and escrow_contract) with independent state machines. Without enforced synchronization invariants, these states can silently desynchronize when cross-contract calls fail or are executed in unexpected orders, leading to locked or incorrectly released funds with no audit trail.
+
+### Decision
+Implement explicit state-machine invariants that ensure delivery and escrow states remain synchronized:
+- **Pending/Active** delivery → Locked escrow
+- **InTransit** delivery → Locked escrow  
+- **Delivered** delivery → Released escrow
+- **Disputed** delivery → Paused escrow
+- **Cancelled** delivery → Refunded escrow
+
+Provide a read-only `get_combined_state(delivery_id)` view that fetches both records and validates synchronization, enabling off-chain indexers and auditors to detect desynchronization.
+
+### Rationale
+- **Prevents silent failures**: Cross-contract call failures now panic rather than silently leaving escrow unmodified
+- **Auditability**: Combined state view enables off-chain detection of mismatched states
+- **Explicit invariants**: Clear documentation of expected state relationships
+- **Easier debugging**: Audit trail is explicit rather than requiring manual cross-referencing
+
+### Consequences
+**Positive**:
+- Impossible to reach an invalid state combination
+- Off-chain indexers can detect desynchronization instantly
+- Clear failure modes for contract coordination issues
+- Better protocol reliability
+
+**Negative**:
+- Slightly increased gas cost for combined state reads
+- Must carefully order cross-contract calls to avoid reversions
+- Requires coordination during emergency state corrections
+
+### Alternatives Considered
+- Single unified contract: Would increase contract size and reduce modularity
+- Event-based state sync: Relies on off-chain consistency which is not guaranteed
+- Optional validation: Allows silent desynchronization if not called
+
+---
+
 ## Template for New ADRs
 
 ```markdown

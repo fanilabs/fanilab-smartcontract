@@ -8,6 +8,7 @@ use soroban_sdk::{
 };
 
 const DISPUTE_REPUTATION_PENALTY: u32 = 10;
+const MIN_DISPUTE_TIME_LIMIT: u64 = 86400; // 1 day in seconds
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -53,6 +54,9 @@ impl DisputeResolutionContract {
     ) {
         if env.storage().instance().has(&DataKey::DeliveryContract) {
             panic_with_error!(&env, FaniLabError::AlreadyInitialized);
+        }
+        if dispute_time_limit < MIN_DISPUTE_TIME_LIMIT {
+            panic_with_error!(&env, FaniLabError::InvalidState);
         }
         env.storage()
             .instance()
@@ -336,12 +340,6 @@ impl DisputeResolutionContract {
             panic_with_error!(&env, FaniLabError::InvalidState);
         }
 
-        dispute.status = DisputeStatus::Split;
-        env.storage().persistent().set(&dispute_key, &dispute);
-        env.storage()
-            .persistent()
-            .extend_ttl(&dispute_key, 518400, 518400);
-
         let escrow_addr = Self::get_escrow_contract(env.clone());
         let escrow: EscrowRecord = env.invoke_contract(
             &escrow_addr,
@@ -349,18 +347,26 @@ impl DisputeResolutionContract {
             soroban_sdk::vec![&env, u64::from(delivery_id).into_val(&env)],
         );
 
-        if escrow.status == EscrowStatus::Paused {
-            let _: () = env.invoke_contract(
-                &escrow_addr,
-                &Symbol::new(&env, "resolve_dispute_split"),
-                soroban_sdk::vec![
-                    &env,
-                    caller.into_val(&env),
-                    u64::from(delivery_id).into_val(&env),
-                    sender_share_bps.into_val(&env),
-                ],
-            );
+        if escrow.status != EscrowStatus::Paused {
+            panic_with_error!(&env, FaniLabError::InvalidState);
         }
+
+        dispute.status = DisputeStatus::Split;
+        env.storage().persistent().set(&dispute_key, &dispute);
+        env.storage()
+            .persistent()
+            .extend_ttl(&dispute_key, 518400, 518400);
+
+        let _: () = env.invoke_contract(
+            &escrow_addr,
+            &Symbol::new(&env, "resolve_dispute_split"),
+            soroban_sdk::vec![
+                &env,
+                caller.into_val(&env),
+                u64::from(delivery_id).into_val(&env),
+                sender_share_bps.into_val(&env),
+            ],
+        );
 
         env.events().publish(
             (Symbol::new(&env, "dispute_resolved_split"), delivery_id),

@@ -28,8 +28,6 @@ pub enum DataKey {
     UserProfile(Address),
     DriverProfile(Address),
     AuthorizedContract(Address),
-    DeliveryContract,
-    DisputeContract,
 }
 
 #[contracttype]
@@ -66,12 +64,15 @@ impl IdentityReputationContract {
         }
         admin.require_auth();
         env.storage().instance().set(&DataKey::Admin, &admin);
+
+        // Register the initial two authorized contracts through the allowlist so
+        // they can be revoked or rotated later without a contract migration.
         env.storage()
-            .instance()
-            .set(&DataKey::DeliveryContract, &delivery_contract);
+            .persistent()
+            .set(&DataKey::AuthorizedContract(delivery_contract), &true);
         env.storage()
-            .instance()
-            .set(&DataKey::DisputeContract, &dispute_contract);
+            .persistent()
+            .set(&DataKey::AuthorizedContract(dispute_contract), &true);
     }
 
     pub fn get_admin(env: Env) -> Address {
@@ -210,18 +211,7 @@ impl IdentityReputationContract {
         weight_grams: u32,
         fragile: bool,
     ) {
-        let delivery_contract: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::DeliveryContract)
-            .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::NotInitialized));
-        let dispute_contract: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::DisputeContract)
-            .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::NotInitialized));
-
-        if caller != delivery_contract && caller != dispute_contract {
+        if !Self::is_authorized_contract(env.clone(), caller.clone()) {
             panic_with_error!(&env, FaniLabError::Unauthorized);
         }
         caller.require_auth();
@@ -254,18 +244,7 @@ impl IdentityReputationContract {
     }
 
     pub fn decrease_reputation(env: Env, caller: Address, driver: Address, points: u32) {
-        let delivery_contract: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::DeliveryContract)
-            .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::NotInitialized));
-        let dispute_contract: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::DisputeContract)
-            .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::NotInitialized));
-
-        if caller != delivery_contract && caller != dispute_contract {
+        if !Self::is_authorized_contract(env.clone(), caller.clone()) {
             panic_with_error!(&env, FaniLabError::Unauthorized);
         }
         caller.require_auth();

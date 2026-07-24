@@ -71,6 +71,77 @@ pub mod events {
     pub fn dispute_resolved(env: &Env) -> Symbol {
         Symbol::new(env, "dispute_resolved")
     }
+
+    pub fn delivery_cancelled(env: &Env) -> Symbol {
+        Symbol::new(env, "delivery_cancelled")
+    }
+
+    pub fn delivery_in_transit(env: &Env) -> Symbol {
+        Symbol::new(env, "delivery_in_transit")
+    }
+
+    // Fleet management events
+    pub fn fleet_registered(env: &Env) -> Symbol {
+        Symbol::new(env, "fleet_registered")
+    }
+
+    pub fn fleet_treasury_updated(env: &Env) -> Symbol {
+        Symbol::new(env, "fleet_treasury_updated")
+    }
+
+    pub fn driver_invited(env: &Env) -> Symbol {
+        Symbol::new(env, "driver_invited")
+    }
+
+    pub fn invite_accepted(env: &Env) -> Symbol {
+        Symbol::new(env, "invite_accepted")
+    }
+
+    pub fn driver_removed(env: &Env) -> Symbol {
+        Symbol::new(env, "driver_removed")
+    }
+
+    // Dispute resolution events
+    pub fn dispute_raised(env: &Env) -> Symbol {
+        Symbol::new(env, "dispute_raised")
+    }
+
+    pub fn evidence_added(env: &Env) -> Symbol {
+        Symbol::new(env, "evidence_added")
+    }
+
+    pub fn dispute_resolved_refund(env: &Env) -> Symbol {
+        Symbol::new(env, "dispute_resolved_refund")
+    }
+
+    pub fn dispute_resolved_split(env: &Env) -> Symbol {
+        Symbol::new(env, "dispute_resolved_split")
+    }
+
+    pub fn dispute_resolved_payout(env: &Env) -> Symbol {
+        Symbol::new(env, "dispute_resolved_payout")
+    }
+
+    // Identity and reputation events
+    pub fn driver_registered(env: &Env) -> Symbol {
+        Symbol::new(env, "driver_registered")
+    }
+
+    pub fn user_registered(env: &Env) -> Symbol {
+        Symbol::new(env, "user_registered")
+    }
+
+    pub fn kyc_status_updated(env: &Env) -> Symbol {
+        Symbol::new(env, "kyc_status_updated")
+    }
+
+    pub fn reputation_increased(env: &Env) -> Symbol {
+        Symbol::new(env, "reputation_increased")
+    }
+
+    pub fn reputation_decreased(env: &Env) -> Symbol {
+        Symbol::new(env, "reputation_decreased")
+    }
 }
 
 #[contracttype]
@@ -150,6 +221,153 @@ pub struct EscrowRefundedEvent {
     pub sender: Address,
     /// Amount returned to the sender.
     pub amount: i128,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DisputeResolvedEvent {
+    /// Delivery identifier whose dispute was resolved.
+    pub delivery_id: u64,
+    /// Admin address that resolved the dispute.
+    pub resolver: Address,
+}
+
+// ── Fleet management event payloads ──────────────────────────────────────────
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FleetRegisteredEvent {
+    /// Newly assigned fleet identifier.
+    pub fleet_id: u64,
+    /// Address of the fleet owner.
+    pub owner: Address,
+    /// Treasury wallet address for payouts.
+    pub treasury: Address,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FleetTreasuryUpdatedEvent {
+    /// Fleet identifier whose treasury was updated.
+    pub fleet_id: u64,
+    /// Fleet owner address that authorized the change.
+    pub owner: Address,
+    /// New treasury wallet address.
+    pub treasury: Address,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DriverInvitedEvent {
+    /// Fleet the driver was invited to.
+    pub fleet_id: u64,
+    /// Driver address that received the invite.
+    pub driver: Address,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InviteAcceptedEvent {
+    /// Fleet the driver accepted membership in.
+    pub fleet_id: u64,
+    /// Driver address that accepted the invite.
+    pub driver: Address,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DriverRemovedEvent {
+    /// Fleet the driver was removed from.
+    pub fleet_id: u64,
+    /// Driver address that was removed.
+    pub driver: Address,
+}
+
+// ── Dispute resolution event payloads ────────────────────────────────────────
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DisputeRaisedEvent {
+    /// Delivery identifier the dispute was raised on.
+    pub delivery_id: u64,
+    /// Address that raised the dispute.
+    pub caller: Address,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DisputeResolvedRefundEvent {
+    /// Delivery identifier whose dispute was resolved with a refund.
+    pub delivery_id: u64,
+    /// Admin address that resolved the dispute.
+    pub caller: Address,
+    /// Driver address penalized by the resolution.
+    pub driver: Address,
+    /// Reputation penalty applied to the driver.
+    pub penalty: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DisputeResolvedSplitEvent {
+    /// Delivery identifier whose dispute was resolved with a split.
+    pub delivery_id: u64,
+    /// Admin address that resolved the dispute.
+    pub caller: Address,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DisputeResolvedPayoutEvent {
+    /// Delivery identifier whose dispute was resolved with driver payout.
+    pub delivery_id: u64,
+    /// Admin address that resolved the dispute.
+    pub caller: Address,
+}
+
+// ── Identity and reputation event payloads ───────────────────────────────────
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DriverRegisteredEvent {
+    /// Driver address that was registered.
+    pub driver: Address,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UserRegisteredEvent {
+    /// User address that was registered.
+    pub user: Address,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct KycStatusUpdatedEvent {
+    /// Driver address whose KYC status was updated.
+    pub driver: Address,
+    /// New KYC verification state.
+    pub kyc_verified: bool,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReputationIncreasedEvent {
+    /// Driver address whose reputation was increased.
+    pub driver: Address,
+    /// Delivery identifier that triggered the change.
+    pub delivery_id: u64,
+    /// Points added to the driver's reputation score.
+    pub points: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReputationDecreasedEvent {
+    /// Driver address whose reputation was decreased.
+    pub driver: Address,
+    /// Points deducted from the driver's reputation score.
+    pub points: u32,
 }
 
 #[contracttype]
@@ -292,8 +510,13 @@ mod test {
     use super::{
         delivery_key, escrow_key, CargoCategory, CargoDescriptor, DeliveryConfirmedEvent,
         DeliveryCreatedEvent, DeliveryDisputedEvent, DeliveryId, DeliveryMetadata, DeliveryStatus,
-        DriverAssignedEvent, EscrowFundedEvent, EscrowRefundedEvent, EscrowReleasedEvent,
-        EscrowState, FaniLabError, PartyAddresses, StorageKey,
+        DisputeRaisedEvent, DisputeResolvedEvent, DisputeResolvedPayoutEvent,
+        DisputeResolvedRefundEvent, DisputeResolvedSplitEvent, DriverAssignedEvent,
+        DriverInvitedEvent, DriverRegisteredEvent, DriverRemovedEvent, EscrowFundedEvent,
+        EscrowRefundedEvent, EscrowReleasedEvent, EscrowState, FaniLabError,
+        FleetRegisteredEvent, FleetTreasuryUpdatedEvent, InviteAcceptedEvent,
+        KycStatusUpdatedEvent, PartyAddresses, ReputationDecreasedEvent,
+        ReputationIncreasedEvent, StorageKey, UserRegisteredEvent,
     };
     use soroban_sdk::{testutils::Address as _, Address, Env, String};
 

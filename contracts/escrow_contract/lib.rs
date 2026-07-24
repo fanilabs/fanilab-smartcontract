@@ -14,6 +14,7 @@ pub mod constants {
     pub const ESCROW_TTL_THRESHOLD: u32 = 518400;
     pub const ESCROW_TTL_EXTEND_TO: u32 = 518400;
     pub const PROTOCOL_VERSION: u32 = 1;
+    pub const MAX_BATCH_SIZE: u32 = 100;
 }
 
 fn require_admin(env: &Env, caller: &Address) {
@@ -327,6 +328,59 @@ impl EscrowContract {
             (events::escrow_funded(&env), delivery_id),
             (sender, recipient, amount),
         );
+    }
+
+    /// Create multiple escrows in a single transaction.  Sender must authorize.
+    /// Takes a list of (delivery_id, driver, amount) tuples. All escrows use the
+    /// configured protocol token. Returns the count of escrows created.
+    pub fn create_escrows_batch(
+        env: Env,
+        sender: Address,
+        recipient: Address,
+        token: Address,
+        escrow_list: soroban_sdk::Vec<(u64, Address, i128)>,
+    ) -> u32 {
+        sender.require_auth();
+
+        if escrow_list.len() > constants::MAX_BATCH_SIZE as u32 {
+            panic_with_error!(&env, EscrowError::InvalidState);
+        }
+
+        let mut count = 0u32;
+        for i in 0..escrow_list.len() {
+            if let Some((delivery_id, driver, amount)) = escrow_list.get(i) {
+                if env.storage().persistent().has(&escrow_key(delivery_id)) {
+                    panic_with_error!(&env, EscrowError::DuplicateDelivery);
+                }
+                token::Client::new(&env, &token).transfer(
+                    &sender,
+                    &env.current_contract_address(),
+                    &amount,
+                );
+                save_escrow(
+                    &env,
+                    delivery_id,
+                    &EscrowRecord {
+                        sender: sender.clone(),
+                        recipient: recipient.clone(),
+                        driver,
+                        token: token.clone(),
+                        amount,
+                        status: EscrowStatus::Locked,
+                        created_at: env.ledger().timestamp(),
+                        disputed_by: None,
+                        disputed_at: None,
+                    },
+                );
+                env.events().publish(
+                    (events::escrow_funded(&env), delivery_id),
+                    (sender.clone(), recipient.clone(), amount),
+                );
+                count += 1;
+            }
+        }
+
+        count
     }
 
     pub fn release_escrow(env: Env, caller: Address, delivery_id: u64) {

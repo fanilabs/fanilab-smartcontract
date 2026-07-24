@@ -10,6 +10,9 @@ use soroban_sdk::{
 
 // Local DeliveryMetadata removed in favor of shared_types::DeliveryMetadata
 
+/// Maximum deliveries per batch to stay within Soroban resource limits.
+pub const MAX_BATCH_SIZE: u32 = 100;
+
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
@@ -117,6 +120,67 @@ impl DeliveryContract {
         );
 
         delivery_id
+    }
+
+    /// Create multiple deliveries in a single transaction.  Sender must authorize.
+    /// Returns Vec of created delivery IDs.  Each delivery funds escrow individually
+    /// via cross-contract calls to the escrow contract.
+    pub fn create_deliveries_batch(
+        env: Env,
+        sender: Address,
+        recipient: Address,
+        metadata_list: soroban_sdk::Vec<DeliveryMetadata>,
+    ) -> soroban_sdk::Vec<DeliveryId> {
+        sender.require_auth();
+
+        if metadata_list.len() > MAX_BATCH_SIZE as u32 {
+            panic!("BatchTooLarge");
+        }
+
+        let mut result = soroban_sdk::Vec::new(&env);
+        let mut counter: u64 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::DeliveryCounter)
+            .unwrap_or(0);
+
+        let timestamp = env.ledger().timestamp();
+
+        for i in 0..metadata_list.len() {
+            if let Some(metadata) = metadata_list.get(i) {
+                counter += 1;
+                env.storage()
+                    .persistent()
+                    .set(&DataKey::DeliveryCounter, &counter);
+
+                let delivery_id = DeliveryId::from(counter);
+
+                let record = DeliveryRecord {
+                    delivery_id,
+                    sender: sender.clone(),
+                    recipient: recipient.clone(),
+                    driver: None,
+                    status: DeliveryStatus::Pending,
+                    metadata,
+                    created_at: timestamp,
+                    delivered_at: None,
+                    transit_started_at: None,
+                };
+
+                let key = delivery_key(delivery_id);
+                env.storage().persistent().set(&key, &record);
+                env.storage().persistent().extend_ttl(&key, 518400, 518400);
+
+                env.events().publish(
+                    (soroban_sdk::Symbol::new(&env, "delivery_created"),),
+                    (delivery_id, sender.clone()),
+                );
+
+                result.push_back(delivery_id);
+            }
+        }
+
+        result
     }
 
     pub fn cancel_delivery(env: Env, sender: Address, delivery_id: DeliveryId) {

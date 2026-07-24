@@ -61,3 +61,23 @@ jobs:
         cargo outdated --exit-code 1
       continue-on-error: true
 
+  wasm_target_drift_check:
+    name: Prevent wasm32-unknown-unknown Target Drift
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Check deployment scripts use wasm32v1-none
+      run: |
+        echo "Scanning scripts/ for legacy wasm32-unknown-unknown target references..."
+        if grep -rn "wasm32-unknown-unknown" scripts/; then
+          echo ""
+          echo "❌ ERROR: One or more deployment scripts still reference the old"
+          echo "   'wasm32-unknown-unknown' target. Soroban SDK 27+ requires"
+          echo "   'wasm32v1-none'. Update all occurrences shown above."
+          exit 1
+        fi
+        echo "✅ No legacy wasm target references found in scripts/."
+

@@ -43,7 +43,7 @@ echo ""
 # Build contracts
 echo "${BLUE}Building contracts...${NC}"
 cd "$PROJECT_ROOT"
-cargo build --target wasm32-unknown-unknown --release
+cargo build --target wasm32v1-none --release
 
 if [ $? -ne 0 ]; then
     echo "${RED}❌ Build failed${NC}"
@@ -56,7 +56,7 @@ echo ""
 # Deploy function
 deploy_contract() {
     local contract_name=$1
-    local wasm_path="$PROJECT_ROOT/target/wasm32-unknown-unknown/release/${contract_name}.wasm"
+    local wasm_path="$PROJECT_ROOT/target/wasm32v1-none/release/${contract_name}.wasm"
     
     echo "${YELLOW}Deploying $contract_name...${NC}"
     

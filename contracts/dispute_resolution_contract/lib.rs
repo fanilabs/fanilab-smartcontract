@@ -1,7 +1,10 @@
 #![no_std]
 #![allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional
 
-use shared_types::{DeliveryId, DeliveryStatus, EscrowRecord, EscrowStatus, FaniLabError};
+use shared_types::{
+    events, DeliveryId, DeliveryStatus, DisputeRaisedEvent, DisputeResolvedPayoutEvent,
+    DisputeResolvedRefundEvent, DisputeResolvedSplitEvent, EscrowRecord, EscrowStatus, FaniLabError,
+};
 use soroban_sdk::{
     contract, contractimpl, contracttype, panic_with_error, Address, BytesN, Env, IntoVal, Symbol,
     Vec,
@@ -197,8 +200,11 @@ impl DisputeResolutionContract {
             .extend_ttl(&dispute_key, 518400, 518400);
 
         env.events().publish(
-            (Symbol::new(&env, "dispute_raised"), delivery_id),
-            (caller, delivery_id),
+            (events::dispute_raised(&env), delivery_id),
+            DisputeRaisedEvent {
+                delivery_id: u64::from(delivery_id),
+                caller,
+            },
         );
     }
 
@@ -239,7 +245,7 @@ impl DisputeResolutionContract {
             .extend_ttl(&dispute_key, 518400, 518400);
 
         env.events().publish(
-            (Symbol::new(&env, "evidence_added"), delivery_id),
+            (events::evidence_added(&env), delivery_id),
             (caller, delivery_id, evidence_hash),
         );
     }
@@ -309,8 +315,13 @@ impl DisputeResolutionContract {
         );
 
         env.events().publish(
-            (Symbol::new(&env, "dispute_resolved_refund"), delivery_id),
-            (caller, delivery_id, driver, DISPUTE_REPUTATION_PENALTY),
+            (events::dispute_resolved_refund(&env), delivery_id),
+            DisputeResolvedRefundEvent {
+                delivery_id: u64::from(delivery_id),
+                caller,
+                driver,
+                penalty: DISPUTE_REPUTATION_PENALTY,
+            },
         );
     }
 
@@ -363,8 +374,11 @@ impl DisputeResolutionContract {
         }
 
         env.events().publish(
-            (Symbol::new(&env, "dispute_resolved_split"), delivery_id),
-            (caller, delivery_id),
+            (events::dispute_resolved_split(&env), delivery_id),
+            DisputeResolvedSplitEvent {
+                delivery_id: u64::from(delivery_id),
+                caller,
+            },
         );
     }
 
@@ -406,8 +420,11 @@ impl DisputeResolutionContract {
         );
 
         env.events().publish(
-            (Symbol::new(&env, "dispute_resolved_payout"), delivery_id),
-            (caller, delivery_id),
+            (events::dispute_resolved_payout(&env), delivery_id),
+            DisputeResolvedPayoutEvent {
+                delivery_id: u64::from(delivery_id),
+                caller,
+            },
         );
     }
 

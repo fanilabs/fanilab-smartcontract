@@ -1,6 +1,10 @@
 #![no_std]
 #![allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional
 
+use shared_types::{
+    events, DriverInvitedEvent, DriverRemovedEvent, FleetRegisteredEvent,
+    FleetTreasuryUpdatedEvent, InviteAcceptedEvent,
+};
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, Address, Env, IntoVal,
     Symbol,
@@ -146,8 +150,12 @@ impl FleetManagementContract {
 
         // Emit event: topic = "fleet_registered", data = (fleet_id, owner, treasury).
         env.events().publish(
-            (Symbol::new(&env, "fleet_registered"),),
-            (fleet_id, owner, treasury),
+            (events::fleet_registered(&env),),
+            FleetRegisteredEvent {
+                fleet_id,
+                owner,
+                treasury,
+            },
         );
 
         fleet_id
@@ -185,8 +193,12 @@ impl FleetManagementContract {
             .extend_ttl(&fleet_key, 518400, 518400);
 
         env.events().publish(
-            (Symbol::new(&env, "fleet_treasury_updated"),),
-            (fleet_id, owner, treasury),
+            (events::fleet_treasury_updated(&env),),
+            FleetTreasuryUpdatedEvent {
+                fleet_id,
+                owner,
+                treasury,
+            },
         );
     }
 
@@ -235,7 +247,7 @@ impl FleetManagementContract {
 
         // Emit event.
         env.events()
-            .publish((Symbol::new(&env, "driver_invited"),), (fleet_id, driver));
+            .publish((events::driver_invited(&env),), DriverInvitedEvent { fleet_id, driver });
     }
 
     // ── Issue #69 — accept_fleet_invite ───────────────────────────────────────
@@ -286,7 +298,7 @@ impl FleetManagementContract {
 
         // Emit event.
         env.events()
-            .publish((Symbol::new(&env, "invite_accepted"),), (fleet_id, driver));
+            .publish((events::invite_accepted(&env),), InviteAcceptedEvent { fleet_id, driver });
     }
 
     // ── Issue #70 — remove_driver_from_fleet ──────────────────────────────────
@@ -334,7 +346,7 @@ impl FleetManagementContract {
 
         // Emit event.
         env.events()
-            .publish((Symbol::new(&env, "driver_removed"),), (fleet_id, driver));
+            .publish((events::driver_removed(&env),), DriverRemovedEvent { fleet_id, driver });
     }
 
     // ── Issue #72 — get_payout_address ───────────────────────────────────────

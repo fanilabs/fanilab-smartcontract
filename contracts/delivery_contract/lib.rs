@@ -2,7 +2,10 @@
 #![allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional
 
 use shared_types::FaniLabError;
-use shared_types::{delivery_key, DeliveryMetadata, DriverProfile, StorageKey};
+use shared_types::{
+    delivery_key, events, DeliveryCreatedEvent, DeliveryConfirmedEvent, DeliveryDisputedEvent,
+    DriverAssignedEvent, DeliveryMetadata, DriverProfile, StorageKey,
+};
 pub use shared_types::{DeliveryId, DeliveryRecord, DeliveryStatus};
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, Address, Env, Symbol,
@@ -112,8 +115,12 @@ impl DeliveryContract {
         env.storage().persistent().extend_ttl(&key, 518400, 518400);
 
         env.events().publish(
-            (soroban_sdk::Symbol::new(&env, "delivery_created"),),
-            (delivery_id, sender),
+            (events::delivery_created(&env),),
+            DeliveryCreatedEvent {
+                delivery_id: delivery_id.value(),
+                sender,
+                amount: 0,
+            },
         );
 
         delivery_id
@@ -158,7 +165,7 @@ impl DeliveryContract {
         env.storage().persistent().extend_ttl(&key, 518400, 518400);
 
         env.events().publish(
-            (soroban_sdk::Symbol::new(&env, "delivery_cancelled"),),
+            (events::delivery_cancelled(&env),),
             (delivery_id, sender),
         );
     }
@@ -190,8 +197,11 @@ impl DeliveryContract {
         env.storage().persistent().extend_ttl(&key, 518400, 518400);
 
         env.events().publish(
-            (Symbol::new(&env, "driver_assigned"),),
-            (delivery_id, driver),
+            (events::driver_assigned(&env),),
+            DriverAssignedEvent {
+                delivery_id: delivery_id.value(),
+                driver,
+            },
         );
     }
 
@@ -224,7 +234,7 @@ impl DeliveryContract {
         env.storage().persistent().extend_ttl(&key, 518400, 518400);
 
         env.events().publish(
-            (Symbol::new(&env, "DeliveryInTransit"),),
+            (events::delivery_in_transit(&env),),
             (delivery_id, driver, timestamp),
         );
     }
@@ -293,8 +303,12 @@ impl DeliveryContract {
         }
 
         env.events().publish(
-            (soroban_sdk::Symbol::new(&env, "delivery_confirmed"),),
-            (delivery_id, recipient),
+            (events::delivery_confirmed(&env),),
+            DeliveryConfirmedEvent {
+                delivery_id: delivery_id.value(),
+                recipient,
+                timestamp: delivery.delivered_at.unwrap_or(0),
+            },
         );
     }
 
@@ -346,8 +360,12 @@ impl DeliveryContract {
         env.storage().persistent().extend_ttl(&key, 518400, 518400);
 
         env.events().publish(
-            (Symbol::new(&env, "delivery_disputed"),),
-            (delivery_id, caller, timestamp),
+            (events::delivery_disputed(&env),),
+            DeliveryDisputedEvent {
+                delivery_id: delivery_id.value(),
+                reporter: caller,
+                timestamp,
+            },
         );
     }
 

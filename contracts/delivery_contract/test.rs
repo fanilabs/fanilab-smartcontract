@@ -340,15 +340,15 @@ fn test_happy_path_full_lifecycle() {
     let delivery = client.get_delivery(&delivery_id);
     assert_eq!(delivery.status, DeliveryStatus::Delivered);
 
-    let was_released: u64 = env.as_contract(&escrow_id, || {
+    let was_marked_holdback: u64 = env.as_contract(&escrow_id, || {
         env.storage()
             .temporary()
-            .get(&Symbol::new(&env, "released"))
+            .get(&Symbol::new(&env, "holdback"))
             .unwrap_or(0u64)
     });
     assert_eq!(
-        was_released, delivery_id,
-        "Expected escrow to be released after delivery"
+        was_marked_holdback, delivery_id,
+        "Expected escrow to be placed in holdback after delivery confirmation"
     );
 }
 
@@ -1709,10 +1709,12 @@ fn test_create_delivery_and_batch_emit_consistent_events() {
 
     let shipper = Address::generate(&env);
     let recipient = Address::generate(&env);
+    let admin = Address::generate(&env);
+    let escrow_contract = env.register(MockEscrowContract, ());
     let contract_id = env.register(DeliveryContract, ());
     let client = DeliveryContractClient::new(&env, &contract_id);
 
-    client.init(&Address::generate(&env));
+    client.init(&admin, &escrow_contract);
 
     // Create single delivery via create_delivery
     let cargo = shared_types::CargoDescriptor {

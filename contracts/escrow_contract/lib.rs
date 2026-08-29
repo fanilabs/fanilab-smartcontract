@@ -301,7 +301,7 @@ fn settle_holdback_escrow(env: &Env, delivery_id: u64, mut record: EscrowRecord)
     );
 
     let fleet_management = get_fleet_management_contract(env);
-    settle_escrow_funds(env, &record, fleet_management);
+    settle_escrow_funds(env, delivery_id, &record, fleet_management);
 
     (driver_amount, platform_fee)
 }
@@ -339,6 +339,7 @@ enum DataKey {
     PendingSettlementContract,
     EscrowIndex(Address, u32, u32),
     EscrowIndexLen(Address, u32),
+    EscrowPayoutAddress(u64),
     Paused,
     FleetManagementContract,
     DisputeResolutionContract,
@@ -397,6 +398,8 @@ pub enum EscrowError {
     InvalidAmount = 7,
     NoPendingSettlementChange = 8,
     TimelockNotElapsed = 9,
+    InvalidDriver = 10,
+    InvalidParties = 11,
 }
 
 #[contracttype]
@@ -714,7 +717,7 @@ impl EscrowContract {
             .set(&DataKey::IdentityReputationContract, &identity_contract);
     }
 
-    pub fn get_identity_reputation_contract_public(env: Env) -> Option<Address> {
+    pub fn get_identity_contract(env: Env) -> Option<Address> {
         env.storage()
             .instance()
             .get(&DataKey::IdentityReputationContract)
@@ -798,6 +801,12 @@ impl EscrowContract {
     ) {
         sender.require_auth();
         require_not_paused(&env);
+        if sender == recipient {
+            panic_with_error!(&env, EscrowError::InvalidParties);
+        }
+        if driver == sender || driver == recipient {
+            panic_with_error!(&env, EscrowError::InvalidDriver);
+        }
         if amount <= 0 {
             panic_with_error!(&env, EscrowError::InvalidAmount);
         }
@@ -808,7 +817,7 @@ impl EscrowContract {
         if token != config.token {
             panic_with_error!(&env, EscrowError::InvalidToken);
         }
-        let payout_address = if let (Some(fleet_addr), Some(fid)) =
+        let payout_address: Option<Address> = if let (Some(fleet_addr), Some(fid)) =
             (get_fleet_management_contract(&env), fleet_id)
         {
             Some(env.invoke_contract(
@@ -937,6 +946,10 @@ impl EscrowContract {
         sender.require_auth();
         require_not_paused(&env);
 
+        if sender == recipient {
+            panic_with_error!(&env, EscrowError::InvalidParties);
+        }
+
         if escrow_list.len() > constants::MAX_BATCH_SIZE {
             panic_with_error!(&env, EscrowError::InvalidState);
         }
@@ -964,6 +977,9 @@ impl EscrowContract {
         let mut batch_total: i128 = 0;
         for i in 0..escrow_list.len() {
             if let Some((delivery_id, driver, amount)) = escrow_list.get(i) {
+                if driver == sender || driver == recipient {
+                    panic_with_error!(&env, EscrowError::InvalidDriver);
+                }
                 if amount <= 0 {
                     panic_with_error!(&env, EscrowError::InvalidAmount);
                 }
@@ -1543,9 +1559,16 @@ impl EscrowContract {
         );
     }
 
-        let fleet_management = get_fleet_management_contract(&env);
-        settle_escrow_funds(&env, delivery_id, &record, fleet_management);
-
+    #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
+    pub fn set_holdback_window(env: Env, admin: Address, new_window_seconds: u64) {
+        admin.require_auth();
+        require_admin(&env, &admin);
+        if new_window_seconds < constants::MIN_HOLDBACK_WINDOW_SECONDS {
+            panic_with_error!(&env, EscrowError::InvalidState);
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::HoldbackWindow, &new_window_seconds);
         env.events().publish(
             (Symbol::new(&env, "holdback_window_updated"),),
             (admin, new_window_seconds),
@@ -1637,8 +1660,12 @@ impl EscrowContract {
         );
 
         env.events().publish(
-            (events::escrow_refunded(&env), delivery_id),
-            (record.sender, record.amount),
+            (events::escrow_refunded(&env),),
+            shared_types::EscrowRefundedEvent {
+                delivery_id,
+                sender: record.sender,
+                amount: record.amount,
+            },
         );
     }
 

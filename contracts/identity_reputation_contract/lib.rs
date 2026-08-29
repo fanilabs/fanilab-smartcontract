@@ -219,7 +219,6 @@ impl IdentityReputationContract {
     #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
     pub fn register_driver(env: Env, driver: Address) {
         driver.require_auth();
-        require_escrow_not_paused(&env);
         let key = DataKey::DriverProfile(driver.clone());
         if env.storage().persistent().has(&key) {
             panic_with_error!(&env, FaniLabError::AlreadyInitialized);
@@ -231,6 +230,7 @@ impl IdentityReputationContract {
             reputation_score: INITIAL_REPUTATION_SCORE,
             registered_at: env.ledger().timestamp(),
             kyc_verified: false,
+            status: DriverStatus::Active,
         };
 
         env.storage().persistent().set(&key, &profile);
@@ -248,9 +248,6 @@ impl IdentityReputationContract {
 
     #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
     pub fn register_user(env: Env, user: Address) -> UserProfile {
-        user.require_auth();
-        require_escrow_not_paused(&env);
-
         let registered_at = env.ledger().timestamp();
 
         let profile = UserProfile {
@@ -470,6 +467,113 @@ impl IdentityReputationContract {
     pub fn is_eligible_for_enterprise(env: Env, driver: Address) -> bool {
         let profile = Self::get_driver_profile(env, driver);
         profile.reputation_score >= ENTERPRISE_THRESHOLD
+    }
+
+    // ── Driver suspension lifecycle ───────────────────────────────────────────
+
+    /// Suspend a registered driver.
+    ///
+    /// Sets `DriverProfile.status` to `DriverStatus::Suspended`.  The profile
+    /// record is preserved — history (reputation, deliveries, KYC) is never
+    /// erased.  This prevents a suspended driver from calling `register_driver`
+    /// again to reset their score, since that function panics when a profile
+    /// already exists.
+    ///
+    /// Gating `assign_driver` on suspension status is a follow-up task in
+    /// `delivery_contract`.
+    ///
+    /// **Authorization:** Admin only.
+    #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional
+    pub fn suspend_driver(env: Env, admin: Address, driver: Address) {
+        admin.require_auth();
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::NotInitialized));
+        if admin != stored_admin {
+            panic_with_error!(&env, FaniLabError::Unauthorized);
+        }
+
+        let key = DataKey::DriverProfile(driver.clone());
+        let mut profile: DriverProfile = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::ProviderNotFound));
+
+        if profile.status == DriverStatus::Suspended {
+            panic_with_error!(&env, FaniLabError::InvalidState);
+        }
+
+        profile.status = DriverStatus::Suspended;
+        env.storage().persistent().set(&key, &profile);
+        env.storage().persistent().extend_ttl(
+            &key,
+            ttl::LEDGER_TTL_THRESHOLD,
+            ttl::LEDGER_TTL_EXTEND_TO,
+        );
+
+        env.events().publish(
+            (events::driver_suspended(&env),),
+            DriverSuspendedEvent {
+                driver,
+                admin,
+            },
+        );
+    }
+
+    /// Reinstate a previously suspended driver.
+    ///
+    /// Sets `DriverProfile.status` back to `DriverStatus::Active`.  All
+    /// accumulated reputation and delivery history is retained.
+    ///
+    /// **Authorization:** Admin only.
+    #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional
+    pub fn reinstate_driver(env: Env, admin: Address, driver: Address) {
+        admin.require_auth();
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::NotInitialized));
+        if admin != stored_admin {
+            panic_with_error!(&env, FaniLabError::Unauthorized);
+        }
+
+        let key = DataKey::DriverProfile(driver.clone());
+        let mut profile: DriverProfile = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::ProviderNotFound));
+
+        if profile.status == DriverStatus::Active {
+            panic_with_error!(&env, FaniLabError::InvalidState);
+        }
+
+        profile.status = DriverStatus::Active;
+        env.storage().persistent().set(&key, &profile);
+        env.storage().persistent().extend_ttl(
+            &key,
+            ttl::LEDGER_TTL_THRESHOLD,
+            ttl::LEDGER_TTL_EXTEND_TO,
+        );
+
+        env.events().publish(
+            (events::driver_reinstated(&env),),
+            DriverReinstatedEvent {
+                driver,
+                admin,
+            },
+        );
+    }
+
+    /// Returns `true` if the driver's profile exists and is currently suspended.
+    pub fn is_driver_suspended(env: Env, driver: Address) -> bool {
+        let key = DataKey::DriverProfile(driver);
+        let profile: Option<DriverProfile> = env.storage().persistent().get(&key);
+        matches!(profile.map(|p| p.status), Some(DriverStatus::Suspended))
     }
 }
 

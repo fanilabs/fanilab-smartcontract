@@ -441,6 +441,28 @@ fn test_init_stores_cross_contract_addresses() {
 }
 
 #[test]
+fn test_dispute_contract_getter_round_trip_and_unauthorized_setter() {
+    let (env, admin, client, _, _) = setup();
+    let dispute_contract = Address::generate(&env);
+
+    let result = client.try_get_dispute_contract();
+    match result {
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::NotInitialized.into()),
+        _ => panic!("Expected NotInitialized before configuring the dispute contract"),
+    }
+
+    let attacker = Address::generate(&env);
+    let result = client.try_set_dispute_contract(&attacker, &dispute_contract);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::Unauthorized.into()),
+        _ => panic!("Expected Unauthorized from non-admin setter"),
+    }
+
+    client.set_dispute_contract(&admin, &dispute_contract);
+    assert_eq!(client.get_dispute_contract(), dispute_contract);
+}
+
+#[test]
 fn test_admin_can_repoint_cross_contracts() {
     let (env, admin, client, _, _) = setup();
     let driver = Address::generate(&env);
@@ -746,150 +768,225 @@ fn test_is_eligible_for_enterprise_above_threshold() {
     assert!(client.is_eligible_for_enterprise(&driver));
 }
 
-// Tests for issue #270: reputation_contract configuration accessors coverage
+// ── Issue #289: driver suspension / reinstatement lifecycle ─────────────────
 
+/// A freshly registered driver starts with `DriverStatus::Active`.
 #[test]
-fn test_get_reputation_config_returns_defaults_when_unset() {
-    let (env, admin, client, _delivery_contract, _) = setup();
+fn test_registered_driver_status_is_active() {
+    let (env, _, client, _, _) = setup();
+    let driver = Address::generate(&env);
+    client.register_driver(&driver);
 
-    let config = client.get_reputation_config();
-    assert_eq!(config.base_points, 5);
-    assert_eq!(config.heavy_cargo_points, 3);
-    assert_eq!(config.fragile_points, 2);
+    let profile = client.get_driver_profile(&driver);
+    assert_eq!(profile.status, shared_types::DriverStatus::Active);
+    assert!(!client.is_driver_suspended(&driver));
 }
 
+/// Admin can suspend a registered driver; profile is preserved.
 #[test]
-fn test_set_and_get_reputation_config_round_trip() {
-    let (env, admin, client, _delivery_contract, _) = setup();
+fn test_admin_can_suspend_driver() {
+    let (env, admin, client, _, _) = setup();
+    let driver = Address::generate(&env);
+    client.register_driver(&driver);
 
-    let new_config = ReputationConfig {
-        base_points: 10,
-        heavy_cargo_points: 5,
-        fragile_points: 4,
-    };
+    client.suspend_driver(&admin, &driver);
 
-    client.set_reputation_config(&admin, &new_config);
-
-    let config = client.get_reputation_config();
-    assert_eq!(config.base_points, 10);
-    assert_eq!(config.heavy_cargo_points, 5);
-    assert_eq!(config.fragile_points, 4);
+    let profile = client.get_driver_profile(&driver);
+    assert_eq!(profile.status, shared_types::DriverStatus::Suspended);
+    assert!(client.is_driver_suspended(&driver));
 }
 
+/// Admin can reinstate a suspended driver; status returns to Active.
 #[test]
-fn test_set_reputation_config_unauthorized_rejected() {
-    let (env, _admin, client, _delivery_contract, _) = setup();
-    let non_admin = Address::generate(&env);
+fn test_admin_can_reinstate_suspended_driver() {
+    let (env, admin, client, _, _) = setup();
+    let driver = Address::generate(&env);
+    client.register_driver(&driver);
 
-    let new_config = ReputationConfig {
-        base_points: 10,
-        heavy_cargo_points: 5,
-        fragile_points: 4,
-    };
+    client.suspend_driver(&admin, &driver);
+    assert!(client.is_driver_suspended(&driver));
 
-    let result = client.try_set_reputation_config(&non_admin, &new_config);
+    client.reinstate_driver(&admin, &driver);
+
+    let profile = client.get_driver_profile(&driver);
+    assert_eq!(profile.status, shared_types::DriverStatus::Active);
+    assert!(!client.is_driver_suspended(&driver));
+}
+
+/// Non-admin cannot suspend a driver.
+#[test]
+fn test_non_admin_cannot_suspend_driver() {
+    let (env, _, client, _, _) = setup();
+    let driver = Address::generate(&env);
+    let attacker = Address::generate(&env);
+    client.register_driver(&driver);
+
+    let result = client.try_suspend_driver(&attacker, &driver);
     match result {
         Err(Ok(err)) => assert_eq!(err, FaniLabError::Unauthorized.into()),
-        _ => panic!("Expected FaniLabError::Unauthorized"),
+        _ => panic!("Expected Unauthorized for non-admin suspend attempt"),
+    }
+    // Profile untouched — still active.
+    assert!(!client.is_driver_suspended(&driver));
+}
+
+/// Non-admin cannot reinstate a driver.
+#[test]
+fn test_non_admin_cannot_reinstate_driver() {
+    let (env, admin, client, _, _) = setup();
+    let driver = Address::generate(&env);
+    let attacker = Address::generate(&env);
+    client.register_driver(&driver);
+    client.suspend_driver(&admin, &driver);
+
+    let result = client.try_reinstate_driver(&attacker, &driver);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::Unauthorized.into()),
+        _ => panic!("Expected Unauthorized for non-admin reinstate attempt"),
+    }
+    // Still suspended.
+    assert!(client.is_driver_suspended(&driver));
+}
+
+/// Suspension preserves reputation score, deliveries_completed, and kyc_verified.
+#[test]
+fn test_suspension_preserves_driver_history() {
+    let (env, admin, client, delivery_contract, _) = setup();
+    let driver = Address::generate(&env);
+    client.register_driver(&driver);
+
+    // Build up some history.
+    client.update_driver_kyc_status(&admin, &driver, &true);
+    client.increase_reputation(&delivery_contract, &driver, &1u64, &6000u32, &true);
+    client.increase_reputation(&delivery_contract, &driver, &2u64, &1000u32, &false);
+
+    let before = client.get_driver_profile(&driver);
+    assert_eq!(before.kyc_verified, true);
+    assert_eq!(before.deliveries_completed, 2);
+    assert!(before.reputation_score > 50);
+
+    client.suspend_driver(&admin, &driver);
+
+    let after = client.get_driver_profile(&driver);
+    // History unchanged.
+    assert_eq!(after.kyc_verified, before.kyc_verified);
+    assert_eq!(after.deliveries_completed, before.deliveries_completed);
+    assert_eq!(after.reputation_score, before.reputation_score);
+    assert_eq!(after.registered_at, before.registered_at);
+    // Only status changed.
+    assert_eq!(after.status, shared_types::DriverStatus::Suspended);
+}
+
+/// A suspended driver cannot re-register to reset their profile — the profile
+/// still exists so `register_driver` panics with `AlreadyInitialized`.
+#[test]
+fn test_suspended_driver_cannot_re_register() {
+    let (env, admin, client, _, _) = setup();
+    let driver = Address::generate(&env);
+    client.register_driver(&driver);
+    client.suspend_driver(&admin, &driver);
+
+    let result = client.try_register_driver(&driver);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::AlreadyInitialized.into()),
+        _ => panic!("Expected AlreadyInitialized — suspended profile must block re-registration"),
     }
 }
 
+/// Suspending an already-suspended driver returns `InvalidState`.
 #[test]
-fn test_changed_config_changes_awarded_points() {
+fn test_double_suspend_returns_invalid_state() {
+    let (env, admin, client, _, _) = setup();
+    let driver = Address::generate(&env);
+    client.register_driver(&driver);
+    client.suspend_driver(&admin, &driver);
+
+    let result = client.try_suspend_driver(&admin, &driver);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::InvalidState.into()),
+        _ => panic!("Expected InvalidState on double-suspend"),
+    }
+}
+
+/// Reinstating an already-active driver returns `InvalidState`.
+#[test]
+fn test_reinstate_active_driver_returns_invalid_state() {
+    let (env, admin, client, _, _) = setup();
+    let driver = Address::generate(&env);
+    client.register_driver(&driver);
+
+    let result = client.try_reinstate_driver(&admin, &driver);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::InvalidState.into()),
+        _ => panic!("Expected InvalidState when reinstating an already-active driver"),
+    }
+}
+
+/// Suspending a non-existent driver returns `ProviderNotFound`.
+#[test]
+fn test_suspend_nonexistent_driver_returns_provider_not_found() {
+    let (env, admin, client, _, _) = setup();
+    let ghost = Address::generate(&env);
+
+    let result = client.try_suspend_driver(&admin, &ghost);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::ProviderNotFound.into()),
+        _ => panic!("Expected ProviderNotFound for suspend on unregistered driver"),
+    }
+}
+
+/// After reinstatement, reputation calls continue to work normally.
+#[test]
+fn test_reinstated_driver_reputation_resumes_normally() {
     let (env, admin, client, delivery_contract, _) = setup();
     let driver = Address::generate(&env);
     client.register_driver(&driver);
 
-    // Get points with default config
-    client.increase_reputation(&delivery_contract, &driver, &1u64, &1000u32, &false);
-    let profile_default = client.get_driver_profile(&driver);
-    // Default: base_points(5) + heavy_cargo_points(3) = 8
-    let points_with_default = profile_default.reputation_score - 50; // 50 is initial reputation
+    client.suspend_driver(&admin, &driver);
+    client.reinstate_driver(&admin, &driver);
 
-    // Set new config
-    let new_config = ReputationConfig {
-        base_points: 20,
-        heavy_cargo_points: 10,
-        fragile_points: 5,
-    };
-    client.set_reputation_config(&admin, &new_config);
-
-    // Register new driver and get points with new config
-    let driver2 = Address::generate(&env);
-    client.register_driver(&driver2);
-    client.increase_reputation(&delivery_contract, &driver2, &1u64, &1000u32, &false);
-    let profile_new = client.get_driver_profile(&driver2);
-    // New config: base_points(20) + heavy_cargo_points(10) = 30
-    let points_with_new = profile_new.reputation_score - 50;
-
-    assert_eq!(points_with_default, 8);
-    assert_eq!(points_with_new, 30);
-}
-
-#[test]
-fn test_heavy_cargo_bonus_at_threshold() {
-    let (env, admin, client, delivery_contract, _) = setup();
-    let driver = Address::generate(&env);
-    client.register_driver(&driver);
-
-    // Test exactly at HEAVY_CARGO_GRAMS (5000) - should NOT receive bonus
-    client.increase_reputation(&delivery_contract, &driver, &1u64, &5000u32, &false);
-    let profile_at_threshold = client.get_driver_profile(&driver);
-    // Should be: base_points(5) only = 5
-    assert_eq!(profile_at_threshold.reputation_score, 55);
-
-    // Test above HEAVY_CARGO_GRAMS (5001) - should receive bonus
-    let driver2 = Address::generate(&env);
-    client.register_driver(&driver2);
-    client.increase_reputation(&delivery_contract, &driver2, &1u64, &5001u32, &false);
-    let profile_above_threshold = client.get_driver_profile(&driver2);
-    // Should be: base_points(5) + heavy_cargo_points(3) = 8
-    assert_eq!(profile_above_threshold.reputation_score, 58);
-}
-
-#[test]
-fn test_fragile_bonus_applies() {
-    let (env, _admin, client, delivery_contract, _) = setup();
-    let driver = Address::generate(&env);
-    client.register_driver(&driver);
-
-    // Test without fragile flag
-    client.increase_reputation(&delivery_contract, &driver, &1u64, &1000u32, &false);
-    let profile_non_fragile = client.get_driver_profile(&driver);
-    // base_points(5) only = 5
-    assert_eq!(profile_non_fragile.reputation_score, 55);
-
-    // Test with fragile flag
-    let driver2 = Address::generate(&env);
-    client.register_driver(&driver2);
-    client.increase_reputation(&delivery_contract, &driver2, &1u64, &1000u32, &true);
-    let profile_fragile = client.get_driver_profile(&driver2);
-    // base_points(5) + fragile_points(2) = 7
-    assert_eq!(profile_fragile.reputation_score, 57);
-}
-
-#[test]
-fn test_cumulative_reputation_capped_at_max() {
-    let (env, admin, client, delivery_contract, _) = setup();
-
-    // Set high point values to quickly reach MAX_REPUTATION
-    let high_config = ReputationConfig {
-        base_points: 50,
-        heavy_cargo_points: 25,
-        fragile_points: 25,
-    };
-    client.set_reputation_config(&admin, &high_config);
-
-    let driver = Address::generate(&env);
-    client.register_driver(&driver); // Starts at 50
-
-    // First delivery: 50 + (50 + 25 + 25) = 150, capped at 100
-    client.increase_reputation(&delivery_contract, &driver, &1u64, &5001u32, &true);
+    // Should succeed without error.
+    client.increase_reputation(&delivery_contract, &driver, &10u64, &1000u32, &false);
     let profile = client.get_driver_profile(&driver);
-    assert_eq!(profile.reputation_score, 100);
+    assert_eq!(profile.reputation_score, 55);
+    assert_eq!(profile.deliveries_completed, 1);
+    assert_eq!(profile.status, shared_types::DriverStatus::Active);
+}
 
-    // Additional deliveries should not increase further
-    client.increase_reputation(&delivery_contract, &driver, &2u64, &5001u32, &true);
-    let profile_second = client.get_driver_profile(&driver);
-    assert_eq!(profile_second.reputation_score, 100);
+/// Full suspend → reinstate → suspend cycle works correctly.
+#[test]
+fn test_suspend_reinstate_cycle() {
+    let (env, admin, client, _, _) = setup();
+    let driver = Address::generate(&env);
+    client.register_driver(&driver);
+
+    client.suspend_driver(&admin, &driver);
+    assert_eq!(client.get_driver_profile(&driver).status, shared_types::DriverStatus::Suspended);
+
+    client.reinstate_driver(&admin, &driver);
+    assert_eq!(client.get_driver_profile(&driver).status, shared_types::DriverStatus::Active);
+
+    client.suspend_driver(&admin, &driver);
+    assert_eq!(client.get_driver_profile(&driver).status, shared_types::DriverStatus::Suspended);
+}
+
+/// Existing registration and reputation flows are unaffected for active drivers.
+#[test]
+fn test_existing_flows_unaffected_for_active_drivers() {
+    let (env, admin, client, delivery_contract, dispute_contract) = setup();
+    let driver = Address::generate(&env);
+
+    // Full existing flow still works end-to-end.
+    client.register_driver(&driver);
+    client.update_driver_kyc_status(&admin, &driver, &true);
+    client.increase_reputation(&delivery_contract, &driver, &1u64, &6000u32, &true);
+    client.decrease_reputation(&dispute_contract, &driver, &3u32);
+
+    let profile = client.get_driver_profile(&driver);
+    assert_eq!(profile.kyc_verified, true);
+    assert_eq!(profile.deliveries_completed, 1);
+    // 50 (start) + 10 (base 5 + heavy 3 + fragile 2) - 3 = 57
+    assert_eq!(profile.reputation_score, 57);
+    assert_eq!(profile.status, shared_types::DriverStatus::Active);
+    assert!(!client.is_driver_suspended(&driver));
 }

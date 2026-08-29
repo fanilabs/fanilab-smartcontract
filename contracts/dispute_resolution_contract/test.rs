@@ -204,6 +204,7 @@ fn create_mock_escrow_record(
     status: shared_types::EscrowStatus,
 ) -> shared_types::EscrowRecord {
     shared_types::EscrowRecord {
+        delivery_id: 0,
         sender,
         recipient,
         driver,

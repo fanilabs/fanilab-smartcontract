@@ -168,7 +168,11 @@ impl DisputeResolutionContract {
         dispute_time_limit: u64,
         dispute_resolution_limit: u64,
     ) {
-        if env.storage().instance().has(&DataKey::DeliveryContract) {
+        // `AdminList` is the real initialization sentinel here: the contract
+        // writes that list unconditionally during its first setup, while the
+        // delivery-contract pointer is merely a configuration field and must not
+        // control whether the contract can be re-initialized.
+        if env.storage().instance().has(&DataKey::AdminList) {
             panic_with_error!(&env, FaniLabError::AlreadyInitialized);
         }
         admin.require_auth();

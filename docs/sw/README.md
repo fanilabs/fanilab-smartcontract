@@ -5,211 +5,76 @@
 ---
 
 ## 📖 Muhtasari wa Maudhui
-- [Mwongozo wa Mradi](#-mwongozo-wa-mradi)
-- [Tatizo Lisiloshindwa](#-tatizo-lisiloshindwa)
-- [Suluhisho](#-suluhisho)
-- [Jinsi Inavyofanya Kazi (Mfano wa Malipo ya Uhifadhi)](#-jinsi-inavyofanya-kazi-mfano-wa-malipo-ya-uhifadhi)
-- [Faida za Kujumuisha Kwa Kifedha](#-faida-za-kujumuisha-kwa-kifedha)
-- [Soko la Lengeza](#-soko-la-lengeza)
-- [Mfano wa Mapato](#-mfano-wa-mapato)
-- [Usanifu wa Mkataba Akili](#-usanifu-wa-mkataba-akili)
-- [Safu ya Teknolojia](#-safu-ya-teknolojia)
-- [Sifa za Jukwaa](#-sifa-za-jukwaa)
-- [Awamu za Maendeleo](#-awamu-za-maendeleo)
-- [Muundo wa Hazina](#-muundo-wa-hazina)
-- [Maagizo ya Kusakinisha](#-maagizo-ya-kusakinisha)
-- [Maagizo ya Kukamatia Mkataba](#-maagizo-ya-kukamatia-mkataba)
-- [Tofauti za Mazingira](#-tofauti-za-mazingira)
-- [Bomba la CI/CD](#-bomba-la-cicd)
-- [Mwongozo wa Michango](#-mwongozo-wa-michango)
-- [Leseni](#-leseni)
+- [Muhtasari](#-muhtasari)
+- [Muundo wa hazina](#-muundo-wa-hazina)
+- [Anza haraka](#-anza-haraka)
+- [Mchango](#-mchango)
 
 ---
 
-## 🌍 Mwongozo wa Mradi
+## 🌍 Muhtasari
 
-FaniLab inajumuisha hazina tatu kuu:
-1. **FaniLab-Frontend**: Stack: Next.js + TypeScript + TailwindCSS
-2. **FaniLab-Backend**: Stack: Node.js + Express.js + TypeScript + MongoDB
-3. **FaniLab-SmartContract** *(Hazina Hii)*: Stack: Stellar Soroban + Rust
+Hazina hii ina mikataba ya Soroban ya FaniLab ya escrow, utoaji, mzozo, sifa na utawala. Inafuatia muundo wa sasa wa workspace na kusawazishwa na README ya Kiingereza.
 
-Hazina ya mkataba akili inapatia nguvu **mfumo wa uhifadhi wa Pesa Blockchain** unaotumiwa na jukwaa la uendeshaji.
+Mradi umewekwa katika mikataba sita ya Rust na maktaba moja ya kawaida:
+- `escrow_contract`
+- `delivery_contract`
+- `dispute_resolution_contract`
+- `fleet_management_contract`
+- `identity_reputation_contract`
+- `settlement_contract`
+- `shared_types`
 
-## ⚠️ Tatizo Lisiloshindwa
-
-Mitandao ya jadi ya uendeshaji na utoaji inapatikana mara nyingi na:
-- Ukosefu wa imani kati ya wanatuma na wakituo wa utoaji wenye kujitegemea.
-- Ada kubwa na malipo ya kuchelewa kwa wakituo.
-- Matumizi yasiyo yenye tija ya mali za usafiri iliyopo.
-- Matatizo ya waendeshaji wadogo kufikia uchumi wa ulimwengu au wa ulimwengu ambao umezunguka mipaka.
-
-## 💡 Suluhisho
-
-FaniLab inaundwa **uchumi wa uendeshaji uliosingana ulioambukizwa** kwa kuruhusu mali ya usafiri iliyopo kuingizwa salama katika operesheni za utoaji. Wafanyabizanishi wa usafiri wanajumuisha:
-- Wakituo wa mtoroboto wa utoaji
-- Wakili wa barua pepe
-- Wakituo wa wangu
-- Waendeshaji wa shimo
-- Wamiliki wa usafiri wenye kujitegemea
-
-Kwa kumfanya **mkataba akili wa uhifadhi wa Pesa Blockchain**, FaniLab inakamatia wanatuma na wakili wa utoaji, kuhakikisha kwamba bidhaa husafirishwa salama na malipo yanakamatia haraka baada ya uthibitisho wa utoaji.
-
-## 🔄 Jinsi Inavyofanya Kazi (Mfano wa Malipo ya Uhifadhi)
-
-FaniLab inahakikisha **miamala ya uendeshaji bila imani** kwa njia ifuatayo:
-
-1. **Mteja huunda maombi ya utoaji**: Mnutuma anasambaza amri ya utoaji.
-2. **Malipo yanakamatia katika uhifadhi**: Mkataba akili unakamatia malipo salama.
-3. **Kituo kinakamatia utoaji**: Kituo kinajumuishwa kwa kazi.
-4. **Bidhaa husafirishwa**: Kituo hutumiwa mfumo wa uendeshaji.
-5. **Mpokeaji anahakikisha utoaji**: Mpokeaji anahakikisha kuwasili kwa bidhaa.
-6. **Mkataba wa uhifadhi unakamatia malipo kwa kituo**: Malipo haraka kwenye mtandao wa Stellar.
-
-## 🤝 Faida za Kujumuisha Kwa Kifedha
-
-Jukwaa hili limeundwa kuwezesha watu na biashara ndogo, kuruhusu:
-- **Wakituo wa utoaji wenye kujitegemea**
-- **Biashara ndogo za uendeshaji**
-- **Waendeshaji wa usafiri wa vile**
-- **Wabiashara wa ulimwengu ambao umezunguka mipaka**
-
-kuangizwa salama katika uchumi wa uendeshaji ulimwengu ambao unapatia nguvu blockchain ya Stellar.
-
-## 🎯 Soko la Lengeza
-
-Jamii yetu ya lengeza ni pamoja na:
-- Mitandao ya uendeshaji ya Afrika
-- Wabiashara wa SME
-- Wanauza wa biashara ya elektroniki
-- Wakwanza wa barua pepe
-- Vyama vya usafiri
-- Waendeshaji wa biashara ya ulimwengu ambao umezunguka mipaka
-
-## 💰 Mfano wa Mapato
-
-FaniLab inajenga mapato kwa njia:
-- Ada za huduma za uhifadhi
-- Ada za komisheni ya utoaji
-- Ada za malipo ya ulimwengu ambao umezunguka mipaka
-- Ujumuishaji wa uendeshaji wa biashara
-- Uchambuzi wa uendeshaji wa juu
-
-## 🏗️ Usanifu wa Mkataba Akili
-
-Mkataba akili wa FaniLab ni mgongo wa mtandao wa uendeshaji wenye imani. Wanasimamia:
-- Kamata ya malipo ya uhifadhi
-- Kumfanyia uhifadhi ya malipo
-- Uthibitisho wa utoaji
-- Malipo ya miamala
-- Uthibitisho wa hali ya utoaji
-- Taarifa za uendeshaji kwenye mlangoni
-
-### Mahitaji ya Uzamili
-
-Usanifu wa mkataba unakamatia:
-- **Kuundwa kwa Uhifadhi**: Kamata malipo wakati utoaji unakumbatiwa.
-- **Kukubali kwa Kituo**: Kituo kinakubali mgawanyo wa utoaji.
-- **Uthibitisho wa Utoaji**: Mpokeaji anahakikisha kuwasili kwa kifungua.
-- **Kumfanyia Uhifadhi**: Malipo yakamatia kwa kituo baada ya uthibitisho.
-- **Kukamatia Mizozo**: Uhifadhi unaweza kusimamishwa kwa suluhisho la mizozoni.
-
-### Kutolewa kwa Matukio
-Mkataba kutoa matukio muhimu kwa indexing nje ya mlangoni:
-- `delivery_created`
-- `escrow_funded`
-- `driver_assigned`
-- `delivery_confirmed`
-- `escrow_released`
-
-## 🛠️ Safu ya Teknolojia
-
-- **Mlangoni wa Stellar**
-- **Mkataba Akili wa Soroban**
-- **Rust**
-- **Soroban SDK**
-- **Stellar CLI**
-- **Soroban CLI**
-- **Kusakinishwa kwa mkataba akili WASM**
-
-## ✨ Sifa za Jukwaa
-
-- Kukamatia uhifadhi wenye usambazaji
-- Malipo ya haraka ya kituo
-- Hali ya utoaji inayoweza kuthibitishwa
-- Taarifa za uendeshaji isiyobadilika
-- Suluhisho la mizozo bila imani
-
-## 🚀 Awamu za Maendeleo
-
-### Awamu ya 1 — Mkataba Akili wa MVP wa Uhifadhi
-**Lengo**: Mkataba akili mdogo kukamatia malipo ya utoaji kulingana na uhifadhi.
-- Kamata ya malipo ya uhifadhi
-- Kuandikisha Kitambulisho cha utoaji
-- Hali ya kuhifadhi uhifadhi
-- Utaratibu wa kumfanyia malipo
-
-### Awamu ya 2 — Kuongeza mkataba akili wa Uendeshaji
-**Lengo**: Kukamatia kwa haba na taarifa za usafirisho.
-- Kukamatia mgawanyo wa kituo
-- Sasisho za hali ya utoaji
-- Matukio ya uthibitisho wa utoaji
-- Kuhifadhi taarifa za usafirisho
-
-### Awamu ya 3 — Mtandao kamili wa uendeshaji wa Blockchain
-**Lengo**: Kukamatia usambazaji na uwezo wa kulimwengu.
-- Utaratibu wa suluhisho la mizozo
-- Alama ya taabu kwa kituo
-- Uthibitisho wa utoaji ulioambukizwa
-- Malipo ya ulimwengu ambao umezunguka mipaka
-
-## 📂 Muundo wa Hazina
+## 📂 Muundo wa hazina
 
 ```text
-FaniLab-SmartContract/
+fanilab-smartcontract/
+├── Cargo.toml
+├── CHANGELOG.md
+├── README.md
 ├── contracts/
-│   ├── escrow_contract/
-│   │   └── lib.rs
 │   ├── delivery_contract/
+│   │   ├── Cargo.toml
+│   │   ├── lib.rs
+│   │   └── test.rs
+│   ├── dispute_resolution_contract/
+│   │   ├── Cargo.toml
+│   │   ├── lib.rs
+│   │   └── test.rs
+│   ├── escrow_contract/
+│   │   ├── Cargo.toml
+│   │   ├── lib.rs
+│   │   └── test.rs
+│   ├── fleet_management_contract/
+│   │   ├── Cargo.toml
+│   │   ├── lib.rs
+│   │   └── test.rs
+│   ├── identity_reputation_contract/
+│   │   ├── Cargo.toml
+│   │   ├── lib.rs
+│   │   └── test.rs
+│   ├── settlement_contract/
+│   │   ├── Cargo.toml
 │   │   └── lib.rs
 │   └── shared_types/
+│       ├── Cargo.toml
 │       └── lib.rs
-├── src/
-│   ├── events/
-│   ├── errors/
-│   ├── storage/
-│   └── interfaces/
-├── tests/
-│   ├── integration_tests/
-│   └── contract_tests/
-├── scripts/
-│   ├── deployment/
-│   ├── build/
-│   ├── initialize/
-│   ├── deploy-contract.sh
-│   └── initialize-contract.sh
 ├── docs/
-│   ├── architecture/
-│   │   ├── smart-contract-architecture.md
-│   │   └── event-system.md
-│   ├── contract-design/
-│   │   └── escrow-design.md
-│   └── protocol/
-│       └── delivery-protocol.md
-├── deploy/
-│   ├── testnet/
-│   └── mainnet/
-├── .github/
-│   └── workflows/
-│       └── ci.yml
-├── Cargo.toml
-├── Cargo.lock
-├── Makefile
-├── .env.example
-├── README.md
-├── LICENSE
-├── CONTRIBUTING.md
-└── SECURITY.md
+├── scripts/
+├── sdk/
+└── .github/
 ```
+
+## ⚙️ Anza haraka
+
+1. Sakinisha Rust na target ya Soroban inayofaa.
+2. Kagua workspace ya Rust kutoka kwenye mzizi wa mradi: `cargo test`.
+3. Compile mikataba kwa kutumia scripts na Makefile ya hazina.
+4. Soma nyaraka za `docs/` kwa API, deployment na usalama.
+
+## 🤝 Mchango
+
+Hati hii ni tafsiri ya README ya Kiingereza na inapaswa kubaki inayofuata utekelezaji wa kweli wa mradi. Mabadiliko ya msimbo yanapaswa kuonyeshwa pia kwenye toleo la Kiingereza na hapa.
 
 ## ⚙️ Maagizo ya Kusakinisha
 

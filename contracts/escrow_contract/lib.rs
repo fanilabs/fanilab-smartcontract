@@ -838,6 +838,7 @@ impl EscrowContract {
             &env,
             delivery_id,
             &EscrowRecord {
+                delivery_id,
                 sender: sender.clone(),
                 recipient: recipient.clone(),
                 driver: driver.clone(),
@@ -1000,6 +1001,7 @@ impl EscrowContract {
                     &env,
                     delivery_id,
                     &EscrowRecord {
+                        delivery_id,
                         sender: sender.clone(),
                         recipient: recipient.clone(),
                         driver: driver.clone(),

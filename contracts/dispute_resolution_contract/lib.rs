@@ -171,6 +171,7 @@ impl DisputeResolutionContract {
         if env.storage().instance().has(&DataKey::DeliveryContract) {
             panic_with_error!(&env, FaniLabError::AlreadyInitialized);
         }
+        admin.require_auth();
         if dispute_time_limit < MIN_DISPUTE_TIME_LIMIT {
             panic_with_error!(&env, FaniLabError::InvalidState);
         }

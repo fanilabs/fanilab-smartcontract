@@ -5,211 +5,76 @@
 ---
 
 ## 📖 Índice
-- [Visão Geral do Projeto](#-visão-geral-do-projeto)
-- [O Problema Fundamental](#-o-problema-fundamental)
-- [A Solução](#-a-solução)
-- [Como Funciona (Modelo de Pagamento em Depósito)](#-como-funciona-modelo-de-pagamento-em-depósito)
-- [Benefícios de Inclusão Financeira](#-benefícios-de-inclusão-financeira)
-- [Mercado Alvo](#-mercado-alvo)
-- [Modelo de Receita](#-modelo-de-receita)
-- [Arquitetura de Contrato Inteligente](#-arquitetura-de-contrato-inteligente)
-- [Pilha Tecnológica](#-pilha-tecnológica)
-- [Recursos da Plataforma](#-recursos-da-plataforma)
-- [Fases de Desenvolvimento](#-fases-de-desenvolvimento)
-- [Estrutura do Repositório](#-estrutura-do-repositório)
-- [Instruções de Instalação](#-instruções-de-instalação)
-- [Instruções de Implantação de Contrato](#-instruções-de-implantação-de-contrato)
-- [Variáveis de Ambiente](#-variáveis-de-ambiente)
-- [Pipeline CI/CD](#-pipeline-cicd)
-- [Diretrizes de Contribuição](#-diretrizes-de-contribuição)
-- [Licença](#-licença)
+- [Visão geral](#-visão-geral)
+- [Estrutura do repositório](#-estrutura-do-repositório)
+- [Guia rápido](#-guia-rápido)
+- [Contribuição](#-contribuição)
 
 ---
 
-## 🌍 Visão Geral do Projeto
+## 🌍 Visão geral
 
-FaniLab é composto por três repositórios principais:
-1. **FaniLab-Frontend**: Stack: Next.js + TypeScript + TailwindCSS
-2. **FaniLab-Backend**: Stack: Node.js + Express.js + TypeScript + MongoDB
-3. **FaniLab-SmartContract** *(Este Repositório)*: Stack: Stellar Soroban + Rust
+Este repositório contém os contratos Soroban do FaniLab para escrow, entrega, disputa, reputação e governança. Ele reflete a estrutura atual do workspace e segue a versão em inglês.
 
-O repositório de contrato inteligente alimenta o **sistema de depósito em caução blockchain** usado pela plataforma de logística.
+O projeto está organizado em seis contratos Rust e uma biblioteca compartilhada:
+- `escrow_contract`
+- `delivery_contract`
+- `dispute_resolution_contract`
+- `fleet_management_contract`
+- `identity_reputation_contract`
+- `settlement_contract`
+- `shared_types`
 
-## ⚠️ O Problema Fundamental
-
-As redes tradicionais de logística e entrega frequentemente sofrem com:
-- Falta de confiança entre remetentes e motoristas de entrega independentes.
-- Taxas altas e liquidações atrasadas para motoristas.
-- Utilização ineficiente dos ativos de transporte existentes.
-- Dificuldades para pequenos operadores acessarem economias de logística global ou transfronteiriça.
-
-## 💡 A Solução
-
-FaniLab cria uma **economia logística descentralizada compartilhada** permitindo que ativos de transporte existentes participem com segurança de operações de entrega. Os provedores de transporte incluem:
-- Motoboys de entrega
-- Agentes de correio
-- Motoristas de van
-- Operadores de caminhão
-- Proprietários de transporte independentes
-
-Aproveitando os **contratos inteligentes de depósito em caução blockchain**, FaniLab protege remetentes e agentes de entrega, garantindo que as mercadorias sejam transportadas com segurança e os pagamentos sejam liquidados instantaneamente após a confirmação da entrega.
-
-## 🔄 Como Funciona (Modelo de Pagamento em Depósito)
-
-FaniLab garante **transações logísticas sem confiança** através do seguinte fluxo de trabalho:
-
-1. **Cliente cria solicitação de entrega**: O remetente inicia um pedido de entrega.
-2. **Pagamento é bloqueado em depósito**: O contrato inteligente mantém o pagamento com segurança.
-3. **Motorista aceita a entrega**: Um motorista é atribuído à tarefa.
-4. **Mercadorias são transportadas**: O motorista cumpre o processo logístico.
-5. **Destinatário confirma a entrega**: O destinatário verifica a chegada das mercadorias.
-6. **Contrato de depósito libera pagamento para o motorista**: Liquidação instantânea na rede Stellar.
-
-## 🤝 Benefícios de Inclusão Financeira
-
-A plataforma foi construída para capacitar indivíduos e pequenas empresas, permitindo:
-- **Motoristas de entrega independentes**
-- **Pequenas empresas de logística**
-- **Operadores de transporte rural**
-- **Comerciantes transfronteiriços**
-
-para participar perfeitamente de uma economia logística global alimentada pelo blockchain Stellar.
-
-## 🎯 Mercado Alvo
-
-Nossa audiência-alvo principal inclui:
-- Redes de logística africana
-- Comerciantes PME
-- Vendedores de comércio eletrônico
-- Startups de correio
-- Sindicatos de transporte
-- Operadores de comércio transfronteiriço
-
-## 💰 Modelo de Receita
-
-FaniLab gera receita através dos seguintes fluxos:
-- Taxas de serviço de depósito
-- Taxas de comissão de entrega
-- Taxas de liquidação transfronteiriça
-- Integrações logísticas corporativas
-- Análise de logística premium
-
-## 🏗️ Arquitetura de Contrato Inteligente
-
-Os contratos inteligentes FaniLab são a espinha dorsal do protocolo logístico sem confiança. Eles são responsáveis por:
-- Bloqueio de pagamento em depósito
-- Liberação de pagamento em depósito
-- Verificação de entrega
-- Liquidação de transação
-- Validação de estado de entrega
-- Metadados de logística na cadeia
-
-### Requisitos Funcionais
-
-A arquitetura do contrato suporta:
-- **Criação de Depósito**: Bloquear pagamento quando uma entrega é criada.
-- **Aceitação do Motorista**: O motorista aceita a atribuição de entrega.
-- **Confirmação de Entrega**: O destinatário confirma a chegada da encomenda.
-- **Liberação de Depósito**: O pagamento é liberado para o motorista após confirmação.
-- **Tratamento de Disputas**: O depósito pode ser pausado para resolução de disputas.
-
-### Emissão de Eventos
-Os contratos emitem eventos críticos para indexação fora da cadeia:
-- `delivery_created`
-- `escrow_funded`
-- `driver_assigned`
-- `delivery_confirmed`
-- `escrow_released`
-
-## 🛠️ Pilha Tecnológica
-
-- **Blockchain Stellar**
-- **Contratos Inteligentes Soroban**
-- **Rust**
-- **SDK Soroban**
-- **CLI Stellar**
-- **CLI Soroban**
-- **Compilação de contrato inteligente WASM**
-
-## ✨ Recursos da Plataforma
-
-- Gerenciamento de Depósito Descentralizado
-- Liquidação Instantânea do Motorista
-- Estados de Entrega Verificáveis
-- Metadados de Logística Imutáveis
-- Resolução de Disputas sem Confiança
-
-## 🚀 Fases de Desenvolvimento
-
-### Fase 1 — Contrato Inteligente MVP de Depósito
-**Foco:** Contrato inteligente mínimo para suportar pagamentos de entrega baseados em depósito.
-- Bloqueio de pagamento em depósito
-- Registro de ID de entrega
-- Estado de armazenamento de depósito
-- Mecanismo de liberação de pagamento
-
-### Fase 2 — Expansão de Contrato Inteligente de Logística
-**Foco:** Rastreamento avançado e metadados de remessa.
-- Rastreamento de atribuição de motorista
-- Atualizações de status de entrega
-- Eventos de confirmação de entrega
-- Armazenamento de metadados de remessa
-
-### Fase 3 — Protocolo Logístico Blockchain Completo
-**Foco:** Governança descentralizada e capacidades transfronteiriças.
-- Mecanismo de resolução de disputas
-- Pontuação de reputação para motoristas
-- Verificação de entrega descentralizada
-- Liquidação de pagamento transfronteiriço
-
-## 📂 Estrutura do Repositório
+## 📂 Estrutura do repositório
 
 ```text
-FaniLab-SmartContract/
+fanilab-smartcontract/
+├── Cargo.toml
+├── CHANGELOG.md
+├── README.md
 ├── contracts/
-│   ├── escrow_contract/
-│   │   └── lib.rs
 │   ├── delivery_contract/
+│   │   ├── Cargo.toml
+│   │   ├── lib.rs
+│   │   └── test.rs
+│   ├── dispute_resolution_contract/
+│   │   ├── Cargo.toml
+│   │   ├── lib.rs
+│   │   └── test.rs
+│   ├── escrow_contract/
+│   │   ├── Cargo.toml
+│   │   ├── lib.rs
+│   │   └── test.rs
+│   ├── fleet_management_contract/
+│   │   ├── Cargo.toml
+│   │   ├── lib.rs
+│   │   └── test.rs
+│   ├── identity_reputation_contract/
+│   │   ├── Cargo.toml
+│   │   ├── lib.rs
+│   │   └── test.rs
+│   ├── settlement_contract/
+│   │   ├── Cargo.toml
 │   │   └── lib.rs
 │   └── shared_types/
+│       ├── Cargo.toml
 │       └── lib.rs
-├── src/
-│   ├── events/
-│   ├── errors/
-│   ├── storage/
-│   └── interfaces/
-├── tests/
-│   ├── integration_tests/
-│   └── contract_tests/
-├── scripts/
-│   ├── deployment/
-│   ├── build/
-│   ├── initialize/
-│   ├── deploy-contract.sh
-│   └── initialize-contract.sh
 ├── docs/
-│   ├── architecture/
-│   │   ├── smart-contract-architecture.md
-│   │   └── event-system.md
-│   ├── contract-design/
-│   │   └── escrow-design.md
-│   └── protocol/
-│       └── delivery-protocol.md
-├── deploy/
-│   ├── testnet/
-│   └── mainnet/
-├── .github/
-│   └── workflows/
-│       └── ci.yml
-├── Cargo.toml
-├── Cargo.lock
-├── Makefile
-├── .env.example
-├── README.md
-├── LICENSE
-├── CONTRIBUTING.md
-└── SECURITY.md
+├── scripts/
+├── sdk/
+└── .github/
 ```
+
+## ⚙️ Guia rápido
+
+1. Instale Rust e o target Soroban apropriado.
+2. Confira o workspace do Rust na raiz do projeto: `cargo test`.
+3. Compile os contratos usando os scripts e o Makefile do repositório.
+4. Consulte a documentação em `docs/` para API, implantação e segurança.
+
+## 🤝 Contribuição
+
+Este documento é uma tradução do README em inglês e precisa permanecer alinhado com a implementação real do projeto. Alterações de código devem ser refletidas também na versão em inglês e neste arquivo.
 
 ## ⚙️ Instruções de Instalação
 

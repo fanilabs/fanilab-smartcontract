@@ -5,211 +5,76 @@
 ---
 
 ## 📖 Table des matières
-- [Aperçu du projet](#-aperçu-du-projet)
-- [Le problème fondamental](#-le-problème-fondamental)
-- [La solution](#-la-solution)
-- [Comment ça marche (modèle de paiement en escrow)](#-comment-ça-marche-modèle-de-paiement-en-escrow)
-- [Avantages d'inclusion financière](#-avantages-dinclusion-financière)
-- [Marché cible](#-marché-cible)
-- [Modèle de revenus](#-modèle-de-revenus)
-- [Architecture des contrats intelligents](#-architecture-des-contrats-intelligents)
-- [Pile technologique](#-pile-technologique)
-- [Fonctionnalités de la plateforme](#-fonctionnalités-de-la-plateforme)
-- [Phases de développement](#-phases-de-développement)
-- [Structure du référentiel](#-structure-du-référentiel)
-- [Instructions d'installation](#-instructions-dinstallation)
-- [Instructions de déploiement du contrat](#-instructions-de-déploiement-du-contrat)
-- [Variables d'environnement](#-variables-denvironnement)
-- [Pipeline CI/CD](#-pipeline-cicd)
-- [Directives de contribution](#-directives-de-contribution)
-- [Licence](#-licence)
+- [Vue d'ensemble](#-vue-densemble)
+- [Structure du dépôt](#-structure-du-dépôt)
+- [Démarrage rapide](#-démarrage-rapide)
+- [Contribution](#-contribution)
 
 ---
 
-## 🌍 Aperçu du projet
+## 🌍 Vue d'ensemble
 
-FaniLab est composé de trois référentiels principaux :
-1. **FaniLab-Frontend** : Stack : Next.js + TypeScript + TailwindCSS
-2. **FaniLab-Backend** : Stack : Node.js + Express.js + TypeScript + MongoDB
-3. **FaniLab-SmartContract** *(Ce référentiel)* : Stack : Stellar Soroban + Rust
+Ce dépôt contient les contrats Soroban de FaniLab pour la gestion d'escrow, la livraison, les litiges, la réputation et la gouvernance. Il reflète la structure actuelle du workspace et est synchronisé sur le README anglais.
 
-Le référentiel de contrats intelligents alimente le **système d'escrow blockchain** utilisé par la plateforme logistique.
+Le projet est organisé en six contrats Rust et une bibliothèque partagée :
+- `escrow_contract`
+- `delivery_contract`
+- `dispute_resolution_contract`
+- `fleet_management_contract`
+- `identity_reputation_contract`
+- `settlement_contract`
+- `shared_types`
 
-## ⚠️ Le problème fondamental
-
-Les réseaux logistiques et de livraison traditionnels souffrent souvent de :
-- Manque de confiance entre les expéditeurs et les livreurs indépendants.
-- Frais élevés et règlements retardés pour les livreurs.
-- Utilisation inefficace des actifs de transport existants.
-- Difficultés pour les petits opérateurs à accéder aux économies logistiques mondiales ou transfrontalières.
-
-## 💡 La solution
-
-FaniLab crée une **économie logistique décentralisée partagée** en permettant aux actifs de transport existants de participer de manière sécurisée aux opérations de livraison. Les fournisseurs de transport incluent :
-- Livreurs à moto
-- Agents de messagerie
-- Conducteurs de camionnettes
-- Opérateurs de camions
-- Propriétaires de transport indépendants
-
-En tirant parti des **contrats intelligents d'escrow blockchain**, FaniLab protège les expéditeurs et les agents de livraison, garantissant que les marchandises sont transportées de manière sécurisée et les paiements sont réglés instantanément après confirmation de livraison.
-
-## 🔄 Comment ça marche (modèle de paiement en escrow)
-
-FaniLab assure les **transactions logistiques sans confiance** par le flux de travail suivant :
-
-1. **Le client crée une demande de livraison** : L'expéditeur initie une commande de livraison.
-2. **Le paiement est bloqué en escrow** : Le contrat intelligent sécurise le paiement.
-3. **Le livreur accepte la livraison** : Un livreur est assigné à la tâche.
-4. **Les marchandises sont transportées** : Le livreur accomplit le processus logistique.
-5. **Le destinataire confirme la livraison** : Le destinataire vérifie l'arrivée des marchandises.
-6. **Le contrat d'escrow libère le paiement au livreur** : Règlement instantané sur le réseau Stellar.
-
-## 🤝 Avantages d'inclusion financière
-
-La plateforme est conçue pour autonomiser les individus et les petites entreprises, en activant :
-- **Livreurs indépendants**
-- **Petites entreprises logistiques**
-- **Opérateurs de transport ruraux**
-- **Commerçants transfrontaliers**
-
-pour participer de manière transparente à une économie logistique mondiale alimentée par la blockchain Stellar.
-
-## 🎯 Marché cible
-
-Notre audience cible principale comprend :
-- Réseaux logistiques africains
-- Commerçants PME
-- Vendeurs de commerce électronique
-- Startups de messagerie
-- Syndicats de transport
-- Opérateurs du commerce transfrontalier
-
-## 💰 Modèle de revenus
-
-FaniLab génère des revenus à travers les flux suivants :
-- Frais de service d'escrow
-- Frais de commission de livraison
-- Frais de règlement transfrontalier
-- Intégrations logistiques d'entreprise
-- Analyses logistiques premium
-
-## 🏗️ Architecture des contrats intelligents
-
-Les contrats intelligents FaniLab sont l'épine dorsale du protocole logistique sans confiance. Ils sont responsables de :
-- Blocage du paiement en escrow
-- Libération du paiement en escrow
-- Vérification de la livraison
-- Règlement des transactions
-- Validation de l'état de la livraison
-- Métadonnées logistiques sur chaîne
-
-### Exigences fonctionnelles
-
-L'architecture du contrat prend en charge :
-- **Création d'escrow** : Bloquer le paiement à la création d'une livraison.
-- **Acceptation du livreur** : Le livreur accepte l'affectation de livraison.
-- **Confirmation de livraison** : Le destinataire confirme l'arrivée du colis.
-- **Libération d'escrow** : Le paiement est libéré au livreur après confirmation.
-- **Gestion des litiges** : L'escrow peut être mis en pause pour résolution de litiges.
-
-### Émission d'événements
-Les contrats émettent des événements critiques pour l'indexation hors chaîne :
-- `delivery_created`
-- `escrow_funded`
-- `driver_assigned`
-- `delivery_confirmed`
-- `escrow_released`
-
-## 🛠️ Pile technologique
-
-- **Blockchain Stellar**
-- **Contrats intelligents Soroban**
-- **Rust**
-- **SDK Soroban**
-- **CLI Stellar**
-- **CLI Soroban**
-- **Compilation de contrats intelligents WASM**
-
-## ✨ Fonctionnalités de la plateforme
-
-- Gestion d'escrow décentralisée
-- Règlement instantané du livreur
-- États de livraison vérifiables
-- Métadonnées logistiques immuables
-- Résolution de litiges sans confiance
-
-## 🚀 Phases de développement
-
-### Phase 1 — Contrat intelligent escrow MVP
-**Focus** : Contrat intelligent minimal pour supporter les paiements de livraison basés sur l'escrow.
-- Blocage du paiement en escrow
-- Enregistrement de l'ID de livraison
-- État de stockage d'escrow
-- Mécanisme de libération de paiement
-
-### Phase 2 — Expansion du contrat intelligent logistique
-**Focus** : Suivi avancé et métadonnées d'expédition.
-- Suivi de l'attribution des livreurs
-- Mises à jour du statut de livraison
-- Événements de confirmation de livraison
-- Stockage de métadonnées d'expédition
-
-### Phase 3 — Protocole logistique blockchain complet
-**Focus** : Gouvernance décentralisée et capacités transfrontalières.
-- Mécanisme de résolution de litiges
-- Notation de réputation pour les livreurs
-- Vérification décentralisée de livraison
-- Règlement de paiement transfrontalier
-
-## 📂 Structure du référentiel
+## 📂 Structure du dépôt
 
 ```text
-FaniLab-SmartContract/
+fanilab-smartcontract/
+├── Cargo.toml
+├── CHANGELOG.md
+├── README.md
 ├── contracts/
-│   ├── escrow_contract/
-│   │   └── lib.rs
 │   ├── delivery_contract/
+│   │   ├── Cargo.toml
+│   │   ├── lib.rs
+│   │   └── test.rs
+│   ├── dispute_resolution_contract/
+│   │   ├── Cargo.toml
+│   │   ├── lib.rs
+│   │   └── test.rs
+│   ├── escrow_contract/
+│   │   ├── Cargo.toml
+│   │   ├── lib.rs
+│   │   └── test.rs
+│   ├── fleet_management_contract/
+│   │   ├── Cargo.toml
+│   │   ├── lib.rs
+│   │   └── test.rs
+│   ├── identity_reputation_contract/
+│   │   ├── Cargo.toml
+│   │   ├── lib.rs
+│   │   └── test.rs
+│   ├── settlement_contract/
+│   │   ├── Cargo.toml
 │   │   └── lib.rs
 │   └── shared_types/
+│       ├── Cargo.toml
 │       └── lib.rs
-├── src/
-│   ├── events/
-│   ├── errors/
-│   ├── storage/
-│   └── interfaces/
-├── tests/
-│   ├── integration_tests/
-│   └── contract_tests/
-├── scripts/
-│   ├── deployment/
-│   ├── build/
-│   ├── initialize/
-│   ├── deploy-contract.sh
-│   └── initialize-contract.sh
 ├── docs/
-│   ├── architecture/
-│   │   ├── smart-contract-architecture.md
-│   │   └── event-system.md
-│   ├── contract-design/
-│   │   └── escrow-design.md
-│   └── protocol/
-│       └── delivery-protocol.md
-├── deploy/
-│   ├── testnet/
-│   └── mainnet/
-├── .github/
-│   └── workflows/
-│       └── ci.yml
-├── Cargo.toml
-├── Cargo.lock
-├── Makefile
-├── .env.example
-├── README.md
-├── LICENSE
-├── CONTRIBUTING.md
-└── SECURITY.md
+├── scripts/
+├── sdk/
+└── .github/
 ```
+
+## ⚙️ Démarrage rapide
+
+1. Installer Rust et le target Soroban approprié.
+2. Vérifier le workspace Rust depuis la racine : `cargo test` (si vous exécutez la suite locale).
+3. Compiler les contrats selon les scripts et Makefile du dépôt.
+4. Consulter les fichiers de documentation dans `docs/` pour l'API, le déploiement et la sécurité.
+
+## 🤝 Contribution
+
+Ce document est une traduction de la version anglaise du dépôt et doit rester aligné sur la réalité du code et de la structure du monorepo. Les changements fonctionnels doivent être appliqués dans le code source et le README anglais, puis reflétés ici.
 
 ## ⚙️ Instructions d'installation
 

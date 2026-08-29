@@ -107,6 +107,7 @@ impl MockEscrowContract {
             shared_types::EscrowStatus::Locked
         };
         shared_types::EscrowRecord {
+            delivery_id: 0,
             sender: placeholder.clone(),
             recipient: placeholder.clone(),
             driver: placeholder,

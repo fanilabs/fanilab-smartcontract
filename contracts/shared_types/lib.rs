@@ -634,6 +634,7 @@ pub fn is_admin(env: &soroban_sdk::Env, caller: &soroban_sdk::Address) -> bool {
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EscrowRecord {
+    pub delivery_id: u64,
     pub sender: Address,
     pub recipient: Address,
     pub driver: Address,
@@ -1044,6 +1045,7 @@ mod test {
         let token = Address::generate(&env);
         let disputed_by = Address::generate(&env);
         let record = EscrowRecord {
+            delivery_id: 42,
             sender: sender.clone(),
             recipient: recipient.clone(),
             driver: driver.clone(),
@@ -1058,6 +1060,7 @@ mod test {
             fleet_id: Some(42),
         };
 
+        assert_eq!(record.delivery_id, 42);
         assert_eq!(record.sender, sender);
         assert_eq!(record.recipient, recipient);
         assert_eq!(record.driver, driver);

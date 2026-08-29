@@ -46,6 +46,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `#[allow(deprecated)]` annotations for SDK 27.0.0 `env.events().publish()` API deprecation (remains functional)
 
 ### Fixed
+- `EscrowRecord` now carries a `delivery_id` field matching the delivery-side record, and every escrow creation path populates it with the correct id so `get_escrow(id)` and paired delivery/escrow state lookups stay self-describing and consistent (Issue #285)
+- `dispute_resolution_contract::init` now guards on `AdminList` instead of the unrelated `DeliveryContract` key, preventing re-initialization from depending on a fragile peer-contract invariant (Issue #286)
 - `escrow_contract::create_escrows_batch` now increments `TotalLocked(token)` by the sum of the batch, matching `create_escrow`'s fund accounting so `sweep_untracked_balance` can no longer drain batch-created escrows as "untracked" surplus (Issue #188)
 - `escrow_contract::create_escrows_batch` now enforces the same guards as `create_escrow`: the batch token must match `ProtocolConfig::token` (`InvalidToken`) and every element amount must be positive (`InvalidAmount`) (Issue #189)
 

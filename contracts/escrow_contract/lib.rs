@@ -301,7 +301,7 @@ fn settle_holdback_escrow(env: &Env, delivery_id: u64, mut record: EscrowRecord)
     );
 
     let fleet_management = get_fleet_management_contract(env);
-    settle_escrow_funds(env, &record, fleet_management);
+    settle_escrow_funds(env, delivery_id, &record, fleet_management);
 
     (driver_amount, platform_fee)
 }
@@ -339,6 +339,7 @@ enum DataKey {
     PendingSettlementContract,
     EscrowIndex(Address, u32, u32),
     EscrowIndexLen(Address, u32),
+    EscrowPayoutAddress(u64),
     Paused,
     FleetManagementContract,
     DisputeResolutionContract,
@@ -397,6 +398,8 @@ pub enum EscrowError {
     InvalidAmount = 7,
     NoPendingSettlementChange = 8,
     TimelockNotElapsed = 9,
+    InvalidDriver = 10,
+    InvalidParties = 11,
 }
 
 #[contracttype]
@@ -454,6 +457,7 @@ impl EscrowContract {
         if env.storage().instance().has(&StorageKey::Admin) {
             panic_with_error!(&env, FaniLabError::AlreadyInitialized);
         }
+        admin.require_auth();
         if platform_fee_bps > constants::MAX_PLATFORM_FEE_BPS {
             panic_with_error!(&env, EscrowError::InvalidFee);
         }
@@ -714,7 +718,7 @@ impl EscrowContract {
             .set(&DataKey::IdentityReputationContract, &identity_contract);
     }
 
-    pub fn get_identity_reputation_contract_public(env: Env) -> Option<Address> {
+    pub fn get_identity_contract(env: Env) -> Option<Address> {
         env.storage()
             .instance()
             .get(&DataKey::IdentityReputationContract)
@@ -798,6 +802,12 @@ impl EscrowContract {
     ) {
         sender.require_auth();
         require_not_paused(&env);
+        if sender == recipient {
+            panic_with_error!(&env, EscrowError::InvalidParties);
+        }
+        if driver == sender || driver == recipient {
+            panic_with_error!(&env, EscrowError::InvalidDriver);
+        }
         if amount <= 0 {
             panic_with_error!(&env, EscrowError::InvalidAmount);
         }
@@ -808,7 +818,7 @@ impl EscrowContract {
         if token != config.token {
             panic_with_error!(&env, EscrowError::InvalidToken);
         }
-        let payout_address = if let (Some(fleet_addr), Some(fid)) =
+        let payout_address: Option<Address> = if let (Some(fleet_addr), Some(fid)) =
             (get_fleet_management_contract(&env), fleet_id)
         {
             Some(env.invoke_contract(
@@ -925,7 +935,7 @@ impl EscrowContract {
     }
 
     /// Create multiple escrows in a single transaction.  Sender must authorize.
-    /// Takes a list of (delivery_id, driver, amount) tuples. All escrows use the
+    /// Takes a list of (delivery_id, driver, amount, fleet_id) tuples. All escrows use the
     /// configured protocol token. Returns the count of escrows created.
     #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
     pub fn create_escrows_batch(
@@ -933,13 +943,17 @@ impl EscrowContract {
         sender: Address,
         recipient: Address,
         token: Address,
-        escrow_list: soroban_sdk::Vec<(u64, Address, i128)>,
+        escrow_list: soroban_sdk::Vec<(u64, Address, i128, Option<u64>)>,
     ) -> u32 {
         sender.require_auth();
         require_not_paused(&env);
 
+        if sender == recipient {
+            panic_with_error!(&env, EscrowError::InvalidParties);
+        }
+
         if escrow_list.len() > constants::MAX_BATCH_SIZE {
-            panic_with_error!(&env, EscrowError::InvalidState);
+            panic_with_error!(&env, EscrowError::BatchTooLarge);
         }
 
         /* Legacy index batching (replaced by bounded pages).
@@ -965,6 +979,9 @@ impl EscrowContract {
         let mut batch_total: i128 = 0;
         for i in 0..escrow_list.len() {
             if let Some((delivery_id, driver, amount)) = escrow_list.get(i) {
+                if driver == sender || driver == recipient {
+                    panic_with_error!(&env, EscrowError::InvalidDriver);
+                }
                 if amount <= 0 {
                     panic_with_error!(&env, EscrowError::InvalidAmount);
                 }
@@ -996,7 +1013,7 @@ impl EscrowContract {
                         disputed_by: None,
                         disputed_at: None,
                         holdback_started_at: None,
-                        fleet_id: None,
+                        fleet_id,
                     },
                 );
                 /*
@@ -1289,6 +1306,7 @@ impl EscrowContract {
     #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
     pub fn raise_dispute(env: Env, caller: Address, delivery_id: u64) {
         caller.require_auth();
+        require_not_paused(&env);
         let mut record = load_escrow(&env, delivery_id);
         if caller != record.sender && caller != record.recipient && caller != record.driver {
             panic_with_error!(&env, FaniLabError::Unauthorized);
@@ -1442,7 +1460,23 @@ impl EscrowContract {
         }
 
         let sender_amount = record.amount.saturating_mul(sender_share_bps as i128) / 10000;
-        let driver_amount = record.amount.saturating_sub(sender_amount);
+        let driver_share_amount = record.amount.saturating_sub(sender_amount);
+
+        let base_fee_bps: u32 = env
+            .storage()
+            .instance()
+            .get::<_, ProtocolConfig>(&StorageKey::ProtocolConfig)
+            .map(|config| config.platform_fee_bps)
+            .unwrap_or(0);
+        let sender_volume = Self::get_sender_volume(env.clone(), record.sender.clone());
+        let effective_fee_bps = get_effective_fee_bps(&env, base_fee_bps, sender_volume);
+        let platform_fee = calculate_fee(driver_share_amount, effective_fee_bps);
+        let net_driver_amount = driver_share_amount.saturating_sub(platform_fee);
+
+        let sender_volume_key = DataKey::SenderVolume(record.sender.clone());
+        env.storage()
+            .persistent()
+            .set(&sender_volume_key, &sender_volume.saturating_add(1));
 
         // Effects (state) are committed before the interactions (transfers)
         // below, per checks-effects-interactions.
@@ -1467,11 +1501,30 @@ impl EscrowContract {
                 &sender_amount,
             );
         }
-        if driver_amount > 0 {
+        if net_driver_amount > 0 {
+            let fleet_management = get_fleet_management_contract(&env);
+            payout_driver(
+                &env,
+                &record.token,
+                &record.driver,
+                net_driver_amount,
+                fleet_management.as_ref(),
+                record.fleet_id,
+                env.storage()
+                    .persistent()
+                    .get(&DataKey::EscrowPayoutAddress(delivery_id)),
+            );
+        }
+        if platform_fee > 0 {
+            let admin: Address = env
+                .storage()
+                .instance()
+                .get(&StorageKey::Admin)
+                .expect("Not initialized");
             token::Client::new(&env, &record.token).transfer(
                 &env.current_contract_address(),
-                &record.driver,
-                &driver_amount,
+                &admin,
+                &platform_fee,
             );
         }
 
@@ -1545,9 +1598,16 @@ impl EscrowContract {
         );
     }
 
-        let fleet_management = get_fleet_management_contract(&env);
-        settle_escrow_funds(&env, delivery_id, &record, fleet_management);
-
+    #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
+    pub fn set_holdback_window(env: Env, admin: Address, new_window_seconds: u64) {
+        admin.require_auth();
+        require_admin(&env, &admin);
+        if new_window_seconds < constants::MIN_HOLDBACK_WINDOW_SECONDS {
+            panic_with_error!(&env, EscrowError::InvalidState);
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::HoldbackWindow, &new_window_seconds);
         env.events().publish(
             (Symbol::new(&env, "holdback_window_updated"),),
             (admin, new_window_seconds),
@@ -1639,8 +1699,12 @@ impl EscrowContract {
         );
 
         env.events().publish(
-            (events::escrow_refunded(&env), delivery_id),
-            (record.sender, record.amount),
+            (events::escrow_refunded(&env),),
+            shared_types::EscrowRefundedEvent {
+                delivery_id,
+                sender: record.sender,
+                amount: record.amount,
+            },
         );
     }
 
@@ -1690,6 +1754,7 @@ impl EscrowContract {
     pub fn sweep_untracked_balance(env: Env, admin: Address, token: Address, recipient: Address) -> i128 {
         admin.require_auth();
         require_admin(&env, &admin);
+        require_not_paused(&env);
 
         let contract_balance =
             token::Client::new(&env, &token).balance(&env.current_contract_address());

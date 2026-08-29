@@ -38,7 +38,7 @@ Platform fees can be adjusted by admin within constraints:
 2. Community notified (off-chain)
 3. Grace period (48 hours recommended)
 4. Fee update executed
-5. Event emitted: `FeeUpdated`
+5. Event emitted: `fee_updated`
 
 ### Admin Transfer
 
@@ -88,12 +88,22 @@ Admins can resolve disputes in three ways:
 
 ## Emergency Procedures
 
-### Contract Pause (Future Feature)
-In case of critical vulnerability:
-1. Admin can pause contract operations
-2. All state-changing functions disabled
-3. Only admin can unpause
-4. Query functions remain available
+### Contract Pause (Implemented in `escrow_contract`)
+The protocol currently exposes an emergency pause switch in `escrow_contract` via `set_paused(admin, paused)` and `is_paused()`. This is a contract-level circuit breaker, not a full protocol-wide stop: the other five contracts have no pause concept and keep operating normally.
+
+**Current behavior:**
+1. `set_paused` is admin-only and flips the instance-level pause flag.
+2. Every fund-moving / escrow-state-changing path calls `require_not_paused()` before proceeding.
+3. `is_paused()` remains readable while the contract is halted.
+
+**Functions gated while paused:** `create_escrow`, `create_escrows_batch`, `mark_holdback_escrow`, `release_escrow`, `refund_escrow`, `resolve_dispute`, `resolve_dispute_split`, `release_holdback_escrow`, and `reclaim_expired_escrow` all revert with `ProtocolPaused` if the flag is set.
+
+**Deliberate exemptions:**
+- `freeze_funds` is intentionally not blocked by `require_not_paused()`. It only transitions an escrow from `Locked` or `Holdback` into the disputed `Paused` state and is used to preserve the ability to freeze suspicious funds during an incident.
+- `raise_dispute` is also left available while paused so a dispute can still be raised against an escrow under investigation.
+- `sweep_untracked_balance` remains admin-only and is not treated as a normal fund-movement path for the pause gate.
+
+**Roadmap note:** A protocol-wide pause across all six contracts remains a future design goal and should be tracked separately from the current `escrow_contract`-only emergency breaker.
 
 ### Fund Recovery
 If funds stuck due to edge case:
@@ -123,11 +133,13 @@ If funds stuck due to edge case:
 
 ### On-Chain Events
 All governance actions emit events:
-- `ProtocolInitialized`
-- `FeeUpdated`
-- `AdminTransferred`
+- `protocol_initialized`
+- `fee_updated`
+- `admin_transferred`
 - `admin_added` / `admin_removed` (dispute-resolution roster changes)
 - `dispute_resolved`
+
+> Topic names are the strings emitted on-chain; payload structs like `ProtocolInitialized` and `FeeUpdated` are Rust type names, not the event topics subscribers should filter on.
 
 ### Off-Chain Communication
 - Major changes announced on Discord/Twitter

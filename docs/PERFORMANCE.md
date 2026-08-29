@@ -104,18 +104,28 @@ stellar contract invoke \
 
 ### Benchmark Tests
 
+The `Env::cpu_instructions()` example is not valid in Soroban SDK 27; the test host exposes cost and budget controls through `env.cost_estimate()`, not through a direct `cpu_instructions()` method. Use the host budget API for resource-limit tuning and compare actual fee or host-budget output from a deployed transaction rather than trying to assert on a nonexistent per-call instruction counter.
+
 ```rust
 #[test]
-fn bench_create_delivery() {
+fn benchmark_create_delivery() {
     let env = Env::default();
-    let start_instructions = env.cpu_instructions();
-    
-    contract.create_delivery(...);
-    
-    let end_instructions = env.cpu_instructions();
-    println!("Instructions used: {}", end_instructions - start_instructions);
+
+    // SDK 27 exposes cost-budget controls here rather than a direct
+    // `cpu_instructions()` accessor.
+    env.cost_estimate().disable_resource_limits();
+    env.cost_estimate()
+        .budget()
+        .reset_limits(1_000_000_000, 1_000_000_000);
+
+    // Invoke the contract under test and record the resulting fee or host
+    // output for a before/after comparison.
+    // let result = contract.create_delivery(...);
+    // println!("resource budget reset for benchmark run");
 }
 ```
+
+For production profiling, prefer the on-chain measurement flow already described above: deploy to testnet, invoke the function with fee tracking, and compare the resulting transaction resource usage instead of relying on a removed in-test API.
 
 ## Contract Size Optimization
 

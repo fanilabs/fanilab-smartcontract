@@ -106,6 +106,10 @@ pub mod events {
         Symbol::new(env, "driver_removed")
     }
 
+    pub fn payout_routing_fallback(env: &Env) -> Symbol {
+        Symbol::new(env, "payout_routing_fallback")
+    }
+
     pub fn fleet_deactivated(env: &Env) -> Symbol {
         Symbol::new(env, "fleet_deactivated")
     }
@@ -146,6 +150,14 @@ pub mod events {
     // Identity and reputation events
     pub fn driver_registered(env: &Env) -> Symbol {
         Symbol::new(env, "driver_registered")
+    }
+
+    pub fn driver_suspended(env: &Env) -> Symbol {
+        Symbol::new(env, "driver_suspended")
+    }
+
+    pub fn driver_reinstated(env: &Env) -> Symbol {
+        Symbol::new(env, "driver_reinstated")
     }
 
     pub fn user_registered(env: &Env) -> Symbol {
@@ -215,8 +227,6 @@ pub struct DeliveryCreatedEvent {
     pub delivery_id: u64,
     /// Address that created and funds the delivery request.
     pub sender: Address,
-    /// Escrow amount expected for the delivery when known by the emitter.
-    pub amount: i128,
 }
 
 #[contracttype]
@@ -364,6 +374,15 @@ pub struct DriverRemovedEvent {
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PayoutRoutingFallbackEvent {
+    /// Fleet whose missing profile caused the fallback.
+    pub fleet_id: u64,
+    /// Driver receiving the payout directly.
+    pub driver: Address,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FleetDeactivatedEvent {
     /// Fleet identifier that was deactivated.
     pub fleet_id: u64,
@@ -450,6 +469,24 @@ pub struct DisputeResolvedPayoutEvent {
 pub struct DriverRegisteredEvent {
     /// Driver address that was registered.
     pub driver: Address,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DriverSuspendedEvent {
+    /// Driver address whose profile was suspended.
+    pub driver: Address,
+    /// Admin address that performed the suspension.
+    pub admin: Address,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DriverReinstatedEvent {
+    /// Driver address whose profile was reinstated.
+    pub driver: Address,
+    /// Admin address that performed the reinstatement.
+    pub admin: Address,
 }
 
 #[contracttype]
@@ -663,6 +700,9 @@ pub struct DriverProfile {
     pub reputation_score: u32,
     pub registered_at: u64,
     pub kyc_verified: bool,
+    /// Lifecycle status — `Active` on registration, `Suspended` after an
+    /// admin call to `suspend_driver`, restorable via `reinstate_driver`.
+    pub status: DriverStatus,
 }
 
 #[contracttype]
@@ -842,12 +882,10 @@ mod test {
         let event = DeliveryCreatedEvent {
             delivery_id: 1,
             sender: sender.clone(),
-            amount: 100,
         };
 
         assert_eq!(event.delivery_id, 1);
         assert_eq!(event.sender, sender);
-        assert_eq!(event.amount, 100);
     }
 
     #[test]
@@ -1085,6 +1123,7 @@ mod test {
             reputation_score: 85,
             registered_at: 1000000,
             kyc_verified: true,
+            status: DriverStatus::Active,
         };
 
         assert_eq!(profile.address, address);

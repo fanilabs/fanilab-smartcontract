@@ -2,6 +2,7 @@
 name = "identity_reputation_contract"
 version.workspace = true
 edition = "2021"
+license = "MIT"
 
 [lib]
 crate-type = ["cdylib", "rlib"]

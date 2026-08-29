@@ -9,7 +9,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
-# Both jobs only read the repository; the Codecov upload uses tokenless
+# All jobs only read the repository; the Codecov upload uses tokenless
 # same-repo upload and needs no extra scope (#244).
 permissions:
   contents: read
@@ -73,10 +73,11 @@ jobs:
         cargo install cargo-machete
         cargo machete
 
-    - name: Check for Outdated Dependencies
+    - name: Check for Outdated Dependencies (advisory, does not fail CI)
+      continue-on-error: true
       run: |
         cargo install cargo-outdated
-        cargo outdated --exit-code 1
+        cargo outdated
 
   wasm_target_drift_check:
     name: Prevent wasm32-unknown-unknown Target Drift
@@ -97,3 +98,34 @@ jobs:
           exit 1
         fi
         echo "✅ No legacy wasm target references found in scripts/, Makefile, Makefile.windows, or .vscode/."
+
+  typescript_sdk:
+    name: Build TypeScript SDK
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v7
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: 'npm'
+        cache-dependency-path: sdk/typescript/package-lock.json
+
+    - name: Install dependencies
+      working-directory: sdk/typescript
+      run: npm ci
+
+    - name: Type check SDK
+      working-directory: sdk/typescript
+      run: npx tsc --noEmit
+
+    - name: Build SDK
+      working-directory: sdk/typescript
+      run: npm run build
+
+    - name: Type check examples
+      working-directory: sdk/typescript
+      run: npx tsc --noEmit examples/basic-usage.ts

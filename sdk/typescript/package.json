@@ -1,13 +1,14 @@
 {
   "name": "@fanilab/sdk",
-  "version": "1.0.0",
+  "version": "0.2.0",
+  "private": true,
   "description": "TypeScript SDK for FaniLab smart contracts on Stellar Soroban",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
     "build": "tsc",
     "test": "jest",
-    "prepublish": "npm run build"
+    "prepare": "npm run build"
   },
   "keywords": [
     "stellar",

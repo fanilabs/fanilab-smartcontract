@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **BREAKING (wire format):** `escrow_refunded` and `escrow_released` event topics now have a single, uniform payload shape across all emitters (`escrow_contract`).
+  - `reclaim_expired_escrow` previously emitted `(events::escrow_refunded(&env), delivery_id)` as the topic tuple with a bare `(sender, amount)` payload. It now emits `(events::escrow_refunded(&env),)` with a typed `EscrowRefundedEvent { delivery_id, sender, amount }` payload, matching `refund_escrow`.
+  - `release_holdback_escrow` previously emitted `(events::escrow_released(&env), delivery_id)` as the topic tuple with a bare `(driver, driver_amount, platform_fee)` payload. It now emits `(events::escrow_released(&env),)` with a typed `EscrowReleasedEvent { delivery_id, driver, amount, platform_fee }` payload, matching `release_escrow`.
+  - Off-chain consumers subscribing to these topics must update their decoders to use the typed struct form. The `delivery_id` field is now in the payload rather than the topic. No information is lost — `EscrowReleasedEvent` and `EscrowRefundedEvent` already carried all relevant fields. (Fixes #287.)
+
 ### Added
 - `escrow_contract::clear_fleet_management_contract(admin)` — admin-gated, mirrors `clear_settlement_contract`: unsets a configured fleet-management contract so `get_fleet_management_contract` returns `None` and payouts for fleet-linked escrows go directly to the driver; a no-op that still succeeds when nothing is configured (Issue #239). No `clear_dispute_resolution_contract` counterpart is provided — clearing it would permanently disable `freeze_funds`; the documented remedy is to repoint via `set_dispute_resolution_contract` (decision recorded in `docs/API.md`)
 - `dispute_resolution_contract`: `add_admin` / `remove_admin` now emit `admin_added` / `admin_removed` events carrying `(caller, affected_admin)` so roster changes are observable on-chain (Issue #212)
@@ -46,8 +52,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `#[allow(deprecated)]` annotations for SDK 27.0.0 `env.events().publish()` API deprecation (remains functional)
 
 ### Fixed
-- `EscrowRecord` now carries a `delivery_id` field matching the delivery-side record, and every escrow creation path populates it with the correct id so `get_escrow(id)` and paired delivery/escrow state lookups stay self-describing and consistent (Issue #285)
-- `dispute_resolution_contract::init` now guards on `AdminList` instead of the unrelated `DeliveryContract` key, preventing re-initialization from depending on a fragile peer-contract invariant (Issue #286)
+- `escrow_contract::resolve_dispute_split` now applies the same platform-fee and payout-routing path used by other earnings settlements, so split resolutions no longer bypass the fleet treasury / settlement-contract routing logic and no longer skip the admin fee on the driver's share (Issue #271)
+- `escrow_contract::create_escrows_batch` now accepts per-entry `fleet_id` values instead of hardcoding `None`, allowing batched escrows to use the same fleet routing that single-escrow creation already supports (Issue #272)
+- `escrow_contract::EscrowError` now includes a dedicated `BatchTooLarge` variant so oversized batches return a specific, contract-appropriate error instead of overloading `InvalidState` (Issue #273)
+- `shared_types::DeliveryCreatedEvent` no longer publishes a dead `amount` field, and the delivery creation events now emit the payload shape that actually matches the contract's semantics (Issue #274)
 - `escrow_contract::create_escrows_batch` now increments `TotalLocked(token)` by the sum of the batch, matching `create_escrow`'s fund accounting so `sweep_untracked_balance` can no longer drain batch-created escrows as "untracked" surplus (Issue #188)
 - `escrow_contract::create_escrows_batch` now enforces the same guards as `create_escrow`: the batch token must match `ProtocolConfig::token` (`InvalidToken`) and every element amount must be positive (`InvalidAmount`) (Issue #189)
 

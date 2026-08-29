@@ -231,6 +231,28 @@ fn test_init_and_setup() {
 }
 
 #[test]
+fn test_identity_reputation_getter_round_trip_and_unauthorized_setter() {
+    let (env, admin, _, _, _, _, _, dispute_client) = setup_test();
+    let identity_contract = Address::generate(&env);
+
+    let result = dispute_client.try_get_identity_reputation_contract();
+    match result {
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::NotInitialized.into()),
+        _ => panic!("Expected NotInitialized before configuring the identity contract"),
+    }
+
+    let attacker = Address::generate(&env);
+    let result = dispute_client.try_set_identity_reputation_contract(&attacker, &identity_contract);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::Unauthorized.into()),
+        _ => panic!("Expected Unauthorized from non-admin setter"),
+    }
+
+    dispute_client.set_identity_reputation_contract(&admin, &identity_contract);
+    assert_eq!(dispute_client.get_identity_reputation_contract(), identity_contract);
+}
+
+#[test]
 fn test_admin_whitelist_management() {
     let (env, admin, _, _, _, _, _, dispute_client) = setup_test();
 

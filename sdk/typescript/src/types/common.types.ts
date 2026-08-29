@@ -1,3 +1,5 @@
+import { Keypair } from '@stellar/stellar-sdk';
+
 /**
  * Common types shared across FaniLab smart contracts
  */
@@ -20,6 +22,25 @@ export enum DeliveryStatus {
   Cancelled = 'Cancelled',
 }
 
+export enum DisputeStatus {
+  Open = 'Open',
+  ResolvedRefund = 'ResolvedRefund',
+  ResolvedPayout = 'ResolvedPayout',
+  Split = 'Split',
+}
+
+export enum DriverTier {
+  Bronze = 'Bronze',
+  Silver = 'Silver',
+  Gold = 'Gold',
+}
+
+export enum DriverFleetStatus {
+  Pending = 'Pending',
+  Active = 'Active',
+  Removed = 'Removed',
+}
+
 export interface ProtocolConfig {
   token: string;
   platformFeeBps: number;
@@ -39,13 +60,62 @@ export interface EscrowRecord {
   expiresAt?: number;
   disputedBy?: string;
   disputedAt?: number;
-  fleetId?: number;
+  fleetId?: bigint;
 }
 
 export interface PartyAddresses {
   sender: string;
   driver: string;
   recipient: string;
+}
+
+export interface DriverProfile {
+  address: string;
+  deliveriesCompleted: number;
+  reputationScore: number;
+  registeredAt: number;
+  kycVerified: boolean;
+}
+
+export interface UserProfile {
+  address: string;
+  registeredAt: number;
+}
+
+export interface ReputationConfig {
+  basePoints: number;
+  heavyCargoPoints: number;
+  fragilePoints: number;
+}
+
+export interface FleetProfile {
+  fleetId: bigint;
+  owner: string;
+  treasury: string;
+  totalActiveDrivers: number;
+  signers: string[];
+  signatureThreshold: number;
+  active: boolean;
+}
+
+export interface PendingTreasuryChange {
+  treasury: string;
+  activatesAt: number;
+}
+
+export interface EvidenceEntry {
+  submitter: string;
+  hash: string;
+}
+
+export interface DisputeCase {
+  deliveryId: bigint;
+  status: DisputeStatus;
+  raisedAt: number;
+  raisedBy: string;
+  evidenceHashes: EvidenceEntry[];
+  resolvedAt?: number;
+  resolvedBy?: string;
 }
 
 export interface FaniLabError {
@@ -63,9 +133,7 @@ export const ErrorCodes = {
   DuplicateDelivery: 8,
   ProviderNotFound: 9,
   ProtocolPaused: 11,
-};
-
-import { Keypair } from '@stellar/stellar-sdk';
+} as const;
 
 export interface ContractInvokeOptions {
   networkPassphrase?: string;

@@ -2,6 +2,7 @@
 name = "delivery_contract"
 version.workspace = true
 edition = "2021"
+license = "MIT"
 
 [lib]
 path = "lib.rs"

@@ -68,6 +68,12 @@ jobs:
 
         echo "Tag v${TAG_VERSION} matches all workspace crate manifests."
 
+    - name: Run Tests
+      # A tag push does not necessarily come from a commit that passed ci.yml,
+      # so gate the release on the full test suite here before anything is
+      # built, packaged, or published (#143).
+      run: cargo test --locked --verbose
+
     - name: Build Release Contracts
       run: cargo build --locked --target wasm32v1-none --release
 

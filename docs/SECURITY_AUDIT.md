@@ -249,9 +249,10 @@ cargo test proptest
 - **Low**: $100 - $1,000
 
 ### Reporting
-- Email: security@fanilab.com
-- Encrypted: PGP key available on website
+- Private vulnerability reporting: [GitHub Security Advisories](https://github.com/fanilabs/fanilab-smartcontract/security/advisories/new) ("Report a vulnerability")
 - Response SLA: 48 hours
+
+See [SECURITY.md](../SECURITY.md) for the full reporting process.
 
 ## References
 - [Stellar Security Best Practices](https://developers.stellar.org/docs/learn/security)

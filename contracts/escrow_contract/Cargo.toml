@@ -19,4 +19,5 @@ proptest = "1"
 # the actual contracts together instead of mocks. Mirrors the dev-dependency
 # pattern already used by dispute_resolution_contract.
 delivery_contract = { path = "../delivery_contract" }
+dispute_resolution_contract = { path = "../dispute_resolution_contract" }
 identity_reputation_contract = { path = "../identity_reputation_contract" }

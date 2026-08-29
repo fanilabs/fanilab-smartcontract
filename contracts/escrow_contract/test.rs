@@ -1,3 +1,5 @@
+extern crate std;
+
 use super::*;
 use proptest::prelude::*;
 use shared_types::{EscrowReleasedEvent, FaniLabError};
@@ -6,6 +8,20 @@ use soroban_sdk::{
     token::{Client as TokenClient, StellarAssetClient},
     xdr, Address, Env, TryFromVal, TryIntoVal, Val,
 };
+
+fn arm_reentrant_mock(env: &Env, target: &Address, attacker: &Address, method: &str, delivery_id: u64) {
+    env.as_contract(target, || {
+        env.storage()
+            .instance()
+            .set(&Symbol::new(env, "target"), attacker);
+        env.storage()
+            .instance()
+            .set(&Symbol::new(env, "method"), &Symbol::new(env, method));
+        env.storage()
+            .instance()
+            .set(&Symbol::new(env, "delivery_id"), &delivery_id);
+    });
+}
 
 proptest! {
     #[test]
@@ -39,6 +55,18 @@ fn mint(env: &Env, token: &Address, to: &Address, amount: i128) {
 
 fn balance(env: &Env, token: &Address, of: &Address) -> i128 {
     TokenClient::new(env, token).balance(of)
+}
+
+fn last_event(env: &Env) -> (soroban_sdk::Vec<Val>, Val) {
+    let events = env.events().all();
+    let raw = events.events().last().expect("no events emitted").clone();
+    let xdr::ContractEventBody::V0(body) = raw.body;
+    let mut topics = soroban_sdk::Vec::new(env);
+    for topic in body.topics.iter() {
+        topics.push_back(Val::try_from_val(env, topic).expect("failed to decode topic"));
+    }
+    let data = Val::try_from_val(env, &body.data).expect("failed to decode event data");
+    (topics, data)
 }
 
 /// A malicious settlement_contract used to prove the Issue #87
@@ -75,6 +103,107 @@ impl MaliciousSettlementContract {
             &Symbol::new(&env, "release_escrow"),
             soroban_sdk::vec![&env, _recipient.into_val(&env), 900u64.into_val(&env)],
         );
+    }
+}
+
+#[contract]
+struct MaliciousFleetContract;
+
+#[contractimpl]
+impl MaliciousFleetContract {
+    pub fn get_payout_address(env: Env, _driver: Address, _fleet_id: u64) -> Address {
+        let target: Address = env
+            .storage()
+            .instance()
+            .get(&Symbol::new(&env, "target"))
+            .unwrap();
+        let _: () = env.invoke_contract(
+            &target,
+            &Symbol::new(&env, "release_escrow"),
+            soroban_sdk::vec![&env, Address::generate(&env).into_val(&env), 0u64.into_val(&env)],
+        );
+        Address::generate(&env)
+    }
+}
+
+#[contract]
+struct MaliciousPreferenceContract;
+
+#[contractimpl]
+impl MaliciousPreferenceContract {
+    pub fn get_driver_preference(env: Env, _driver: Address) -> Option<Address> {
+        let target: Address = env
+            .storage()
+            .instance()
+            .get(&Symbol::new(&env, "target"))
+            .unwrap();
+        let _: () = env.invoke_contract(
+            &target,
+            &Symbol::new(&env, "release_escrow"),
+            soroban_sdk::vec![&env, Address::generate(&env).into_val(&env), 0u64.into_val(&env)],
+        );
+        Some(Address::generate(&env))
+    }
+
+    pub fn execute_settlement_swap(
+        env: Env,
+        _caller: Address,
+        _from_token: Address,
+        _to_token: Address,
+        _recipient: Address,
+        _amount: i128,
+        _min_amount_out: i128,
+    ) {
+        let target: Address = env
+            .storage()
+            .instance()
+            .get(&Symbol::new(&env, "target"))
+            .unwrap();
+        let _: () = env.invoke_contract(
+            &target,
+            &Symbol::new(&env, "release_escrow"),
+            soroban_sdk::vec![&env, _recipient.into_val(&env), 0u64.into_val(&env)],
+        );
+    }
+}
+
+#[contract]
+struct ReentrantToken;
+
+#[contractimpl]
+impl ReentrantToken {
+    pub fn mint(env: Env, to: Address, amount: i128) {
+        let key = Symbol::new(&env, "balance");
+        let mut balance: i128 = env.storage().persistent().get(&key).unwrap_or(0);
+        balance = balance.saturating_add(amount);
+        env.storage().persistent().set(&key, &balance);
+        env.storage().persistent().set(&Symbol::new(&env, "owner"), &to);
+    }
+
+    pub fn balance(env: Env, of: Address) -> i128 {
+        let key = Symbol::new(&env, "balance");
+        let balance: i128 = env.storage().persistent().get(&key).unwrap_or(0);
+        let owner: Address = env.storage().persistent().get(&Symbol::new(&env, "owner")).unwrap_or(of.clone());
+        if of == owner { balance } else { 0 }
+    }
+
+    pub fn transfer(env: Env, from: Address, to: Address, amount: i128) {
+        let target: Address = env
+            .storage()
+            .instance()
+            .get(&Symbol::new(&env, "target"))
+            .unwrap();
+        let _: () = env.invoke_contract(
+            &target,
+            &Symbol::new(&env, "release_escrow"),
+            soroban_sdk::vec![&env, to.into_val(&env), 0u64.into_val(&env)],
+        );
+        let key = Symbol::new(&env, "balance");
+        let mut balance: i128 = env.storage().persistent().get(&key).unwrap_or(0);
+        if balance >= amount {
+            balance = balance.saturating_sub(amount);
+            env.storage().persistent().set(&key, &balance);
+        }
     }
 }
 
@@ -2143,7 +2272,7 @@ fn test_release_escrow_event_amounts_match_balance_deltas() {
     // so any further client calls (even read-only balance queries) would
     // clear it first.
     let last_event = last_event(&env);
-    let event: EscrowReleasedEvent = EscrowReleasedEvent::try_from_val(&env, &last_event.2)
+    let event: EscrowReleasedEvent = EscrowReleasedEvent::try_from_val(&env, &last_event.1)
         .expect("failed to decode EscrowReleasedEvent");
 
     let driver_after = balance(&env, &token, &driver);
@@ -2932,6 +3061,98 @@ fn test_batch_total_locked_accumulates_across_senders() {
     batch2.push_back((202u64, driver.clone(), 500i128));
     client.create_escrows_batch(&sender2, &recipient, &token, &batch2);
     assert_eq!(client.get_total_locked(&token), 2500);
+}
+
+#[test]
+fn test_create_escrow_rejects_invalid_driver_and_parties() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+
+    client.init(&admin, &token, &0);
+    mint(&env, &token, &sender, 5000);
+
+    let driver_same_as_sender = sender.clone();
+    let result = client.try_create_escrow(
+        &sender,
+        &recipient,
+        &driver_same_as_sender,
+        &300u64,
+        &token,
+        &500,
+        &None,
+    );
+    match result {
+        Err(Ok(err)) => assert_eq!(err, EscrowError::InvalidDriver.into()),
+        _ => panic!("Expected EscrowError::InvalidDriver for driver == sender"),
+    }
+
+    let driver_same_as_recipient = recipient.clone();
+    let result = client.try_create_escrow(
+        &sender,
+        &recipient,
+        &driver_same_as_recipient,
+        &301u64,
+        &token,
+        &500,
+        &None,
+    );
+    match result {
+        Err(Ok(err)) => assert_eq!(err, EscrowError::InvalidDriver.into()),
+        _ => panic!("Expected EscrowError::InvalidDriver for driver == recipient"),
+    }
+
+    let result = client.try_create_escrow(
+        &sender,
+        &sender,
+        &recipient,
+        &302u64,
+        &token,
+        &500,
+        &None,
+    );
+    match result {
+        Err(Ok(err)) => assert_eq!(err, EscrowError::InvalidParties.into()),
+        _ => panic!("Expected EscrowError::InvalidParties for sender == recipient"),
+    }
+}
+
+#[test]
+fn test_batch_rejects_invalid_driver_and_parties() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+
+    client.init(&admin, &token, &0);
+    mint(&env, &token, &sender, 2000);
+
+    let mut invalid_driver_batch = soroban_sdk::Vec::new(&env);
+    invalid_driver_batch.push_back((400u64, sender.clone(), 1000i128));
+
+    let result = client.try_create_escrows_batch(&sender, &recipient, &token, &invalid_driver_batch);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, EscrowError::InvalidDriver.into()),
+        _ => panic!("Expected EscrowError::InvalidDriver in batched creation"),
+    }
+
+    let mut invalid_party_batch = soroban_sdk::Vec::new(&env);
+    invalid_party_batch.push_back((401u64, recipient.clone(), 1000i128));
+
+    let result = client.try_create_escrows_batch(&sender, &sender, &token, &invalid_party_batch);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, EscrowError::InvalidParties.into()),
+        _ => panic!("Expected EscrowError::InvalidParties in batched creation"),
+    }
 }
 
 // ── Issue #189: create_escrows_batch must enforce create_escrow's guards ─────
@@ -4105,20 +4326,6 @@ fn test_resolve_dispute_split_requires_admin_when_no_dispute_contract() {
 /// `get_payout_address` and routes the driver's earnings to whatever address
 /// it returns. Here that is a fixed "treasury" address stored under the
 /// `treasury` key, distinct from the driver, so a test can tell whether the
-/// fleet integration was consulted.
-#[contract]
-struct MockFleetManagementContract;
-
-#[contractimpl]
-impl MockFleetManagementContract {
-    pub fn get_payout_address(env: Env, _driver: Address, _fleet_id: u64) -> Address {
-        env.storage()
-            .instance()
-            .get(&Symbol::new(&env, "treasury"))
-            .unwrap()
-    }
-}
-
 #[test]
 fn test_clear_fleet_management_contract_reverts_to_none() {
     let (env, contract_id) = setup_env();

@@ -677,7 +677,8 @@ impl DeliveryContract {
 
         let is_sender = caller == delivery.sender;
         let is_recipient = caller == delivery.recipient;
-        if !is_sender && !is_recipient {
+        let is_driver = delivery.driver.as_ref().map(|d| d == caller).unwrap_or(false);
+        if !is_sender && !is_recipient && !is_driver {
             panic_with_error!(&env, FaniLabError::Unauthorized);
         }
 

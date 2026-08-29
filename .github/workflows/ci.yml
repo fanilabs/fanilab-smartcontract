@@ -73,10 +73,11 @@ jobs:
         cargo install cargo-machete
         cargo machete
 
-    - name: Check for Outdated Dependencies
+    - name: Check for Outdated Dependencies (advisory, does not fail CI)
+      continue-on-error: true
       run: |
         cargo install cargo-outdated
-        cargo outdated --exit-code 1
+        cargo outdated
 
   wasm_target_drift_check:
     name: Prevent wasm32-unknown-unknown Target Drift

@@ -177,49 +177,18 @@ fn test_fee_calculation_max_values() {
 
 ## Property-Based Testing
 
-### Install PropTest
+### Property Tests
+`proptest` is already declared as a dev-dependency in the crates that use it, so contributors should add it only when extending property coverage to a new crate:
+
 ```bash
-cargo add proptest --dev
+cargo add proptest --dev --package escrow_contract
 ```
 
-### Example
-```rust
-use proptest::prelude::*;
-
-proptest! {
-    #[test]
-    fn test_fee_always_less_than_amount(
-        amount in 1i128..1_000_000_000i128,
-        fee_bps in 0u32..1000u32
-    ) {
-        let fee = calculate_fee(amount, fee_bps);
-        prop_assert!(fee < amount);
-        prop_assert!(fee >= 0);
-    }
-}
-```
+The existing examples live in the escrow and identity reputation crates, and the workspace already includes the dependency there.
 
 ## Performance Testing
 
-### Gas Profiling
-```bash
-cargo test --release -- --nocapture | grep "instructions"
-```
-
-### Benchmarking
-```rust
-#[test]
-fn bench_create_delivery() {
-    let start = std::time::Instant::now();
-    
-    for _ in 0..1000 {
-        contract.create_delivery(...);
-    }
-    
-    let duration = start.elapsed();
-    println!("Avg time: {:?}", duration / 1000);
-}
-```
+For benchmark guidance, use the authoritative recipe in `docs/PERFORMANCE.md`. The old `cargo test --release -- --nocapture | grep "instructions"` command was removed because it produced no output and was not backed by a real performance harness in this workspace.
 
 ## Best Practices
 

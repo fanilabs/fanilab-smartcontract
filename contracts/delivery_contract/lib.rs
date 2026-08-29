@@ -8,10 +8,26 @@ use shared_types::{
 };
 pub use shared_types::{DeliveryId, DeliveryRecord, DeliveryStatus};
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, panic_with_error, Address, Env, Symbol,
+    contract, contracterror, contractimpl, contracttype, panic_with_error, Address, Env, IntoVal,
+    Symbol,
 };
 
 // Local DeliveryMetadata removed in favor of shared_types::DeliveryMetadata
+
+fn ensure_user_profile(env: &Env, identity_contract: &Address, user: &Address) {
+    let has_profile: bool = env.invoke_contract(
+        identity_contract,
+        &Symbol::new(env, "has_user_profile"),
+        soroban_sdk::vec![env, user.into_val(env)],
+    );
+    if !has_profile {
+        let _: shared_types::UserProfile = env.invoke_contract(
+            identity_contract,
+            &Symbol::new(env, "register_user"),
+            soroban_sdk::vec![env, user.into_val(env)],
+        );
+    }
+}
 
 /// Maximum deliveries per batch to stay within Soroban resource limits.
 pub const MAX_BATCH_SIZE: u32 = 100;
@@ -149,6 +165,7 @@ impl DeliveryContract {
         if env.storage().instance().has(&StorageKey::Admin) {
             panic_with_error!(&env, FaniLabError::AlreadyInitialized);
         }
+        admin.require_auth();
         env.storage().instance().set(&StorageKey::Admin, &admin);
         env.storage()
             .instance()
@@ -257,40 +274,6 @@ impl DeliveryContract {
 
         index_push(&env, &sender, 0, delivery_id);
         index_push(&env, &recipient, 1, delivery_id);
-        /* Legacy indexes.
-        let sender_key = DataKey::DeliveriesBySender(sender.clone());
-        let mut sender_deliveries: soroban_sdk::Vec<DeliveryId> = env
-            .storage()
-            .persistent()
-            .get(&sender_key)
-            .unwrap_or_else(|| soroban_sdk::Vec::new(&env));
-        sender_deliveries.push_back(delivery_id);
-        env.storage()
-            .persistent()
-            .set(&sender_key, &sender_deliveries);
-        env.storage().persistent().extend_ttl(
-            &sender_key,
-            ttl::LEDGER_TTL_THRESHOLD,
-            ttl::LEDGER_TTL_EXTEND_TO,
-        );
-
-        let recipient_key = DataKey::DeliveriesByRecipient(recipient.clone());
-        let mut recipient_deliveries: soroban_sdk::Vec<DeliveryId> = env
-            .storage()
-            .persistent()
-            .get(&recipient_key)
-            .unwrap_or_else(|| soroban_sdk::Vec::new(&env));
-        recipient_deliveries.push_back(delivery_id);
-        env.storage()
-            .persistent()
-            .set(&recipient_key, &recipient_deliveries);
-        env.storage().persistent().extend_ttl(
-            &recipient_key,
-            ttl::LEDGER_TTL_THRESHOLD,
-            ttl::LEDGER_TTL_EXTEND_TO,
-        );
-        */
-
         env.events().publish(
             (events::delivery_created(&env),),
             DeliveryCreatedEvent {
@@ -353,22 +336,6 @@ impl DeliveryContract {
 
         let timestamp = env.ledger().timestamp();
 
-        /* Legacy index batching.
-        let sender_key = DataKey::DeliveriesBySender(sender.clone());
-        let mut sender_deliveries: soroban_sdk::Vec<DeliveryId> = env
-            .storage()
-            .persistent()
-            .get(&sender_key)
-            .unwrap_or_else(|| soroban_sdk::Vec::new(&env));
-        */
-
-        let recipient_key = DataKey::DeliveriesByRecipient(recipient.clone());
-        let mut recipient_deliveries: soroban_sdk::Vec<DeliveryId> = env
-            .storage()
-            .persistent()
-            .get(&recipient_key)
-            .unwrap_or_else(|| soroban_sdk::Vec::new(&env));
-
         for i in 0..metadata_list.len() {
             if let Some(mut metadata) = metadata_list.get(i) {
                 counter += 1;
@@ -415,26 +382,6 @@ impl DeliveryContract {
                 result.push_back(delivery_id);
             }
         }
-
-        /* Legacy index flush.
-        env.storage()
-            .persistent()
-            .set(&sender_key, &sender_deliveries);
-        env.storage().persistent().extend_ttl(
-            &sender_key,
-            ttl::LEDGER_TTL_THRESHOLD,
-            ttl::LEDGER_TTL_EXTEND_TO,
-        );
-
-        env.storage()
-            .persistent()
-            .set(&recipient_key, &recipient_deliveries);
-        env.storage().persistent().extend_ttl(
-            &recipient_key,
-            ttl::LEDGER_TTL_THRESHOLD,
-            ttl::LEDGER_TTL_EXTEND_TO,
-        );
-        */
 
         result
     }
@@ -851,4 +798,3 @@ impl DeliveryContract {
 
 #[cfg(test)]
 mod test;
-// TTL management - implementation in progress

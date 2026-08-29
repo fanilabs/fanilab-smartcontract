@@ -87,7 +87,6 @@ jobs:
       uses: actions/upload-artifact@v7
       with:
         name: deployment-info
-        path: |
-          contract-ids-*.json
-          deployment-*.json
+        path: contract-ids-*.json
+        if-no-files-found: error
 

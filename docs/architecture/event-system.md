@@ -2,13 +2,13 @@
 
 ## Overview
 
-All Soroban contracts in the FaniLab platform emit on-chain events via a **centralized event system** defined in the `shared_types` crate. This approach ensures consistent topic strings, typed payloads, and a single source of truth for off-chain indexers and monitoring tools.
+The FaniLab contracts mostly emit on-chain events through the centralized `shared_types::events` helpers, but the live codebase also contains a number of inline topic strings for events that were added before the consolidation or that remain special-case topics. The authoritative source of truth is therefore the actual code, not the assumption that every topic must be routed through one helper module.
 
-Every `env.events().publish()` call across all contracts uses:
+Most event emits follow this pattern:
 1. A **topic helper** from `shared_types::events` — e.g., `events::delivery_created(&env)`
 2. A **typed payload struct** from `shared_types` — e.g., `DeliveryCreatedEvent { ... }`
 
-Inline `Symbol::new(env, "string_literal")` calls in event topics are not permitted in contract code. They exist only for non-event purposes such as cross-contract call method names.
+Some live events are still emitted with inline `Symbol::new(env, "...")` calls, especially in admin, dispute, holdback, and treasury flows. Those topics are included here explicitly so the monitoring and indexing documentation matches the current contract behavior.
 
 ---
 
@@ -82,8 +82,27 @@ All topic helpers live in `shared_types::events`. Each helper wraps `Symbol::new
 | `protocol_pause_status_changed` | `"protocol_pause_status_changed"` | `escrow_contract` |
 | `delivery_contract_initialized` | `"delivery_contract_initialized"` | `delivery_contract` |
 
-These seven were the last holdouts still using raw inline `Symbol::new(&env, "PascalCase")`
-calls instead of a `shared_types::events` helper (Issue #47) — fixed alongside this table.
+The live contracts currently still emit a set of inline topics in addition to the shared helper set. These include admin roster events, holdback/freeze events, treasury and signer configuration events, and sweep/volume updates.
+
+### Inline topic emissions still present in live contracts
+
+| Topic string | Emitting function(s) | Payload shape |
+|---|---|---|
+| `admin_added` | `dispute_resolution_contract::add_admin` | `(caller, new_admin)` |
+| `admin_removed` | `dispute_resolution_contract::remove_admin` | `(caller, old_admin)` |
+| `escrow_holdback_marked` | `escrow_contract::mark_holdback_escrow` | `(caller, timestamp)` with `delivery_id` in the topic tuple |
+| `funds_frozen` | `escrow_contract::freeze_funds` | `(caller, timestamp)` with `delivery_id` in the topic tuple |
+| `holdback_expired_released` | `escrow_contract::release_expired_holdback` | `(driver, amount, platform_fee)` with `delivery_id` in the topic tuple |
+| `holdback_window_updated` | `escrow_contract::set_holdback_window` | `(admin, new_window_seconds)` |
+| `signers_configured` | `fleet_management_contract::configure_signers` | `(fleet_id, owner, threshold)` |
+| `untracked_balance_swept` | `escrow_contract::sweep_untracked_balance` | `(token, untracked_balance, recipient)` |
+| `volume_tiers_updated` | `escrow_contract::set_volume_tiers` | `(admin, tiers.len())` |
+| `dispute_force_resolved` | `dispute_resolution_contract::force_resolve_dispute` | `(delivery_id)` |
+| `dispute_penalty_updated` | `dispute_resolution_contract::set_dispute_reputation_penalty` | `(caller, old_penalty, penalty)` |
+| `dispute_time_limit_updated` | `dispute_resolution_contract::update_dispute_time_limit` | `(caller, old_limit, new_limit)` |
+| `fleet_deactivated` | `fleet_management_contract::deactivate_fleet` | `FleetDeactivatedEvent { fleet_id, caller }` |
+| `fleet_owner_reassigned` | `fleet_management_contract::admin_reassign_fleet_owner` | `FleetOwnerReassignedEvent { fleet_id, admin, old_owner, new_owner }` |
+| `fleet_treasury_force_updated` | `fleet_management_contract::force_update_fleet_treasury` | `FleetTreasuryForceUpdatedEvent { fleet_id, admin, old_treasury, new_treasury }` |
 
 ---
 

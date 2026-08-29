@@ -59,7 +59,6 @@ export interface DeliveryRecord {
 export interface DeliveryCreatedEvent {
   deliveryId: bigint;
   sender: string;
-  amount?: bigint;
 }
 
 export interface DriverAssignedEvent {

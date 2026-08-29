@@ -49,6 +49,7 @@ they are not reserved for anything and should not be inferred to mean "no error.
 | 7 | `InvalidAmount` | Escrow amount is not positive. |
 | 8 | `NoPendingSettlementChange` | `confirm_settlement_contract` called with no proposal pending. |
 | 9 | `TimelockNotElapsed` | `confirm_settlement_contract` called before the proposal's timelock elapsed. |
+| 10 | `BatchTooLarge` | `create_escrows_batch` list exceeds `MAX_BATCH_SIZE` (100). |
 
 `escrow_contract` also raises `FaniLabError` directly for conditions that predate this
 crate's own enum (e.g. `Unauthorized`, `NotInitialized`, `ProtocolPaused`) — check both

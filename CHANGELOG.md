@@ -46,6 +46,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `#[allow(deprecated)]` annotations for SDK 27.0.0 `env.events().publish()` API deprecation (remains functional)
 
 ### Fixed
+- `escrow_contract::resolve_dispute_split` now applies the same platform-fee and payout-routing path used by other earnings settlements, so split resolutions no longer bypass the fleet treasury / settlement-contract routing logic and no longer skip the admin fee on the driver's share (Issue #271)
+- `escrow_contract::create_escrows_batch` now accepts per-entry `fleet_id` values instead of hardcoding `None`, allowing batched escrows to use the same fleet routing that single-escrow creation already supports (Issue #272)
+- `escrow_contract::EscrowError` now includes a dedicated `BatchTooLarge` variant so oversized batches return a specific, contract-appropriate error instead of overloading `InvalidState` (Issue #273)
+- `shared_types::DeliveryCreatedEvent` no longer publishes a dead `amount` field, and the delivery creation events now emit the payload shape that actually matches the contract's semantics (Issue #274)
 - `escrow_contract::create_escrows_batch` now increments `TotalLocked(token)` by the sum of the batch, matching `create_escrow`'s fund accounting so `sweep_untracked_balance` can no longer drain batch-created escrows as "untracked" surplus (Issue #188)
 - `escrow_contract::create_escrows_batch` now enforces the same guards as `create_escrow`: the batch token must match `ProtocolConfig::token` (`InvalidToken`) and every element amount must be positive (`InvalidAmount`) (Issue #189)
 

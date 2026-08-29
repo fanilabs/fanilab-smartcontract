@@ -397,6 +397,7 @@ pub enum EscrowError {
     InvalidAmount = 7,
     NoPendingSettlementChange = 8,
     TimelockNotElapsed = 9,
+    BatchTooLarge = 10,
 }
 
 #[contracttype]
@@ -924,7 +925,7 @@ impl EscrowContract {
     }
 
     /// Create multiple escrows in a single transaction.  Sender must authorize.
-    /// Takes a list of (delivery_id, driver, amount) tuples. All escrows use the
+    /// Takes a list of (delivery_id, driver, amount, fleet_id) tuples. All escrows use the
     /// configured protocol token. Returns the count of escrows created.
     #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
     pub fn create_escrows_batch(
@@ -932,13 +933,13 @@ impl EscrowContract {
         sender: Address,
         recipient: Address,
         token: Address,
-        escrow_list: soroban_sdk::Vec<(u64, Address, i128)>,
+        escrow_list: soroban_sdk::Vec<(u64, Address, i128, Option<u64>)>,
     ) -> u32 {
         sender.require_auth();
         require_not_paused(&env);
 
         if escrow_list.len() > constants::MAX_BATCH_SIZE {
-            panic_with_error!(&env, EscrowError::InvalidState);
+            panic_with_error!(&env, EscrowError::BatchTooLarge);
         }
 
         /* Legacy index batching (replaced by bounded pages).
@@ -963,7 +964,7 @@ impl EscrowContract {
         let mut count = 0u32;
         let mut batch_total: i128 = 0;
         for i in 0..escrow_list.len() {
-            if let Some((delivery_id, driver, amount)) = escrow_list.get(i) {
+            if let Some((delivery_id, driver, amount, fleet_id)) = escrow_list.get(i) {
                 if amount <= 0 {
                     panic_with_error!(&env, EscrowError::InvalidAmount);
                 }
@@ -994,7 +995,7 @@ impl EscrowContract {
                         disputed_by: None,
                         disputed_at: None,
                         holdback_started_at: None,
-                        fleet_id: None,
+                        fleet_id,
                     },
                 );
                 /*
@@ -1440,7 +1441,23 @@ impl EscrowContract {
         }
 
         let sender_amount = record.amount.saturating_mul(sender_share_bps as i128) / 10000;
-        let driver_amount = record.amount.saturating_sub(sender_amount);
+        let driver_share_amount = record.amount.saturating_sub(sender_amount);
+
+        let base_fee_bps: u32 = env
+            .storage()
+            .instance()
+            .get::<_, ProtocolConfig>(&StorageKey::ProtocolConfig)
+            .map(|config| config.platform_fee_bps)
+            .unwrap_or(0);
+        let sender_volume = Self::get_sender_volume(env.clone(), record.sender.clone());
+        let effective_fee_bps = get_effective_fee_bps(&env, base_fee_bps, sender_volume);
+        let platform_fee = calculate_fee(driver_share_amount, effective_fee_bps);
+        let net_driver_amount = driver_share_amount.saturating_sub(platform_fee);
+
+        let sender_volume_key = DataKey::SenderVolume(record.sender.clone());
+        env.storage()
+            .persistent()
+            .set(&sender_volume_key, &sender_volume.saturating_add(1));
 
         // Effects (state) are committed before the interactions (transfers)
         // below, per checks-effects-interactions.
@@ -1465,11 +1482,30 @@ impl EscrowContract {
                 &sender_amount,
             );
         }
-        if driver_amount > 0 {
+        if net_driver_amount > 0 {
+            let fleet_management = get_fleet_management_contract(&env);
+            payout_driver(
+                &env,
+                &record.token,
+                &record.driver,
+                net_driver_amount,
+                fleet_management.as_ref(),
+                record.fleet_id,
+                env.storage()
+                    .persistent()
+                    .get(&DataKey::EscrowPayoutAddress(delivery_id)),
+            );
+        }
+        if platform_fee > 0 {
+            let admin: Address = env
+                .storage()
+                .instance()
+                .get(&StorageKey::Admin)
+                .expect("Not initialized");
             token::Client::new(&env, &record.token).transfer(
                 &env.current_contract_address(),
-                &record.driver,
-                &driver_amount,
+                &admin,
+                &platform_fee,
             );
         }
 

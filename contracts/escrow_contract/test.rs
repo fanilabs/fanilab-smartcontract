@@ -4238,3 +4238,77 @@ fn test_clear_fleet_management_contract_reverts_payout_to_direct_transfer() {
     assert_eq!(balance(&env, &token, &treasury), 400);
     assert_eq!(client.get_escrow(&702u64).status, EscrowStatus::Released);
 }
+
+// Tests for issue #268: get_dispute_resolution_contract and get_protocol_version coverage
+
+#[test]
+fn test_get_dispute_resolution_contract_returns_none_before_configuration() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+
+    client.init(&admin, &token, &0);
+    assert_eq!(client.get_dispute_resolution_contract(), None);
+}
+
+#[test]
+fn test_set_and_get_dispute_resolution_contract_round_trip() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+    let dispute_contract = Address::generate(&env);
+
+    client.init(&admin, &token, &0);
+    assert_eq!(client.get_dispute_resolution_contract(), None);
+
+    client.set_dispute_resolution_contract(&admin, &dispute_contract);
+
+    assert_eq!(client.get_dispute_resolution_contract(), Some(dispute_contract));
+}
+
+#[test]
+fn test_set_dispute_resolution_contract_unauthorized_rejected() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+    let non_admin = Address::generate(&env);
+    let dispute_contract = Address::generate(&env);
+
+    client.init(&admin, &token, &0);
+
+    let result = client.try_set_dispute_resolution_contract(&non_admin, &dispute_contract);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::Unauthorized.into()),
+        _ => panic!("Expected FaniLabError::Unauthorized"),
+    }
+}
+
+#[test]
+fn test_get_protocol_version_returns_expected_constant() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+
+    client.init(&admin, &token, &0);
+    assert_eq!(client.get_protocol_version(), constants::PROTOCOL_VERSION);
+}
+
+#[test]
+fn test_get_protocol_version_before_init_panics_not_initialized() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let result = client.try_get_protocol_version();
+    match result {
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::NotInitialized.into()),
+        _ => panic!("Expected FaniLabError::NotInitialized"),
+    }
+}

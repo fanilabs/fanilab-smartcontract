@@ -745,3 +745,151 @@ fn test_is_eligible_for_enterprise_above_threshold() {
     assert!(profile.reputation_score > 75);
     assert!(client.is_eligible_for_enterprise(&driver));
 }
+
+// Tests for issue #270: reputation_contract configuration accessors coverage
+
+#[test]
+fn test_get_reputation_config_returns_defaults_when_unset() {
+    let (env, admin, client, _delivery_contract, _) = setup();
+
+    let config = client.get_reputation_config();
+    assert_eq!(config.base_points, 5);
+    assert_eq!(config.heavy_cargo_points, 3);
+    assert_eq!(config.fragile_points, 2);
+}
+
+#[test]
+fn test_set_and_get_reputation_config_round_trip() {
+    let (env, admin, client, _delivery_contract, _) = setup();
+
+    let new_config = ReputationConfig {
+        base_points: 10,
+        heavy_cargo_points: 5,
+        fragile_points: 4,
+    };
+
+    client.set_reputation_config(&admin, &new_config);
+
+    let config = client.get_reputation_config();
+    assert_eq!(config.base_points, 10);
+    assert_eq!(config.heavy_cargo_points, 5);
+    assert_eq!(config.fragile_points, 4);
+}
+
+#[test]
+fn test_set_reputation_config_unauthorized_rejected() {
+    let (env, _admin, client, _delivery_contract, _) = setup();
+    let non_admin = Address::generate(&env);
+
+    let new_config = ReputationConfig {
+        base_points: 10,
+        heavy_cargo_points: 5,
+        fragile_points: 4,
+    };
+
+    let result = client.try_set_reputation_config(&non_admin, &new_config);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::Unauthorized.into()),
+        _ => panic!("Expected FaniLabError::Unauthorized"),
+    }
+}
+
+#[test]
+fn test_changed_config_changes_awarded_points() {
+    let (env, admin, client, delivery_contract, _) = setup();
+    let driver = Address::generate(&env);
+    client.register_driver(&driver);
+
+    // Get points with default config
+    client.increase_reputation(&delivery_contract, &driver, &1u64, &1000u32, &false);
+    let profile_default = client.get_driver_profile(&driver);
+    // Default: base_points(5) + heavy_cargo_points(3) = 8
+    let points_with_default = profile_default.reputation_score - 50; // 50 is initial reputation
+
+    // Set new config
+    let new_config = ReputationConfig {
+        base_points: 20,
+        heavy_cargo_points: 10,
+        fragile_points: 5,
+    };
+    client.set_reputation_config(&admin, &new_config);
+
+    // Register new driver and get points with new config
+    let driver2 = Address::generate(&env);
+    client.register_driver(&driver2);
+    client.increase_reputation(&delivery_contract, &driver2, &1u64, &1000u32, &false);
+    let profile_new = client.get_driver_profile(&driver2);
+    // New config: base_points(20) + heavy_cargo_points(10) = 30
+    let points_with_new = profile_new.reputation_score - 50;
+
+    assert_eq!(points_with_default, 8);
+    assert_eq!(points_with_new, 30);
+}
+
+#[test]
+fn test_heavy_cargo_bonus_at_threshold() {
+    let (env, admin, client, delivery_contract, _) = setup();
+    let driver = Address::generate(&env);
+    client.register_driver(&driver);
+
+    // Test exactly at HEAVY_CARGO_GRAMS (5000) - should NOT receive bonus
+    client.increase_reputation(&delivery_contract, &driver, &1u64, &5000u32, &false);
+    let profile_at_threshold = client.get_driver_profile(&driver);
+    // Should be: base_points(5) only = 5
+    assert_eq!(profile_at_threshold.reputation_score, 55);
+
+    // Test above HEAVY_CARGO_GRAMS (5001) - should receive bonus
+    let driver2 = Address::generate(&env);
+    client.register_driver(&driver2);
+    client.increase_reputation(&delivery_contract, &driver2, &1u64, &5001u32, &false);
+    let profile_above_threshold = client.get_driver_profile(&driver2);
+    // Should be: base_points(5) + heavy_cargo_points(3) = 8
+    assert_eq!(profile_above_threshold.reputation_score, 58);
+}
+
+#[test]
+fn test_fragile_bonus_applies() {
+    let (env, _admin, client, delivery_contract, _) = setup();
+    let driver = Address::generate(&env);
+    client.register_driver(&driver);
+
+    // Test without fragile flag
+    client.increase_reputation(&delivery_contract, &driver, &1u64, &1000u32, &false);
+    let profile_non_fragile = client.get_driver_profile(&driver);
+    // base_points(5) only = 5
+    assert_eq!(profile_non_fragile.reputation_score, 55);
+
+    // Test with fragile flag
+    let driver2 = Address::generate(&env);
+    client.register_driver(&driver2);
+    client.increase_reputation(&delivery_contract, &driver2, &1u64, &1000u32, &true);
+    let profile_fragile = client.get_driver_profile(&driver2);
+    // base_points(5) + fragile_points(2) = 7
+    assert_eq!(profile_fragile.reputation_score, 57);
+}
+
+#[test]
+fn test_cumulative_reputation_capped_at_max() {
+    let (env, admin, client, delivery_contract, _) = setup();
+
+    // Set high point values to quickly reach MAX_REPUTATION
+    let high_config = ReputationConfig {
+        base_points: 50,
+        heavy_cargo_points: 25,
+        fragile_points: 25,
+    };
+    client.set_reputation_config(&admin, &high_config);
+
+    let driver = Address::generate(&env);
+    client.register_driver(&driver); // Starts at 50
+
+    // First delivery: 50 + (50 + 25 + 25) = 150, capped at 100
+    client.increase_reputation(&delivery_contract, &driver, &1u64, &5001u32, &true);
+    let profile = client.get_driver_profile(&driver);
+    assert_eq!(profile.reputation_score, 100);
+
+    // Additional deliveries should not increase further
+    client.increase_reputation(&delivery_contract, &driver, &2u64, &5001u32, &true);
+    let profile_second = client.get_driver_profile(&driver);
+    assert_eq!(profile_second.reputation_score, 100);
+}

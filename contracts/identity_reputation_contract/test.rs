@@ -441,6 +441,28 @@ fn test_init_stores_cross_contract_addresses() {
 }
 
 #[test]
+fn test_dispute_contract_getter_round_trip_and_unauthorized_setter() {
+    let (env, admin, client, _, _) = setup();
+    let dispute_contract = Address::generate(&env);
+
+    let result = client.try_get_dispute_contract();
+    match result {
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::NotInitialized.into()),
+        _ => panic!("Expected NotInitialized before configuring the dispute contract"),
+    }
+
+    let attacker = Address::generate(&env);
+    let result = client.try_set_dispute_contract(&attacker, &dispute_contract);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::Unauthorized.into()),
+        _ => panic!("Expected Unauthorized from non-admin setter"),
+    }
+
+    client.set_dispute_contract(&admin, &dispute_contract);
+    assert_eq!(client.get_dispute_contract(), dispute_contract);
+}
+
+#[test]
 fn test_admin_can_repoint_cross_contracts() {
     let (env, admin, client, _, _) = setup();
     let driver = Address::generate(&env);

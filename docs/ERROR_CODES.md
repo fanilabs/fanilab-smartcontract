@@ -49,6 +49,8 @@ they are not reserved for anything and should not be inferred to mean "no error.
 | 7 | `InvalidAmount` | Escrow amount is not positive. |
 | 8 | `NoPendingSettlementChange` | `confirm_settlement_contract` called with no proposal pending. |
 | 9 | `TimelockNotElapsed` | `confirm_settlement_contract` called before the proposal's timelock elapsed. |
+| 10 | `InvalidDriver` | Driver address matches the sender or recipient, which is not permitted for escrow creation. |
+| 11 | `InvalidParties` | Sender and recipient are the same address. |
 
 `escrow_contract` also raises `FaniLabError` directly for conditions that predate this
 crate's own enum (e.g. `Unauthorized`, `NotInitialized`, `ProtocolPaused`) — check both

@@ -219,7 +219,6 @@ impl IdentityReputationContract {
     #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
     pub fn register_driver(env: Env, driver: Address) {
         driver.require_auth();
-        require_escrow_not_paused(&env);
         let key = DataKey::DriverProfile(driver.clone());
         if env.storage().persistent().has(&key) {
             panic_with_error!(&env, FaniLabError::AlreadyInitialized);
@@ -248,9 +247,6 @@ impl IdentityReputationContract {
 
     #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
     pub fn register_user(env: Env, user: Address) -> UserProfile {
-        user.require_auth();
-        require_escrow_not_paused(&env);
-
         let registered_at = env.ledger().timestamp();
 
         let profile = UserProfile {

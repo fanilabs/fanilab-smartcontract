@@ -823,8 +823,8 @@ fn test_escrow_batch_secondary_indexes_append_ids() {
     );
 
     let mut escrow_list = soroban_sdk::Vec::new(&env);
-    escrow_list.push_back((11u64, driver_a.clone(), 100i128));
-    escrow_list.push_back((12u64, driver_b.clone(), 100i128));
+    escrow_list.push_back((11u64, driver_a.clone(), 100i128, None));
+    escrow_list.push_back((12u64, driver_b.clone(), 100i128, None));
     assert_eq!(
         client.create_escrows_batch(&sender, &recipient, &token, &escrow_list),
         2
@@ -2890,7 +2890,7 @@ fn test_create_escrows_batch_rejected_while_paused() {
     client.set_paused(&admin, &true);
 
     let mut escrow_list = soroban_sdk::Vec::new(&env);
-    escrow_list.push_back((901u64, driver, 500i128));
+    escrow_list.push_back((901u64, driver, 500i128, None));
 
     let result = client.try_create_escrows_batch(&sender, &recipient, &token, &escrow_list);
     match result {
@@ -2917,9 +2917,9 @@ fn test_batch_increases_total_locked() {
     mint(&env, &token, &sender, 6000);
 
     let mut escrow_list = soroban_sdk::Vec::new(&env);
-    escrow_list.push_back((1u64, driver.clone(), 1000i128));
-    escrow_list.push_back((2u64, driver.clone(), 2000i128));
-    escrow_list.push_back((3u64, driver.clone(), 3000i128));
+    escrow_list.push_back((1u64, driver.clone(), 1000i128, None));
+    escrow_list.push_back((2u64, driver.clone(), 2000i128, None));
+    escrow_list.push_back((3u64, driver.clone(), 3000i128, None));
 
     assert_eq!(client.get_total_locked(&token), 0);
     assert_eq!(
@@ -2945,8 +2945,8 @@ fn test_batch_release_each_returns_total_locked_to_zero() {
     mint(&env, &token, &sender, 3000);
 
     let mut escrow_list = soroban_sdk::Vec::new(&env);
-    escrow_list.push_back((4u64, driver.clone(), 1000i128));
-    escrow_list.push_back((5u64, driver.clone(), 2000i128));
+    escrow_list.push_back((4u64, driver.clone(), 1000i128, None));
+    escrow_list.push_back((5u64, driver.clone(), 2000i128, None));
 
     client.create_escrows_batch(&sender, &recipient, &token, &escrow_list);
     assert_eq!(client.get_total_locked(&token), 3000);
@@ -2975,8 +2975,8 @@ fn test_sweep_untracked_balance_after_batch_moves_no_funds() {
     mint(&env, &token, &sender, 2000);
 
     let mut escrow_list = soroban_sdk::Vec::new(&env);
-    escrow_list.push_back((6u64, driver.clone(), 1000i128));
-    escrow_list.push_back((7u64, driver.clone(), 1000i128));
+    escrow_list.push_back((6u64, driver.clone(), 1000i128, None));
+    escrow_list.push_back((7u64, driver.clone(), 1000i128, None));
 
     client.create_escrows_batch(&sender, &recipient, &token, &escrow_list);
     assert_eq!(client.get_total_locked(&token), 2000);
@@ -3021,14 +3021,14 @@ fn test_batch_total_locked_single_and_max_batch_size() {
 
     // Edge case: batch of size 1.
     let mut single = soroban_sdk::Vec::new(&env);
-    single.push_back((8u64, driver.clone(), 500i128));
+    single.push_back((8u64, driver.clone(), 500i128, None));
     client.create_escrows_batch(&sender, &recipient, &token, &single);
     assert_eq!(client.get_total_locked(&token), 500);
 
     // Edge case: batch at MAX_BATCH_SIZE.
     let mut max_batch = soroban_sdk::Vec::new(&env);
     for i in 0..constants::MAX_BATCH_SIZE {
-        max_batch.push_back((100u64 + u64::from(i), driver.clone(), 10i128));
+        max_batch.push_back((100u64 + u64::from(i), driver.clone(), 10i128, None));
     }
     client.create_escrows_batch(&sender, &recipient, &token, &max_batch);
     assert_eq!(client.get_total_locked(&token), 500 + 100 * 10);
@@ -3052,13 +3052,13 @@ fn test_batch_total_locked_accumulates_across_senders() {
     mint(&env, &token, &sender2, 500);
 
     let mut batch1 = soroban_sdk::Vec::new(&env);
-    batch1.push_back((200u64, driver.clone(), 1000i128));
-    batch1.push_back((201u64, driver.clone(), 1000i128));
+    batch1.push_back((200u64, driver.clone(), 1000i128, None));
+    batch1.push_back((201u64, driver.clone(), 1000i128, None));
     client.create_escrows_batch(&sender1, &recipient, &token, &batch1);
     assert_eq!(client.get_total_locked(&token), 2000);
 
     let mut batch2 = soroban_sdk::Vec::new(&env);
-    batch2.push_back((202u64, driver.clone(), 500i128));
+    batch2.push_back((202u64, driver.clone(), 500i128, None));
     client.create_escrows_batch(&sender2, &recipient, &token, &batch2);
     assert_eq!(client.get_total_locked(&token), 2500);
 }
@@ -3175,7 +3175,7 @@ fn test_batch_with_foreign_token_rejected() {
     mint(&env, &token, &sender, 500);
 
     let mut escrow_list = soroban_sdk::Vec::new(&env);
-    escrow_list.push_back((300u64, driver.clone(), 500i128));
+    escrow_list.push_back((300u64, driver.clone(), 500i128, None));
 
     let result = client.try_create_escrows_batch(&sender, &recipient, &other_token, &escrow_list);
     match result {
@@ -3201,7 +3201,7 @@ fn test_batch_with_zero_amount_rejected() {
     mint(&env, &token, &sender, 1000);
 
     let mut escrow_list = soroban_sdk::Vec::new(&env);
-    escrow_list.push_back((301u64, driver.clone(), 0i128));
+    escrow_list.push_back((301u64, driver.clone(), 0i128, None));
 
     let result = client.try_create_escrows_batch(&sender, &recipient, &token, &escrow_list);
     match result {
@@ -3227,7 +3227,7 @@ fn test_batch_with_negative_amount_rejected() {
     mint(&env, &token, &sender, 1000);
 
     let mut escrow_list = soroban_sdk::Vec::new(&env);
-    escrow_list.push_back((302u64, driver.clone(), -500i128));
+    escrow_list.push_back((302u64, driver.clone(), -500i128, None));
 
     let result = client.try_create_escrows_batch(&sender, &recipient, &token, &escrow_list);
     match result {
@@ -3256,9 +3256,9 @@ fn test_batch_invalid_element_leaves_no_partial_state() {
     mint(&env, &token, &sender, 3000);
 
     let mut escrow_list = soroban_sdk::Vec::new(&env);
-    escrow_list.push_back((400u64, driver.clone(), 1000i128));
-    escrow_list.push_back((401u64, driver.clone(), 0i128)); // invalid element at position 2
-    escrow_list.push_back((402u64, driver.clone(), 1000i128));
+    escrow_list.push_back((400u64, driver.clone(), 1000i128, None));
+    escrow_list.push_back((401u64, driver.clone(), 0i128, None)); // invalid element at position 2
+    escrow_list.push_back((402u64, driver.clone(), 1000i128, None));
 
     let result = client.try_create_escrows_batch(&sender, &recipient, &token, &escrow_list);
     match result {
@@ -3298,9 +3298,9 @@ fn test_batch_valid_creates_every_escrow() {
     mint(&env, &token, &sender, 3000);
 
     let mut escrow_list = soroban_sdk::Vec::new(&env);
-    escrow_list.push_back((500u64, driver.clone(), 1000i128));
-    escrow_list.push_back((501u64, driver.clone(), 1000i128));
-    escrow_list.push_back((502u64, driver.clone(), 1000i128));
+    escrow_list.push_back((500u64, driver.clone(), 1000i128, None));
+    escrow_list.push_back((501u64, driver.clone(), 1000i128, None));
+    escrow_list.push_back((502u64, driver.clone(), 1000i128, None));
 
     assert_eq!(
         client.create_escrows_batch(&sender, &recipient, &token, &escrow_list),

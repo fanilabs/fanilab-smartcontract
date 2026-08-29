@@ -279,7 +279,6 @@ impl DeliveryContract {
             DeliveryCreatedEvent {
                 delivery_id: delivery_id.value(),
                 sender,
-                amount: 0,
             },
         );
 
@@ -298,7 +297,7 @@ impl DeliveryContract {
     ///
     /// **Integration Sequence:**
     /// 1. Call `delivery_contract::create_deliveries_batch` with metadata → returns Vec<DeliveryId>
-    /// 2. Call `escrow_contract::create_escrows_batch` with (delivery_id, driver, amount) tuples
+    /// 2. Call `escrow_contract::create_escrows_batch` with (delivery_id, driver, amount, fleet_id) tuples
     ///
     /// The ordering constraint exists because delivery_ids must be known before escrows
     /// can reference them, and `create_escrows_batch` accepts explicit delivery_ids.
@@ -377,7 +376,6 @@ impl DeliveryContract {
                     DeliveryCreatedEvent {
                         delivery_id: delivery_id.value(),
                         sender: sender.clone(),
-                        amount: 0,
                     },
                 );
 

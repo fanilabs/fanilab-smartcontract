@@ -118,7 +118,6 @@ Emitted when a new delivery record is created.
 pub struct DeliveryCreatedEvent {
     pub delivery_id: u64,   // assigned delivery identifier
     pub sender: Address,    // address that created the delivery
-    pub amount: i128,       // escrow amount (0 when emitted from delivery_contract)
 }
 ```
 
@@ -365,7 +364,6 @@ Every contract that emits events must:
        DeliveryCreatedEvent {
            delivery_id: delivery_id.value(),
            sender,
-           amount: 0,
        },
    );
    ```

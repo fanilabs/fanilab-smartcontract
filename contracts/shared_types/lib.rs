@@ -223,8 +223,6 @@ pub struct DeliveryCreatedEvent {
     pub delivery_id: u64,
     /// Address that created and funds the delivery request.
     pub sender: Address,
-    /// Escrow amount expected for the delivery when known by the emitter.
-    pub amount: i128,
 }
 
 #[contracttype]
@@ -870,12 +868,10 @@ mod test {
         let event = DeliveryCreatedEvent {
             delivery_id: 1,
             sender: sender.clone(),
-            amount: 100,
         };
 
         assert_eq!(event.delivery_id, 1);
         assert_eq!(event.sender, sender);
-        assert_eq!(event.amount, 100);
     }
 
     #[test]

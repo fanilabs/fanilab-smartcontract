@@ -454,6 +454,7 @@ impl EscrowContract {
         if env.storage().instance().has(&StorageKey::Admin) {
             panic_with_error!(&env, FaniLabError::AlreadyInitialized);
         }
+        admin.require_auth();
         if platform_fee_bps > constants::MAX_PLATFORM_FEE_BPS {
             panic_with_error!(&env, EscrowError::InvalidFee);
         }
@@ -1287,6 +1288,7 @@ impl EscrowContract {
     #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
     pub fn raise_dispute(env: Env, caller: Address, delivery_id: u64) {
         caller.require_auth();
+        require_not_paused(&env);
         let mut record = load_escrow(&env, delivery_id);
         if caller != record.sender && caller != record.recipient && caller != record.driver {
             panic_with_error!(&env, FaniLabError::Unauthorized);
@@ -1688,6 +1690,7 @@ impl EscrowContract {
     pub fn sweep_untracked_balance(env: Env, admin: Address, token: Address, recipient: Address) -> i128 {
         admin.require_auth();
         require_admin(&env, &admin);
+        require_not_paused(&env);
 
         let contract_balance =
             token::Client::new(&env, &token).balance(&env.current_contract_address());

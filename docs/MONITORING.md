@@ -64,7 +64,8 @@ Example metrics:
 ### Critical Alerts (Immediate Response)
 - Contract error rate > 5%
 - TVL drops > 20% in 1 hour
-- **Untracked balance detected** (should be zero or negligible — indicates misclassified funds)
+- **`untracked_balance_swept`**: protocol-level outbound transfer that can move user funds to an arbitrary recipient; treat as an immediate risk if it is observed or if `get_untracked_balance()` is non-zero.
+- **`protocol_pause_status_changed`**: emergency pause toggled; any change in pause state is a site-wide operational alert that may represent incident response or governance action.
 - Admin key compromise detected
 - Contract balance insufficient
 
@@ -73,6 +74,9 @@ Example metrics:
 - Gas usage spike > 50%
 - Failed cross-contract calls
 - Unusual transaction patterns
+- **`funds_frozen`**: escrow entered a disputed/frozen state, indicating a live funds-protection event requiring review.
+- **`escrow_holdback_marked`**: delivery was confirmed into `Holdback`; this is the intermediate state before release, dispute, or forced resolution and should be watched for lifecycle anomalies.
+- **`dispute_force_resolved`**: timeout-driven resolution triggered an automatic split; this often signals a stalled or contested dispute and deserves investigation.
 - **Untracked balance growth** (trending up — potential repeated fund misclassification)
 
 ### Medium Priority (Within 4 hours)
@@ -89,11 +93,18 @@ Example metrics:
 
 ### Critical Events to Monitor
 ```rust
-// Escrow events
-escrow_funded
-escrow_released
-escrow_refunded
-delivery_disputed
+// Escrow fund movement and protective-state events
+escrow_funded               // funds entered escrow and should be matched to the expected delivery
+escrow_released             // escrow settled to driver or payout flow
+escrow_refunded             // sender was refunded and funds left escrow
+funds_frozen                // escrow moved into disputed/frozen state; operator should investigate a stalled or contested delivery
+untracked_balance_swept     // emergency/recovery sweep moved surplus funds to an admin-selected recipient; this is a high-risk fund-movement event
+escrow_holdback_marked      // delivery was confirmed into Holdback and the lock window started; this indicates the post-confirmation lifecycle is active
+
+// Dispute and safety lifecycle events
+delivery_disputed           // a party raised a dispute against a delivery or escrow
+dispute_force_resolved      // timeout-driven forced resolution executed an automatic split; this should be reviewed as a dispute escalation
+protocol_pause_status_changed // protocol pause state toggled; reflects emergency or defensive operational control
 
 // Delivery events
 delivery_created

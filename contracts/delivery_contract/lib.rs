@@ -149,6 +149,7 @@ impl DeliveryContract {
         if env.storage().instance().has(&StorageKey::Admin) {
             panic_with_error!(&env, FaniLabError::AlreadyInitialized);
         }
+        admin.require_auth();
         env.storage().instance().set(&StorageKey::Admin, &admin);
         env.storage()
             .instance()

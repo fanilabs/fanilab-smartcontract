@@ -1770,3 +1770,91 @@ fn test_create_delivery_and_batch_emit_consistent_events() {
         batch_delivery.metadata.cargo_description.weight_grams
     );
 }
+
+// Tests for issue #269: delivery_contract secondary-index accessors and identity getter
+
+#[test]
+fn test_get_identity_reputation_contract_returns_none_before_configuration() {
+    let env = Env::default();
+    let (client, _shipper, _driver, _recipient, _escrow_id, _admin) = setup_full(&env);
+
+    assert_eq!(client.get_identity_reputation_contract(), None);
+}
+
+#[test]
+fn test_set_and_get_identity_reputation_contract_round_trip() {
+    let env = Env::default();
+    let (client, _shipper, _driver, _recipient, _escrow_id, admin) = setup_full(&env);
+    let identity_contract = Address::generate(&env);
+
+    assert_eq!(client.get_identity_reputation_contract(), None);
+
+    client.set_identity_reputation_contract(&admin, &identity_contract);
+
+    assert_eq!(
+        client.get_identity_reputation_contract(),
+        Some(identity_contract)
+    );
+}
+
+#[test]
+fn test_index_contents_unchanged_after_delivery_completion() {
+    let env = Env::default();
+    let (client, shipper, driver, recipient, escrow_id, _admin) = setup_full(&env);
+
+    let first_id = client.create_delivery(&shipper, &recipient, &get_test_metadata(&env, 1));
+    let second_id = client.create_delivery(&shipper, &recipient, &get_test_metadata(&env, 2));
+
+    // Get indexes before state change
+    let sender_before = client.get_deliveries_by_sender(&shipper);
+    let recipient_before = client.get_deliveries_by_recipient(&recipient);
+
+    assert_eq!(sender_before.len(), 2);
+    assert_eq!(recipient_before.len(), 2);
+
+    // Assign, mark in transit, and confirm first delivery
+    client.assign_driver(&driver, &first_id);
+    client.mark_in_transit(&driver, &first_id);
+    client.confirm_delivery(&recipient, &first_id, &escrow_id);
+
+    // Index contents should be unchanged
+    let sender_after = client.get_deliveries_by_sender(&shipper);
+    let recipient_after = client.get_deliveries_by_recipient(&recipient);
+
+    assert_eq!(sender_after.len(), 2);
+    assert_eq!(recipient_after.len(), 2);
+    assert_eq!(sender_before.get(0), sender_after.get(0));
+    assert_eq!(sender_before.get(1), sender_after.get(1));
+    assert_eq!(recipient_before.get(0), recipient_after.get(0));
+    assert_eq!(recipient_before.get(1), recipient_after.get(1));
+}
+
+#[test]
+fn test_index_contents_unchanged_after_delivery_cancellation() {
+    let env = Env::default();
+    let (client, shipper, _driver, recipient, _escrow_id, _admin) = setup_full(&env);
+
+    let first_id = client.create_delivery(&shipper, &recipient, &get_test_metadata(&env, 1));
+    let second_id = client.create_delivery(&shipper, &recipient, &get_test_metadata(&env, 2));
+
+    // Get indexes before cancellation
+    let sender_before = client.get_deliveries_by_sender(&shipper);
+    let recipient_before = client.get_deliveries_by_recipient(&recipient);
+
+    assert_eq!(sender_before.len(), 2);
+    assert_eq!(recipient_before.len(), 2);
+
+    // Cancel first delivery
+    client.cancel_delivery(&shipper, &first_id);
+
+    // Index contents should be unchanged
+    let sender_after = client.get_deliveries_by_sender(&shipper);
+    let recipient_after = client.get_deliveries_by_recipient(&recipient);
+
+    assert_eq!(sender_after.len(), 2);
+    assert_eq!(recipient_after.len(), 2);
+    assert_eq!(sender_before.get(0), sender_after.get(0));
+    assert_eq!(sender_before.get(1), sender_after.get(1));
+    assert_eq!(recipient_before.get(0), recipient_after.get(0));
+    assert_eq!(recipient_before.get(1), recipient_after.get(1));
+}

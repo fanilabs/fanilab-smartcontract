@@ -90,22 +90,24 @@ Example metrics:
 ### Critical Events to Monitor
 ```rust
 // Escrow events
-escrow_funded
-escrow_released
-escrow_refunded
-delivery_disputed
+"escrow_funded"
+"escrow_released"
+"escrow_refunded"
+"delivery_disputed"
 
 // Delivery events
-delivery_created
-driver_assigned
-delivery_confirmed
-delivery_cancelled
+"delivery_created"
+"driver_assigned"
+"delivery_confirmed"
+"delivery_cancelled"
 
 // Admin events
-ProtocolInitialized
-FeeUpdated
-AdminTransferred
+"protocol_initialized"
+"fee_updated"
+"admin_transferred"
 ```
+
+> Event topics are the exact strings passed to `Symbol::new(...)` in the contracts. Rust payload types such as `ProtocolInitialized` or `FeeUpdated` are not the on-chain topic names; they are struct names used in the event payload.
 
 ### Event Processing Pipeline
 1. **Capture**: Listen to Horizon stream

@@ -414,17 +414,20 @@ escrow_contract.release_escrow(
 ```
 
 #### `refund_escrow`
-Refund funds to sender (e.g., cancelled delivery).
+Refund funds to the sender for an escrow that is still refundable.
 
 **Parameters:**
 - `caller: Address` - Sender or admin
 - `delivery_id: u64` - Delivery identifier
 
-**Authorization:** Sender or Admin
+**Authorization:**
+- from `Locked`: sender or admin
+- from `Holdback` or `Paused`: admin only
+- from `Released`, `Refunded`, or `Split`: rejected with `InvalidState`
 
 **Errors:**
-- `Unauthorized` - Caller not authorized
-- `InvalidState` - Escrow not in Locked or Paused state
+- `Unauthorized` - Caller not authorized for that state
+- `InvalidState` - Escrow not in `Locked`, `Paused`, or `Holdback`
 - `DeliveryNotFound` - No escrow for this delivery
 - `InsufficientFunds` - Contract balance insufficient
 
@@ -432,9 +435,16 @@ Refund funds to sender (e.g., cancelled delivery).
 
 **Example:**
 ```rust
+// Locked escrow: sender may self-refund.
 escrow_contract.refund_escrow(
     &sender,
     1u64  // delivery_id
+);
+
+// Disputed / holdback escrow: admin-only refund.
+escrow_contract.refund_escrow(
+    &admin,
+    2u64  // delivery_id
 );
 ```
 

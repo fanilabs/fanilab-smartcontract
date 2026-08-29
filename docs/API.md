@@ -162,6 +162,33 @@ Configure settlement contract for currency swaps.
 
 **Authorization:** Admin only
 
+#### `confirm_settlement_contract`
+Apply a previously proposed settlement-contract change once its timelock has
+elapsed. `set_settlement_contract` only *proposes* the change; this function
+makes it effective. If the `SETTLEMENT_CONTRACT_TIMELOCK_SECONDS` (3 days)
+window has not yet passed, the call fails, so a compromised admin key cannot
+silently repoint payouts without the delay window. See
+[`set_settlement_contract`](#set_settlement_contract),
+[`get_pending_settlement_contract`](#get_pending_settlement_contract), and
+[`clear_settlement_contract`](#clear_settlement_contract) for the full timelock
+trio.
+
+**Parameters:**
+- `admin: Address` - Admin address
+
+**Authorization:** Admin only
+
+**Errors:**
+- `NoPendingSettlementChange` - No settlement-contract proposal is awaiting confirmation
+- `TimelockNotElapsed` - The 3-day timelock has not yet elapsed
+
+**Events:** `settlement_contract_updated`
+
+**Example:**
+```rust
+escrow_contract.confirm_settlement_contract(&admin_address);
+```
+
 #### `clear_settlement_contract`
 Unset a previously configured settlement contract. After clearing,
 `get_settlement_contract` returns `None` and payouts stop routing through
@@ -172,6 +199,11 @@ change. Clearing when nothing is configured is a no-op that still succeeds.
 - `admin: Address` - Admin address
 
 **Authorization:** Admin only
+
+**Example:**
+```rust
+escrow_contract.clear_settlement_contract(&admin_address);
+```
 
 #### `set_fleet_management_contract`
 Configure the fleet-management contract consulted during driver payouts. When
@@ -184,6 +216,14 @@ it returns.
 - `fleet_contract: Address` - Fleet-management contract address
 
 **Authorization:** Admin only
+
+**Example:**
+```rust
+escrow_contract.set_fleet_management_contract(
+    &admin_address,
+    &fleet_contract_address
+);
+```
 
 #### `clear_fleet_management_contract`
 Unset a previously configured fleet-management contract (Issue #239), mirroring
@@ -205,6 +245,76 @@ present, so unsetting it would permanently disable the protocol's ability to
 freeze a suspicious escrow. The intended remedy for a misbehaving dispute
 contract is to repoint it with `set_dispute_resolution_contract`, not to remove
 the integration.
+
+#### `set_dispute_resolution_contract`
+Configure the dispute-resolution contract consulted by `freeze_funds`. When set,
+`freeze_funds` delegates the dispute to it via `get_driver_preference`; the
+address is expected to remain present (see the note above — there is no unsetting
+counterpart).
+
+**Parameters:**
+- `admin: Address` - Admin address
+- `dispute_contract: Address` - Dispute-resolution contract address
+
+**Authorization:** Admin only
+
+**Example:**
+```rust
+escrow_contract.set_dispute_resolution_contract(
+    &admin_address,
+    &dispute_contract_address
+);
+```
+
+#### `update_slippage_tolerance`
+Update the slippage tolerance (in basis points) used when settlement swaps are
+executed. The default is 500 (5%); the maximum is 10000 (100%).
+
+**Parameters:**
+- `admin: Address` - Admin address
+- `new_slippage_bps: u32` - New slippage tolerance in basis points (max 10000)
+
+**Authorization:** Admin only
+
+**Errors:**
+- `Unauthorized` - Caller is not admin
+- `InvalidFee` - Slippage tolerance exceeds 10000
+
+**Example:**
+```rust
+escrow_contract.update_slippage_tolerance(
+    &admin_address,
+    300 // 3% slippage tolerance
+);
+```
+
+#### `set_volume_tiers`
+Replace the volume-discount tier table used to compute sender fee discounts.
+Each tier maps a sender-volume threshold (see `get_sender_volume`) to a discount
+(in basis points) subtracted from the base platform fee. Tiers must be strictly
+ascending by `volume_threshold` (no duplicates, no descending runs) and each
+`discount_bps` must not exceed the max platform fee (1000 = 10%).
+
+**Parameters:**
+- `admin: Address` - Admin address
+- `tiers: Vec<VolumeTier>` - Ordered list of `VolumeTier { volume_threshold: u32, discount_bps: u32 }`
+
+**Authorization:** Admin only
+
+**Errors:**
+- `Unauthorized` - Caller is not admin
+- `InvalidFee` - A tier has `discount_bps > 1000`, or thresholds are not strictly ascending (duplicate or descending)
+
+**Events:** `volume_tiers_updated`
+
+**Example:**
+```rust
+let mut tiers = Vec::new(&env);
+tiers.push_back(&VolumeTier { volume_threshold: 0,      discount_bps: 0   });
+tiers.push_back(&VolumeTier { volume_threshold: 1_000,  discount_bps: 100 });
+tiers.push_back(&VolumeTier { volume_threshold: 10_000, discount_bps: 250 });
+escrow_contract.set_volume_tiers(&admin_address, &tiers);
+```
 
 #### `set_paused`
 Emergency circuit breaker. When paused, blocks every operation that creates a
@@ -425,11 +535,60 @@ Returns settlement contract address if configured.
 
 **Returns:** `Option<Address>`
 
+#### `get_pending_settlement_contract`
+Returns the pending (timelocked) settlement-contract change, if any, so
+off-chain clients can display the upcoming payout-routing change during its
+3-day timelock window. See [`set_settlement_contract`](#set_settlement_contract),
+[`confirm_settlement_contract`](#confirm_settlement_contract), and
+[`clear_settlement_contract`](#clear_settlement_contract) for the full timelock
+trio. Returns `None` when no change is pending.
+
+**Returns:** `Option<PendingSettlementContract>` — `{ settlement_contract: Address, activates_at: u64 }`
+
 #### `get_fleet_management_contract`
 Returns the configured fleet-management contract address, or `None` if none is
 set or it has been cleared with `clear_fleet_management_contract`.
 
 **Returns:** `Option<Address>`
+
+#### `get_dispute_resolution_contract`
+Returns the configured dispute-resolution contract address, or `None` if none
+is set.
+
+**Returns:** `Option<Address>`
+
+#### `get_slippage_tolerance`
+Returns the current slippage tolerance in basis points (default 500 = 5%) used
+when settlement swaps are executed.
+
+**Returns:** `u32`
+
+#### `get_total_locked`
+Returns the total amount of `token` currently locked across all escrows. This
+is the key metric referenced by `docs/MONITORING.md` and the basis for
+`get_untracked_balance` / `sweep_untracked_balance`.
+
+**Parameters:**
+- `token: Address` - The token to query
+
+**Returns:** `i128`
+
+#### `get_sender_volume`
+Returns the sender's payout count, incremented each time a payout is executed
+for the sender, used to select the applicable volume-discount tier. Returns `0`
+for a sender with no payouts yet.
+
+**Parameters:**
+- `sender: Address` - Sender address
+
+**Returns:** `u32`
+
+#### `get_volume_tiers`
+Returns the configured volume-discount tier table as an ordered list of
+`VolumeTier { volume_threshold, discount_bps }`. Returns an empty `Vec` if none
+has been set.
+
+**Returns:** `Vec<VolumeTier>`
 
 #### `get_escrow`
 Retrieve full escrow record.

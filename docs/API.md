@@ -162,6 +162,33 @@ Configure settlement contract for currency swaps.
 
 **Authorization:** Admin only
 
+#### `confirm_settlement_contract`
+Apply a previously proposed settlement-contract change once its timelock has
+elapsed. `set_settlement_contract` only *proposes* the change; this function
+makes it effective. If the `SETTLEMENT_CONTRACT_TIMELOCK_SECONDS` (3 days)
+window has not yet passed, the call fails, so a compromised admin key cannot
+silently repoint payouts without the delay window. See
+[`set_settlement_contract`](#set_settlement_contract),
+[`get_pending_settlement_contract`](#get_pending_settlement_contract), and
+[`clear_settlement_contract`](#clear_settlement_contract) for the full timelock
+trio.
+
+**Parameters:**
+- `admin: Address` - Admin address
+
+**Authorization:** Admin only
+
+**Errors:**
+- `NoPendingSettlementChange` - No settlement-contract proposal is awaiting confirmation
+- `TimelockNotElapsed` - The 3-day timelock has not yet elapsed
+
+**Events:** `settlement_contract_updated`
+
+**Example:**
+```rust
+escrow_contract.confirm_settlement_contract(&admin_address);
+```
+
 #### `clear_settlement_contract`
 Unset a previously configured settlement contract. After clearing,
 `get_settlement_contract` returns `None` and payouts stop routing through
@@ -172,6 +199,11 @@ change. Clearing when nothing is configured is a no-op that still succeeds.
 - `admin: Address` - Admin address
 
 **Authorization:** Admin only
+
+**Example:**
+```rust
+escrow_contract.clear_settlement_contract(&admin_address);
+```
 
 #### `set_fleet_management_contract`
 Configure the fleet-management contract consulted during driver payouts. When
@@ -184,6 +216,14 @@ it returns.
 - `fleet_contract: Address` - Fleet-management contract address
 
 **Authorization:** Admin only
+
+**Example:**
+```rust
+escrow_contract.set_fleet_management_contract(
+    &admin_address,
+    &fleet_contract_address
+);
+```
 
 #### `clear_fleet_management_contract`
 Unset a previously configured fleet-management contract (Issue #239), mirroring
@@ -205,6 +245,76 @@ present, so unsetting it would permanently disable the protocol's ability to
 freeze a suspicious escrow. The intended remedy for a misbehaving dispute
 contract is to repoint it with `set_dispute_resolution_contract`, not to remove
 the integration.
+
+#### `set_dispute_resolution_contract`
+Configure the dispute-resolution contract consulted by `freeze_funds`. When set,
+`freeze_funds` delegates the dispute to it via `get_driver_preference`; the
+address is expected to remain present (see the note above — there is no unsetting
+counterpart).
+
+**Parameters:**
+- `admin: Address` - Admin address
+- `dispute_contract: Address` - Dispute-resolution contract address
+
+**Authorization:** Admin only
+
+**Example:**
+```rust
+escrow_contract.set_dispute_resolution_contract(
+    &admin_address,
+    &dispute_contract_address
+);
+```
+
+#### `update_slippage_tolerance`
+Update the slippage tolerance (in basis points) used when settlement swaps are
+executed. The default is 500 (5%); the maximum is 10000 (100%).
+
+**Parameters:**
+- `admin: Address` - Admin address
+- `new_slippage_bps: u32` - New slippage tolerance in basis points (max 10000)
+
+**Authorization:** Admin only
+
+**Errors:**
+- `Unauthorized` - Caller is not admin
+- `InvalidFee` - Slippage tolerance exceeds 10000
+
+**Example:**
+```rust
+escrow_contract.update_slippage_tolerance(
+    &admin_address,
+    300 // 3% slippage tolerance
+);
+```
+
+#### `set_volume_tiers`
+Replace the volume-discount tier table used to compute sender fee discounts.
+Each tier maps a sender-volume threshold (see `get_sender_volume`) to a discount
+(in basis points) subtracted from the base platform fee. Tiers must be strictly
+ascending by `volume_threshold` (no duplicates, no descending runs) and each
+`discount_bps` must not exceed the max platform fee (1000 = 10%).
+
+**Parameters:**
+- `admin: Address` - Admin address
+- `tiers: Vec<VolumeTier>` - Ordered list of `VolumeTier { volume_threshold: u32, discount_bps: u32 }`
+
+**Authorization:** Admin only
+
+**Errors:**
+- `Unauthorized` - Caller is not admin
+- `InvalidFee` - A tier has `discount_bps > 1000`, or thresholds are not strictly ascending (duplicate or descending)
+
+**Events:** `volume_tiers_updated`
+
+**Example:**
+```rust
+let mut tiers = Vec::new(&env);
+tiers.push_back(&VolumeTier { volume_threshold: 0,      discount_bps: 0   });
+tiers.push_back(&VolumeTier { volume_threshold: 1_000,  discount_bps: 100 });
+tiers.push_back(&VolumeTier { volume_threshold: 10_000, discount_bps: 250 });
+escrow_contract.set_volume_tiers(&admin_address, &tiers);
+```
 
 #### `set_paused`
 Emergency circuit breaker. When paused, blocks every operation that creates a
@@ -304,17 +414,20 @@ escrow_contract.release_escrow(
 ```
 
 #### `refund_escrow`
-Refund funds to sender (e.g., cancelled delivery).
+Refund funds to the sender for an escrow that is still refundable.
 
 **Parameters:**
 - `caller: Address` - Sender or admin
 - `delivery_id: u64` - Delivery identifier
 
-**Authorization:** Sender or Admin
+**Authorization:**
+- from `Locked`: sender or admin
+- from `Holdback` or `Paused`: admin only
+- from `Released`, `Refunded`, or `Split`: rejected with `InvalidState`
 
 **Errors:**
-- `Unauthorized` - Caller not authorized
-- `InvalidState` - Escrow not in Locked or Paused state
+- `Unauthorized` - Caller not authorized for that state
+- `InvalidState` - Escrow not in `Locked`, `Paused`, or `Holdback`
 - `DeliveryNotFound` - No escrow for this delivery
 - `InsufficientFunds` - Contract balance insufficient
 
@@ -322,9 +435,16 @@ Refund funds to sender (e.g., cancelled delivery).
 
 **Example:**
 ```rust
+// Locked escrow: sender may self-refund.
 escrow_contract.refund_escrow(
     &sender,
     1u64  // delivery_id
+);
+
+// Disputed / holdback escrow: admin-only refund.
+escrow_contract.refund_escrow(
+    &admin,
+    2u64  // delivery_id
 );
 ```
 
@@ -425,11 +545,60 @@ Returns settlement contract address if configured.
 
 **Returns:** `Option<Address>`
 
+#### `get_pending_settlement_contract`
+Returns the pending (timelocked) settlement-contract change, if any, so
+off-chain clients can display the upcoming payout-routing change during its
+3-day timelock window. See [`set_settlement_contract`](#set_settlement_contract),
+[`confirm_settlement_contract`](#confirm_settlement_contract), and
+[`clear_settlement_contract`](#clear_settlement_contract) for the full timelock
+trio. Returns `None` when no change is pending.
+
+**Returns:** `Option<PendingSettlementContract>` — `{ settlement_contract: Address, activates_at: u64 }`
+
 #### `get_fleet_management_contract`
 Returns the configured fleet-management contract address, or `None` if none is
 set or it has been cleared with `clear_fleet_management_contract`.
 
 **Returns:** `Option<Address>`
+
+#### `get_dispute_resolution_contract`
+Returns the configured dispute-resolution contract address, or `None` if none
+is set.
+
+**Returns:** `Option<Address>`
+
+#### `get_slippage_tolerance`
+Returns the current slippage tolerance in basis points (default 500 = 5%) used
+when settlement swaps are executed.
+
+**Returns:** `u32`
+
+#### `get_total_locked`
+Returns the total amount of `token` currently locked across all escrows. This
+is the key metric referenced by `docs/MONITORING.md` and the basis for
+`get_untracked_balance` / `sweep_untracked_balance`.
+
+**Parameters:**
+- `token: Address` - The token to query
+
+**Returns:** `i128`
+
+#### `get_sender_volume`
+Returns the sender's payout count, incremented each time a payout is executed
+for the sender, used to select the applicable volume-discount tier. Returns `0`
+for a sender with no payouts yet.
+
+**Parameters:**
+- `sender: Address` - Sender address
+
+**Returns:** `u32`
+
+#### `get_volume_tiers`
+Returns the configured volume-discount tier table as an ordered list of
+`VolumeTier { volume_threshold, discount_bps }`. Returns an empty `Vec` if none
+has been set.
+
+**Returns:** `Vec<VolumeTier>`
 
 #### `get_escrow`
 Retrieve full escrow record.
@@ -695,6 +864,44 @@ Retrieve full delivery record.
 **Errors:**
 - `DeliveryNotFound` - Invalid delivery_id
 
+#### `update_delivery_metadata`
+Update a delivery's metadata while it is still `Pending` and only by the original sender.
+
+**Parameters:**
+- `sender: Address` - Original sender of the delivery
+- `delivery_id: DeliveryId` - Delivery identifier
+- `metadata: DeliveryMetadata` - Replacement metadata payload
+
+**Authorization:** Sender only
+
+**Errors:**
+- `Unauthorized` - Caller is not the sender
+- `InvalidState` - Delivery is not `Pending`
+- `InvalidMetadata` - The replacement metadata fails validation
+- `DeliveryNotFound` - No delivery exists for this ID
+
+**Events:** `delivery_metadata_updated`
+
+#### `get_combined_state`
+Return the delivery record, escrow record, and a synchronization flag for the same delivery ID.
+
+**Parameters:**
+- `delivery_id: DeliveryId` - Delivery identifier
+
+**Returns:** `(DeliveryRecord, EscrowRecord, bool)`
+
+**Semantics:**
+- `true` means the delivery and escrow states match the protocol invariants
+- `false` indicates a mismatch such as a `Disputed` delivery with a non-paused escrow or a `Cancelled` delivery whose escrow is not `Refunded`
+
+**Examples of synchronized pairs:**
+- `Pending` ↔ `Locked`
+- `Active` ↔ `Locked`
+- `InTransit` ↔ `Locked`
+- `Delivered` ↔ `Holdback` or `Released`
+- `Disputed` ↔ `Paused`
+- `Cancelled` ↔ `Refunded`
+
 #### `create_deliveries_batch`
 Create multiple deliveries in a single transaction (up to 100 per batch).
 
@@ -868,6 +1075,45 @@ Configure the identity/reputation contract address used for reputation penalties
 **Errors:**
 - `Unauthorized` - Caller is not an admin
 
+#### `set_dispute_reputation_penalty`
+Set the flat driver reputation penalty applied when a dispute resolves in the sender's favour.
+
+**Parameters:**
+- `caller: Address` - Admin address
+- `penalty: u32` - New penalty value (must be at most `MAX_DISPUTE_REPUTATION_PENALTY`)
+
+**Authorization:** Admin only
+
+**Errors:**
+- `Unauthorized` - Caller is not an admin
+- `InvalidState` - New penalty exceeds the configured maximum
+
+#### `set_dispute_resolution_limit`
+Set the dispute auto-resolution window.
+
+**Parameters:**
+- `caller: Address` - Admin address
+- `new_limit: u64` - New dispute-resolution limit in seconds
+
+**Authorization:** Admin only
+
+**Errors:**
+- `Unauthorized` - Caller is not an admin
+- `InvalidState` - `new_limit` is below `MIN_DISPUTE_RESOLUTION_LIMIT` (86400 seconds)
+
+#### `update_dispute_time_limit`
+Update the post-delivery dispute window.
+
+**Parameters:**
+- `caller: Address` - Admin address
+- `new_limit: u64` - New time limit in seconds
+
+**Authorization:** Admin only
+
+**Errors:**
+- `Unauthorized` - Caller is not an admin
+- `InvalidState` - `new_limit` is below `MIN_DISPUTE_TIME_LIMIT` (86400 seconds)
+
 ### Query Functions
 
 #### `is_admin`
@@ -904,6 +1150,21 @@ Return the configured identity/reputation contract address.
 
 #### `get_dispute_time_limit`
 Return the dispute time limit in seconds.
+
+**Returns:** `u64`
+
+#### `list_admins`
+List the current dispute-resolution admins.
+
+**Returns:** `Vec<Address>`
+
+#### `get_dispute_reputation_penalty`
+Return the configured dispute reputation penalty. If unset, the contract falls back to the default of 10 points.
+
+**Returns:** `u32`
+
+#### `get_dispute_resolution_limit`
+Return the forced-resolution timeout used by `force_resolve_dispute`.
 
 **Returns:** `u64`
 
@@ -1044,6 +1305,32 @@ dispute_contract.resolve_dispute_split_funds(
 );
 ```
 
+#### `force_resolve_dispute`
+Allow any party to the delivery to force a default 50/50 split once the configured resolution window has elapsed.
+
+**Parameters:**
+- `caller: Address` - Sender, recipient, or assigned driver
+- `delivery_id: DeliveryId` - Delivery identifier
+
+**Authorization:** Any delivery party; the caller must be the sender, recipient, or the assigned driver.
+
+**Errors:**
+- `DeliveryNotFound` - No dispute exists for this delivery
+- `Unauthorized` - Caller is not a party to the delivery
+- `InvalidState` - Dispute is not `Open`, or the resolution limit has not yet elapsed
+
+**Events:** `dispute_force_resolved`
+
+**State Changes:**
+- Marks the dispute as `Split`
+- Records the forced resolution timestamp and resolver
+- Calls `escrow_contract.resolve_dispute_split` with a 50/50 default sender/driver split
+
+**Example:**
+```rust
+dispute_contract.force_resolve_dispute(&sender, &delivery_id);
+```
+
 ---
 
 ## Fleet Management Contract
@@ -1063,6 +1350,7 @@ pub type FleetId = u64;
 pub enum DriverFleetStatus {
     Pending,  // Driver invited but has not yet accepted
     Active,   // Driver accepted and is an active fleet member
+    Removed,  // Driver was removed from the fleet history
 }
 ```
 
@@ -1072,25 +1360,12 @@ pub struct FleetProfile {
     pub fleet_id:             FleetId,
     pub owner:                Address,
     pub treasury:             Address,
+    pub active:               bool,
     pub total_active_drivers: u32,
+    pub signers:              Vec<Address>,
+    pub signature_threshold:  u32,
 }
 ```
-
-#### `FleetError`
-```rust
-pub enum FleetError {
-    AlreadyInitialized   = 1,
-    NotInitialized       = 2,
-    Unauthorized         = 3,
-    FleetNotFound        = 4,
-    DriverAlreadyInvited = 5,
-    InviteNotFound       = 6,
-    DriverAlreadyActive  = 7,
-}
-```
-## Fleet Management Contract
-
-Manages driver fleet organization and membership.
 
 ### Initialization
 
@@ -1106,11 +1381,11 @@ Initialize the fleet management contract.
 - `AlreadyInitialized` - Contract has already been initialized
 
 **State Changes:**
-- Sets admin address
-- Resets fleet counter to `0`
+- Sets the protocol admin
+- Resets the fleet counter to `0`
 
 #### `set_identity_contract`
-Configure the identity/reputation contract for automatic driver profile creation on fleet registration.
+Configure the identity/reputation contract used for automatic driver profile creation on fleet registration.
 
 **Parameters:**
 - `admin: Address` - Admin address
@@ -1129,7 +1404,7 @@ Register a new fleet, returning its assigned fleet ID.
 
 **Parameters:**
 - `owner: Address` - Fleet owner (must sign the transaction)
-- `treasury: Address` - Wallet that receives driver payouts for this fleet
+- `treasury: Address` - Wallet receiving driver payouts for this fleet
 
 **Authorization:** Owner (must sign)
 
@@ -1143,34 +1418,10 @@ Register a new fleet, returning its assigned fleet ID.
 **State Changes:**
 - Increments and persists the fleet counter
 - Creates and stores a `FleetProfile`
-- Calls `identity_reputation_contract.register_driver` for the owner (if identity contract configured)
+- Calls `identity_reputation_contract.register_driver` for the owner when an identity contract is configured
 
 #### `get_fleet`
-Return the stored profile for a fleet.
-Initialize fleet management contract.
-
-**Parameters:**
-- `admin: Address` - Admin account
-
-**Authorization:** Contract deployer
-
-### Fleet Operations
-
-#### `register_fleet`
-Register a new fleet.
-
-**Parameters:**
-- `owner: Address` - Fleet owner (caller)
-- `treasury: Address` - Fleet treasury wallet
-
-**Authorization:** Owner
-
-**Returns:** `FleetId` — new fleet identifier
-
-**Events:** `fleet_registered`
-
-#### `get_fleet`
-Retrieve fleet profile.
+Retrieve the stored profile for a fleet.
 
 **Parameters:**
 - `fleet_id: FleetId` - Fleet identifier
@@ -1180,13 +1431,60 @@ Retrieve fleet profile.
 **Errors:**
 - `FleetNotFound` - No fleet with that ID exists
 
+#### `deactivate_fleet`
+Deactivate an active fleet. This is a terminal lifecycle step: new invitations are rejected and `get_payout_address` falls back to the driver's own address until a fleet is reactivated or replaced.
+
+**Parameters:**
+- `caller: Address` - Fleet owner or protocol admin
+- `fleet_id: FleetId` - Fleet identifier
+
+**Authorization:** Fleet owner or contract admin
+
+**Errors:**
+- `FleetNotFound` - No fleet with that ID exists
+- `Unauthorized` - Caller is neither the fleet owner nor the admin
+
+**Events:** `fleet_deactivated`
+
+#### `admin_reassign_fleet_owner`
+Emergency recovery path for a compromised fleet-owner key. Only the protocol admin may call this.
+
+**Parameters:**
+- `admin: Address` - Contract admin
+- `fleet_id: FleetId` - Fleet identifier
+- `new_owner: Address` - Replacement fleet owner
+
+**Authorization:** Protocol admin only
+
+**Errors:**
+- `FleetNotFound` - No fleet with that ID exists
+- `Unauthorized` - Caller is not the admin
+
+**State Changes:**
+- Updates `profile.owner` to `new_owner`
+- Resets `profile.signers` to `[new_owner]` with `signature_threshold = 1`
+- Bypasses the normal fleet-owner timelock flow and the owner's own authorization path
+
+**Events:** `fleet_owner_reassigned`
+
+#### `admin_force_update_treasury`
+Emergency override that replaces the fleet treasury without waiting for the owner's timelock. This bypasses the normal owner-initiated treasury-change flow and clears any pending owner-side update so it cannot overwrite the emergency address later.
+
+**Parameters:**
+- `admin: Address` - Contract admin
+- `fleet_id: FleetId` - Fleet identifier
+- `new_treasury: Address` - Replacement treasury address
+
+**Authorization:** Protocol admin only
+
+**Errors:**
+- `FleetNotFound` - No fleet with that ID exists
+- `Unauthorized` - Caller is not the admin
+
+**Events:** `fleet_treasury_force_updated`
+
 #### `update_fleet_treasury`
-Propose a new treasury wallet for an existing fleet. Does **not** take effect
-immediately — the change becomes eligible for confirmation only after
-`TREASURY_CHANGE_TIMELOCK_SECONDS` (3 days) have elapsed, giving active
-drivers advance notice before their future payouts are redirected. Calling
-this again before confirmation overwrites the pending change and restarts
-the timelock.
+Propose a new treasury wallet for an existing fleet. This does not take effect immediately; the change becomes eligible only after `TREASURY_CHANGE_TIMELOCK_SECONDS` (3 days) have elapsed.
 
 **Parameters:**
 - `owner: Address` - Fleet owner (must sign)
@@ -1199,13 +1497,10 @@ the timelock.
 - `FleetNotFound` - No fleet with that ID exists
 - `Unauthorized` - Caller is not the fleet owner
 
-**Events:** `fleet_treasury_change_proposed` (emitted immediately, on proposal)
+**Events:** `fleet_treasury_change_proposed`
 
 #### `confirm_fleet_treasury_update`
 Apply a previously proposed treasury change once its timelock has elapsed.
-Callable by anyone — the security guarantee is the elapsed delay, not caller
-identity (mirrors `reclaim_expired_escrow`'s permissionless finalization
-pattern).
 
 **Parameters:**
 - `fleet_id: FleetId` - Fleet identifier
@@ -1215,12 +1510,10 @@ pattern).
 - `TimelockNotElapsed` - The proposal's timelock has not yet elapsed
 - `FleetNotFound` - No fleet with that ID exists
 
-**Events:** `fleet_treasury_updated` (emitted on confirmation, once the change takes effect)
+**Events:** `fleet_treasury_updated`
 
 #### `get_pending_treasury_update`
-Return the pending treasury change for a fleet, if any, so off-chain clients
-(e.g. driver apps) can display the upcoming payout redirect and its
-activation time.
+Return the pending treasury change for a fleet, if any.
 
 **Parameters:**
 - `fleet_id: FleetId` - Fleet identifier
@@ -1230,30 +1523,19 @@ activation time.
 ### Driver Management
 
 #### `add_driver_to_fleet`
-Invite a driver to join a fleet (creates a `Pending` invite).
+Invite a driver to join a fleet.
 
 **Parameters:**
-- `caller: Address` - Fleet owner (must sign)
+- `caller: Address` - Authorized signer or owner
 - `fleet_id: FleetId` - Fleet identifier
 - `driver: Address` - Driver to invite
-- `FleetNotFound` - Invalid fleet_id
-- `Unauthorized` - Caller not fleet owner
 
-**Events:** `fleet_treasury_updated`
-
-#### `add_driver_to_fleet`
-Invite a driver to a fleet (owner only).
-
-**Parameters:**
-- `caller: Address` - Fleet owner
-- `fleet_id: FleetId` - Fleet identifier
-- `driver: Address` - Driver address
-
-**Authorization:** Fleet owner
+**Authorization:** A signer authorized under the fleet's configured signer rule
 
 **Errors:**
 - `FleetNotFound` - No fleet with that ID exists
-- `Unauthorized` - Caller is not the fleet owner
+- `FleetInactive` - The fleet has been deactivated
+- `Unauthorized` - Caller is not an authorized signer
 - `DriverAlreadyInvited` - A pending invite already exists for this driver
 - `DriverAlreadyActive` - Driver is already an active member
 
@@ -1262,8 +1544,23 @@ Invite a driver to a fleet (owner only).
 **State Changes:**
 - Stores `DriverFleetStatus::Pending` for `(fleet_id, driver)`
 
+#### `cancel_invite`
+Cancel a driver's pending invite before it has been accepted.
+
+**Parameters:**
+- `owner: Address` - Authorized fleet signer
+- `fleet_id: FleetId` - Fleet identifier
+- `driver: Address` - Driver whose invite is being withdrawn
+
+**Authorization:** An authorized signer for the fleet
+
+**Errors:**
+- `FleetNotFound` - No fleet with that ID exists
+- `InviteNotFound` - No pending invite exists for this driver
+- `DriverAlreadyActive` - The driver is already active in the fleet
+
 #### `accept_fleet_invite`
-Accept a pending fleet invite. Transitions driver status from `Pending` → `Active`.
+Accept a pending fleet invite.
 
 **Parameters:**
 - `fleet_id: FleetId` - Fleet identifier
@@ -1273,28 +1570,8 @@ Accept a pending fleet invite. Transitions driver status from `Pending` → `Act
 
 **Errors:**
 - `FleetNotFound` - No fleet with that ID exists
-- `InviteNotFound` - No pending invite for this driver
+- `InviteNotFound` - No pending invite exists for this driver
 - `DriverAlreadyActive` - Driver is already an active member
-- `FleetNotFound` - Invalid fleet_id
-- `Unauthorized` - Caller not fleet owner
-- `DriverAlreadyInvited` - Driver already invited
-- `DriverAlreadyActive` - Driver already active
-
-**Events:** `driver_invited`
-
-#### `accept_fleet_invite`
-Accept pending fleet invite (driver-initiated).
-
-**Parameters:**
-- `fleet_id: FleetId` - Fleet identifier
-- `driver: Address` - Driver address (caller)
-
-**Authorization:** Driver
-
-**Errors:**
-- `FleetNotFound` - Invalid fleet_id
-- `InviteNotFound` - No pending invite
-- `DriverAlreadyActive` - Driver already active
 
 **Events:** `invite_accepted`
 
@@ -1303,43 +1580,26 @@ Accept pending fleet invite (driver-initiated).
 - Increments `FleetProfile.total_active_drivers`
 
 #### `remove_driver_from_fleet`
-Remove a driver from a fleet (bilateral — fleet owner or the driver may call).
+Remove a driver from a fleet. Either a signer on the fleet or the driver themselves may initiate the removal.
 
 **Parameters:**
 - `fleet_id: FleetId` - Fleet identifier
-- `caller: Address` - Fleet owner or the driver being removed (must sign)
+- `caller: Address` - Fleet signer or driver being removed (must sign)
 - `driver: Address` - Driver to remove
 
-**Authorization:** Fleet owner or the driver themselves
+**Authorization:** Fleet signer or the driver themselves
 
 **Errors:**
 - `FleetNotFound` - No fleet with that ID exists
-- `Unauthorized` - Caller is neither fleet owner nor the driver
-- `InviteNotFound` - No fleet record found for this driver
-- Transitions driver status from Pending → Active
-- Increments fleet's total_active_drivers
-- Adds driver to fleet roster
-
-#### `remove_driver_from_fleet`
-Remove driver from fleet (owner or driver can initiate).
-
-**Parameters:**
-- `fleet_id: FleetId` - Fleet identifier
-- `caller: Address` - Fleet owner or driver
-- `driver: Address` - Driver to remove
-
-**Authorization:** Fleet owner or driver
-
-**Errors:**
-- `FleetNotFound` - Invalid fleet_id
-- `InviteNotFound` - Driver not in fleet
-- `Unauthorized` - Caller not owner or driver
+- `Unauthorized` - Caller is neither an authorized signer nor the driver
+- `InviteNotFound` - No fleet record exists for this driver
 
 **Events:** `driver_removed`
 
 **State Changes:**
-- Deletes `DriverFleet(fleet_id, driver)` record
-- If driver was `Active`, decrements `FleetProfile.total_active_drivers`
+- Sets the driver's membership status to `Removed`
+- Decrements `FleetProfile.total_active_drivers` if the driver was active
+- Compacts the roster index so it remains contiguous
 
 #### `get_driver_fleet_status`
 Return the fleet membership status of a driver, or `None` if no record exists.
@@ -1350,24 +1610,50 @@ Return the fleet membership status of a driver, or `None` if no record exists.
 
 **Returns:** `Option<DriverFleetStatus>`
 
+#### `get_fleet_roster`
+Return the active roster of drivers for a fleet.
+
+**Parameters:**
+- `fleet_id: FleetId` - Fleet identifier
+
+**Returns:** `Vec<Address>`
+
+#### `configure_signers`
+Configure the signer set and signature threshold for a fleet.
+
+**Parameters:**
+- `owner: Address` - Fleet owner
+- `fleet_id: FleetId` - Fleet identifier
+- `signers: Vec<Address>` - Authorized signer addresses
+- `threshold: u32` - Minimum signatures required to perform signer-gated actions
+
+**Authorization:** Fleet owner only
+
+**Errors:**
+- `FleetNotFound` - No fleet with that ID exists
+- `Unauthorized` - Caller is not the fleet owner
+- `InvalidConfiguration` - Threshold is zero or exceeds the signer set size
+
+**Events:** `signers_configured`
+
+#### `get_fleet_signers`
+Return the configured signers and threshold for a fleet.
+
+**Parameters:**
+- `fleet_id: FleetId` - Fleet identifier
+
+**Returns:** `(Vec<Address>, u32)`
+
 ### Payout Routing
 
 #### `get_payout_address`
 Return the address the escrow contract should route funds to for a given driver and fleet.
 
-Returns the fleet's treasury if the driver is an active member; otherwise returns the driver's own address.
-- Deletes driver's fleet record
-- Decrements fleet's total_active_drivers (if active)
-- Removes driver from fleet roster
-
-#### `get_payout_address`
-Determine where payout funds should go for a driver in a fleet.
-
 **Parameters:**
 - `driver: Address` - Driver address
 - `fleet_id: FleetId` - Fleet identifier
 
-**Returns:** `Address` (fleet treasury if active member, driver address otherwise)
+**Returns:** `Address` — the fleet treasury if the driver is an active member; otherwise the driver's own address
 
 ---
 
@@ -1395,6 +1681,15 @@ pub struct DriverProfile {
     pub reputation_score:      u32,   // 0–100
     pub registered_at:         u64,
     pub kyc_verified:          bool,
+    pub status:                DriverStatus,
+}
+```
+
+#### `DriverStatus`
+```rust
+pub enum DriverStatus {
+    Active,     // Registered and eligible to participate
+    Suspended,  // Administratively suspended; profile preserved for audit
 }
 ```
 
@@ -1443,6 +1738,68 @@ Return the current admin address.
 **Errors:**
 - `NotInitialized` - Contract has not been initialized
 
+#### `set_reputation_config`
+Set the scoring config for delivery completion-based reputation awards.
+
+**Parameters:**
+- `admin: Address` - Admin address (must sign)
+- `config: ReputationConfig` - New reward configuration
+
+**Authorization:** Admin only
+
+**Errors:**
+- `Unauthorized` - Caller is not the stored admin
+
+**Defaults:**
+- `base_points = 5`
+- `heavy_cargo_points = 3`
+- `fragile_points = 2`
+
+#### `get_reputation_config`
+Return the configured reputation reward structure.
+
+**Returns:** `ReputationConfig`
+
+#### `set_delivery_contract`
+Set the address of the delivery contract that may call into reputation updates.
+
+**Parameters:**
+- `admin: Address` - Admin address (must sign)
+- `delivery_contract: Address` - Address of the delivery contract
+
+**Authorization:** Admin only
+
+**Errors:**
+- `Unauthorized` - Caller is not the stored admin
+
+#### `set_dispute_contract`
+Set the address of the dispute-resolution contract that may authorize reputation changes.
+
+**Parameters:**
+- `admin: Address` - Admin address (must sign)
+- `dispute_contract: Address` - Address of the dispute-resolution contract
+
+**Authorization:** Admin only
+
+**Errors:**
+- `Unauthorized` - Caller is not the stored admin
+
+#### `get_delivery_contract`
+Return the configured delivery contract address.
+
+**Returns:** `Address`
+
+**Errors:**
+- `NotInitialized` - Contract has not been initialized
+
+#### `get_dispute_contract`
+Return the configured dispute contract address.
+
+**Returns:** `Address`
+
+**Errors:**
+- `NotInitialized` - Contract has not been initialized
+
 #### `set_authorized_contract`
 Grant or revoke cross-contract call authorization.
 
@@ -1484,6 +1841,79 @@ Update a driver's KYC verification status.
 **Example:**
 ```rust
 identity_contract.update_driver_kyc_status(&admin, &driver, &true);
+```
+
+#### `suspend_driver`
+Suspend a registered driver. Sets `DriverProfile.status` to `DriverStatus::Suspended`.
+
+The profile record is **never deleted** — all history (reputation score,
+deliveries completed, KYC status) is preserved. This prevents a suspended
+driver from calling `register_driver` again to obtain a clean slate, since
+that function panics when a profile already exists.
+
+> **Note:** Gating `assign_driver` on driver suspension status is a deliberate
+> follow-up task in `delivery_contract` and is out of scope here.
+
+**Parameters:**
+- `admin: Address` - Admin address (must sign)
+- `driver: Address` - Driver to suspend
+
+**Authorization:** Admin only
+
+**Errors:**
+- `NotInitialized` - Contract has not been initialized
+- `Unauthorized` - Caller is not the stored admin
+- `ProviderNotFound` - Driver profile does not exist
+- `InvalidState` - Driver is already suspended
+
+**Events:** `driver_suspended`
+
+**State Changes:**
+- Sets `DriverProfile.status` to `DriverStatus::Suspended`
+- All other profile fields remain unchanged
+
+**Example:**
+```rust
+identity_contract.suspend_driver(&admin, &driver);
+```
+
+#### `reinstate_driver`
+Reinstate a previously suspended driver. Sets `DriverProfile.status` back to
+`DriverStatus::Active`. All accumulated reputation and delivery history is retained.
+
+**Parameters:**
+- `admin: Address` - Admin address (must sign)
+- `driver: Address` - Driver to reinstate
+
+**Authorization:** Admin only
+
+**Errors:**
+- `NotInitialized` - Contract has not been initialized
+- `Unauthorized` - Caller is not the stored admin
+- `ProviderNotFound` - Driver profile does not exist
+- `InvalidState` - Driver is already active (not suspended)
+
+**Events:** `driver_reinstated`
+
+**State Changes:**
+- Sets `DriverProfile.status` to `DriverStatus::Active`
+
+**Example:**
+```rust
+identity_contract.reinstate_driver(&admin, &driver);
+```
+
+#### `is_driver_suspended`
+Check whether a driver's profile is currently suspended.
+
+**Parameters:**
+- `driver: Address` - Driver address
+
+**Returns:** `bool` — `true` if the profile exists and has `DriverStatus::Suspended`, `false` otherwise
+
+**Example:**
+```rust
+let suspended: bool = identity_contract.is_driver_suspended(&driver);
 ```
 
 ### Profile Management
@@ -1551,6 +1981,14 @@ Check whether a user profile exists.
 
 **Parameters:**
 - `user: Address` - User address
+
+**Returns:** `bool`
+
+#### `has_driver_profile`
+Check whether a driver profile already exists.
+
+**Parameters:**
+- `driver: Address` - Driver address
 
 **Returns:** `bool`
 
@@ -1867,6 +2305,7 @@ pub struct DriverProfile {
     pub reputation_score: u32,
     pub registered_at: u64,
     pub kyc_verified: bool,
+    pub status: DriverStatus,       // Active or Suspended
 }
 ```
 

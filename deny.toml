@@ -4,14 +4,17 @@
 [advisories]
 db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/rustsec/advisory-db"]
-vulnerability = "deny"
-unmaintained = "warn"
 yanked = "deny"
-notice = "warn"
+# Only fail on unmaintained crates we own directly. Transitive unmaintained
+# crates pulled in through the Soroban SDK (e.g. `paste`, RUSTSEC-2024-0436)
+# are outside our control and were non-blocking under the previous config.
+unmaintained = "workspace"
 ignore = []
 
 [licenses]
-unlicensed = "deny"
+# cargo-deny denies every license that is not on this allow list, which also
+# covers unlicensed crates and copyleft licenses (the former `unlicensed`,
+# `copyleft` and `default` keys were folded into this default-deny behaviour).
 allow = [
     "MIT",
     "Apache-2.0",
@@ -20,10 +23,6 @@ allow = [
     "ISC",
     "Unicode-DFS-2016",
 ]
-deny = []
-copyleft = "deny"
-allow-osi-fsf-free = "neither"
-default = "deny"
 confidence-threshold = 0.8
 
 [bans]

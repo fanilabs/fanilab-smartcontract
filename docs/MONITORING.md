@@ -93,30 +93,25 @@ Example metrics:
 
 ### Critical Events to Monitor
 ```rust
-// Escrow fund movement and protective-state events
-escrow_funded               // funds entered escrow and should be matched to the expected delivery
-escrow_released             // escrow settled to driver or payout flow
-escrow_refunded             // sender was refunded and funds left escrow
-funds_frozen                // escrow moved into disputed/frozen state; operator should investigate a stalled or contested delivery
-untracked_balance_swept     // emergency/recovery sweep moved surplus funds to an admin-selected recipient; this is a high-risk fund-movement event
-escrow_holdback_marked      // delivery was confirmed into Holdback and the lock window started; this indicates the post-confirmation lifecycle is active
-
-// Dispute and safety lifecycle events
-delivery_disputed           // a party raised a dispute against a delivery or escrow
-dispute_force_resolved      // timeout-driven forced resolution executed an automatic split; this should be reviewed as a dispute escalation
-protocol_pause_status_changed // protocol pause state toggled; reflects emergency or defensive operational control
+// Escrow events
+"escrow_funded"
+"escrow_released"
+"escrow_refunded"
+"delivery_disputed"
 
 // Delivery events
-delivery_created
-driver_assigned
-delivery_confirmed
-delivery_cancelled
+"delivery_created"
+"driver_assigned"
+"delivery_confirmed"
+"delivery_cancelled"
 
 // Admin events
-ProtocolInitialized
-FeeUpdated
-AdminTransferred
+"protocol_initialized"
+"fee_updated"
+"admin_transferred"
 ```
+
+> Event topics are the exact strings passed to `Symbol::new(...)` in the contracts. Rust payload types such as `ProtocolInitialized` or `FeeUpdated` are not the on-chain topic names; they are struct names used in the event payload.
 
 ### Event Processing Pipeline
 1. **Capture**: Listen to Horizon stream

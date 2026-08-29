@@ -11,16 +11,25 @@
 
 **Please DO NOT open public GitHub issues for security vulnerabilities.**
 
-### For Critical Vulnerabilities
-If you discover a critical security vulnerability:
+### How to Report
 
-1. **Email**: security@fanilab.com
-2. **Subject**: [SECURITY] Brief description
-3. **Include**:
+Report vulnerabilities privately through GitHub's built-in private vulnerability
+reporting, which does not depend on any external mail server:
+
+1. Open the [**Security Advisories**](https://github.com/fanilabs/fanilab-smartcontract/security/advisories/new) page for this repository.
+2. Click **Report a vulnerability**.
+3. Fill in the advisory form and **Include**:
    - Detailed description of the vulnerability
    - Steps to reproduce
    - Potential impact
    - Suggested fix (if any)
+
+This opens a private thread visible only to you and the maintainers; no special
+repository permissions are required to submit a report.
+
+If you cannot use GitHub's private reporting, open a public issue titled
+`[SECURITY] Private contact request` that contains **no vulnerability details**
+and a maintainer will follow up with a private channel.
 
 ### Response Timeline
 - **Initial Response**: Within 48 hours
@@ -132,8 +141,7 @@ same thing:
 
 ## Security Contacts
 
-- **Email**: security@fanilab.com
-- **PGP Key**: [Link to PGP key]
+- **Private vulnerability reporting**: [GitHub Security Advisories](https://github.com/fanilabs/fanilab-smartcontract/security/advisories/new)
 - **Discord**: FaniLab Official Server
 
 ## Additional Resources
@@ -144,4 +152,4 @@ same thing:
 
 ---
 
-**Last Updated**: January 2026
+**Last Updated**: August 2026

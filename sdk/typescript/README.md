@@ -8,6 +8,17 @@ Typed SDK for interacting with FaniLab smart contracts on Stellar Soroban.
 npm install @fanilab/sdk
 ```
 
+## SDK Status
+
+This package is currently a typed API preview, not a connected runtime client. The generated method signatures are present, but the underlying Soroban invocation layer is not complete in this repository snapshot. The examples below intentionally fail at runtime with a clear "not implemented" message rather than silently pretending a chain call happened.
+
+### Implemented vs. preview-only
+
+| Client | Status | Notes |
+|---|---|---|
+| EscrowClient | Preview-only | Type signatures and argument shapes are available; live invocation is not yet implemented in the checked-in example. |
+| DeliveryClient | Preview-only | Same as above for delivery methods and metadata payloads. |
+
 ## Quick Start
 
 ### Initialize Clients

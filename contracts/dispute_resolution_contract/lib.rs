@@ -721,14 +721,6 @@ impl DisputeResolutionContract {
                 );
             }
         }
-        dispute.status = DisputeStatus::Split;
-        env.storage().persistent().set(&dispute_key, &dispute);
-        env.storage().persistent().extend_ttl(
-            &dispute_key,
-            ttl::LEDGER_TTL_THRESHOLD,
-            ttl::LEDGER_TTL_EXTEND_TO,
-        );
-
         let _: () = env.invoke_contract(
             &escrow_addr,
             &Symbol::new(&env, "resolve_dispute_split"),

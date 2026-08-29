@@ -2,6 +2,8 @@
 
 Typed SDK for interacting with FaniLab smart contracts on Stellar Soroban.
 
+> Status: the package is intentionally versioned at `0.2.0` to match the protocol crates and is currently in a partial implementation state. The workspace includes working escrow and delivery clients and the additional contract clients/types added in this update, but the SDK is not yet considered a stable production release.
+
 ## Installation
 
 ```bash

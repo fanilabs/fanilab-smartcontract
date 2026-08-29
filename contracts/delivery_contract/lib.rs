@@ -156,6 +156,11 @@ impl DeliveryContract {
         env.storage()
             .persistent()
             .set(&DataKey::DeliveryCounter, &0u64);
+        env.storage().persistent().extend_ttl(
+            &DataKey::DeliveryCounter,
+            ttl::LEDGER_TTL_THRESHOLD,
+            ttl::LEDGER_TTL_EXTEND_TO,
+        );
 
         env.events().publish(
             (events::delivery_contract_initialized(&env),),
@@ -225,6 +230,11 @@ impl DeliveryContract {
         env.storage()
             .persistent()
             .set(&DataKey::DeliveryCounter, &counter);
+        env.storage().persistent().extend_ttl(
+            &DataKey::DeliveryCounter,
+            ttl::LEDGER_TTL_THRESHOLD,
+            ttl::LEDGER_TTL_EXTEND_TO,
+        );
 
         let delivery_id = DeliveryId::from(counter);
 
@@ -376,6 +386,11 @@ impl DeliveryContract {
                 env.storage()
                     .persistent()
                     .set(&DataKey::DeliveryCounter, &counter);
+                env.storage().persistent().extend_ttl(
+                    &DataKey::DeliveryCounter,
+                    ttl::LEDGER_TTL_THRESHOLD,
+                    ttl::LEDGER_TTL_EXTEND_TO,
+                );
 
                 let delivery_id = DeliveryId::from(counter);
                 // See create_delivery: overwrite with the real generated ID

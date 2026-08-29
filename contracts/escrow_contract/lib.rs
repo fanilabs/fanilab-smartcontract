@@ -1559,10 +1559,11 @@ impl EscrowContract {
     }
 
     pub fn get_escrow(env: Env, delivery_id: u64) -> EscrowRecord {
-        if !env.storage().persistent().has(&escrow_key(delivery_id)) {
-            panic_with_error!(&env, EscrowError::DeliveryNotFound);
-        }
-        load_escrow(&env, delivery_id)
+        let key = escrow_key(delivery_id);
+        env.storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| panic_with_error!(env, EscrowError::DeliveryNotFound))
     }
 
     #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)

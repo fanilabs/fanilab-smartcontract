@@ -1,5 +1,13 @@
 export { EscrowClient } from './clients/escrow.client';
 export { DeliveryClient } from './clients/delivery.client';
+export { DisputeResolutionClient } from './clients/dispute_resolution.client';
+export { IdentityReputationClient } from './clients/identity_reputation.client';
+export { FleetManagementClient } from './clients/fleet_management.client';
+export { SettlementClient } from './clients/settlement.client';
 export * from './types/escrow.types';
 export * from './types/delivery.types';
+export * from './types/dispute_resolution.types';
+export * from './types/identity_reputation.types';
+export * from './types/fleet_management.types';
+export * from './types/settlement.types';
 export * from './types/common.types';

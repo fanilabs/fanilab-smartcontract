@@ -157,6 +157,16 @@ fn payout_driver(
     payout_address: Option<Address>,
 ) {
     if amount <= 0 {
+        // A non-positive payout is defensively skipped (a zero/negative transfer
+        // would be wasteful or rejected), but the caller (`settle_escrow_funds`
+        // / `settle_holdback_escrow`) still reports the computed `driver_amount`
+        // in the `escrow_released` event and marks the escrow `Released`. Emit a
+        // distinct event so a skipped payout is observable off-chain instead of
+        // being indistinguishable from a completed transfer (Issue #291).
+        env.events().publish(
+            (Symbol::new(&env, "escrow_payout_skipped"),),
+            (driver.clone(), amount),
+        );
         return;
     }
 
@@ -838,6 +848,7 @@ impl EscrowContract {
             &env,
             delivery_id,
             &EscrowRecord {
+                delivery_id,
                 sender: sender.clone(),
                 recipient: recipient.clone(),
                 driver: driver.clone(),
@@ -1000,6 +1011,7 @@ impl EscrowContract {
                     &env,
                     delivery_id,
                     &EscrowRecord {
+                        delivery_id,
                         sender: sender.clone(),
                         recipient: recipient.clone(),
                         driver: driver.clone(),
@@ -1619,10 +1631,11 @@ impl EscrowContract {
     }
 
     pub fn get_escrow(env: Env, delivery_id: u64) -> EscrowRecord {
-        if !env.storage().persistent().has(&escrow_key(delivery_id)) {
-            panic_with_error!(&env, EscrowError::DeliveryNotFound);
-        }
-        load_escrow(&env, delivery_id)
+        let key = escrow_key(delivery_id);
+        env.storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| panic_with_error!(env, EscrowError::DeliveryNotFound))
     }
 
     #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)

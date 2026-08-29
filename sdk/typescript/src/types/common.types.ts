@@ -49,6 +49,7 @@ export interface ProtocolConfig {
 }
 
 export interface EscrowRecord {
+  deliveryId: number;
   sender: string;
   recipient: string;
   driver: string;

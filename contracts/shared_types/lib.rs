@@ -148,6 +148,14 @@ pub mod events {
         Symbol::new(env, "driver_registered")
     }
 
+    pub fn driver_suspended(env: &Env) -> Symbol {
+        Symbol::new(env, "driver_suspended")
+    }
+
+    pub fn driver_reinstated(env: &Env) -> Symbol {
+        Symbol::new(env, "driver_reinstated")
+    }
+
     pub fn user_registered(env: &Env) -> Symbol {
         Symbol::new(env, "user_registered")
     }
@@ -454,6 +462,24 @@ pub struct DriverRegisteredEvent {
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DriverSuspendedEvent {
+    /// Driver address whose profile was suspended.
+    pub driver: Address,
+    /// Admin address that performed the suspension.
+    pub admin: Address,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DriverReinstatedEvent {
+    /// Driver address whose profile was reinstated.
+    pub driver: Address,
+    /// Admin address that performed the reinstatement.
+    pub admin: Address,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UserRegisteredEvent {
     /// User address that was registered.
     pub user: Address,
@@ -662,6 +688,9 @@ pub struct DriverProfile {
     pub reputation_score: u32,
     pub registered_at: u64,
     pub kyc_verified: bool,
+    /// Lifecycle status — `Active` on registration, `Suspended` after an
+    /// admin call to `suspend_driver`, restorable via `reinstate_driver`.
+    pub status: DriverStatus,
 }
 
 #[contracttype]
@@ -1082,6 +1111,7 @@ mod test {
             reputation_score: 85,
             registered_at: 1000000,
             kyc_verified: true,
+            status: DriverStatus::Active,
         };
 
         assert_eq!(profile.address, address);

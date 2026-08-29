@@ -1395,6 +1395,15 @@ pub struct DriverProfile {
     pub reputation_score:      u32,   // 0–100
     pub registered_at:         u64,
     pub kyc_verified:          bool,
+    pub status:                DriverStatus,
+}
+```
+
+#### `DriverStatus`
+```rust
+pub enum DriverStatus {
+    Active,     // Registered and eligible to participate
+    Suspended,  // Administratively suspended; profile preserved for audit
 }
 ```
 
@@ -1484,6 +1493,79 @@ Update a driver's KYC verification status.
 **Example:**
 ```rust
 identity_contract.update_driver_kyc_status(&admin, &driver, &true);
+```
+
+#### `suspend_driver`
+Suspend a registered driver. Sets `DriverProfile.status` to `DriverStatus::Suspended`.
+
+The profile record is **never deleted** — all history (reputation score,
+deliveries completed, KYC status) is preserved. This prevents a suspended
+driver from calling `register_driver` again to obtain a clean slate, since
+that function panics when a profile already exists.
+
+> **Note:** Gating `assign_driver` on driver suspension status is a deliberate
+> follow-up task in `delivery_contract` and is out of scope here.
+
+**Parameters:**
+- `admin: Address` - Admin address (must sign)
+- `driver: Address` - Driver to suspend
+
+**Authorization:** Admin only
+
+**Errors:**
+- `NotInitialized` - Contract has not been initialized
+- `Unauthorized` - Caller is not the stored admin
+- `ProviderNotFound` - Driver profile does not exist
+- `InvalidState` - Driver is already suspended
+
+**Events:** `driver_suspended`
+
+**State Changes:**
+- Sets `DriverProfile.status` to `DriverStatus::Suspended`
+- All other profile fields remain unchanged
+
+**Example:**
+```rust
+identity_contract.suspend_driver(&admin, &driver);
+```
+
+#### `reinstate_driver`
+Reinstate a previously suspended driver. Sets `DriverProfile.status` back to
+`DriverStatus::Active`. All accumulated reputation and delivery history is retained.
+
+**Parameters:**
+- `admin: Address` - Admin address (must sign)
+- `driver: Address` - Driver to reinstate
+
+**Authorization:** Admin only
+
+**Errors:**
+- `NotInitialized` - Contract has not been initialized
+- `Unauthorized` - Caller is not the stored admin
+- `ProviderNotFound` - Driver profile does not exist
+- `InvalidState` - Driver is already active (not suspended)
+
+**Events:** `driver_reinstated`
+
+**State Changes:**
+- Sets `DriverProfile.status` to `DriverStatus::Active`
+
+**Example:**
+```rust
+identity_contract.reinstate_driver(&admin, &driver);
+```
+
+#### `is_driver_suspended`
+Check whether a driver's profile is currently suspended.
+
+**Parameters:**
+- `driver: Address` - Driver address
+
+**Returns:** `bool` — `true` if the profile exists and has `DriverStatus::Suspended`, `false` otherwise
+
+**Example:**
+```rust
+let suspended: bool = identity_contract.is_driver_suspended(&driver);
 ```
 
 ### Profile Management
@@ -1867,6 +1949,7 @@ pub struct DriverProfile {
     pub reputation_score: u32,
     pub registered_at: u64,
     pub kyc_verified: bool,
+    pub status: DriverStatus,       // Active or Suspended
 }
 ```
 

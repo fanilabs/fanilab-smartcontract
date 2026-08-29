@@ -106,6 +106,10 @@ pub mod events {
         Symbol::new(env, "driver_removed")
     }
 
+    pub fn payout_routing_fallback(env: &Env) -> Symbol {
+        Symbol::new(env, "payout_routing_fallback")
+    }
+
     pub fn fleet_deactivated(env: &Env) -> Symbol {
         Symbol::new(env, "fleet_deactivated")
     }
@@ -359,6 +363,15 @@ pub struct DriverRemovedEvent {
     /// Fleet the driver was removed from.
     pub fleet_id: u64,
     /// Driver address that was removed.
+    pub driver: Address,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PayoutRoutingFallbackEvent {
+    /// Fleet whose missing profile caused the fallback.
+    pub fleet_id: u64,
+    /// Driver receiving the payout directly.
     pub driver: Address,
 }
 

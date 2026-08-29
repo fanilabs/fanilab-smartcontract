@@ -31,3 +31,16 @@ updates:
       - "test"
     commit-message:
       prefix: "ci"
+
+  # Maintain dependencies for the TypeScript SDK.
+  - package-ecosystem: "npm"
+    directory: "/sdk/typescript"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    labels:
+      - "refactor"
+      - "enhancement"
+    commit-message:
+      prefix: "chore"
+      include: "scope"

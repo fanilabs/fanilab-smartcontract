@@ -3,7 +3,8 @@
 use shared_types::{
     events, is_admin, ttl, DriverInvitedEvent, DriverRemovedEvent, FleetDeactivatedEvent,
     FleetOwnerReassignedEvent, FleetRegisteredEvent, FleetTreasuryChangeProposedEvent,
-    FleetTreasuryForceUpdatedEvent, FleetTreasuryUpdatedEvent, InviteAcceptedEvent, StorageKey,
+    FleetTreasuryForceUpdatedEvent, FleetTreasuryUpdatedEvent, InviteAcceptedEvent,
+    PayoutRoutingFallbackEvent, StorageKey,
 };
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, Address, Env, IntoVal,
@@ -797,6 +798,7 @@ impl FleetManagementContract {
     ///
     /// Returns the fleet's treasury if the driver is an active member of that
     /// fleet, otherwise returns the driver's own address.
+    #[allow(deprecated)]
     pub fn get_payout_address(env: Env, driver: Address, fleet_id: FleetId) -> Address {
         let status: Option<DriverFleetStatus> = env
             .storage()
@@ -805,15 +807,23 @@ impl FleetManagementContract {
 
         match status {
             Some(DriverFleetStatus::Active) => {
-                let profile: FleetProfile = env
+                let profile: Option<FleetProfile> = env
                     .storage()
                     .persistent()
-                    .get(&DataKey::Fleet(fleet_id))
-                    .unwrap_or_else(|| panic_with_error!(&env, FleetError::FleetNotFound));
-                if profile.active {
-                    profile.treasury
-                } else {
-                    driver
+                    .get(&DataKey::Fleet(fleet_id));
+                match profile {
+                    Some(profile) if profile.active => profile.treasury,
+                    Some(_) => driver,
+                    None => {
+                        env.events().publish(
+                            (events::payout_routing_fallback(&env),),
+                            PayoutRoutingFallbackEvent {
+                                fleet_id,
+                                driver: driver.clone(),
+                            },
+                        );
+                        driver
+                    }
                 }
             }
             Some(DriverFleetStatus::Pending) | Some(DriverFleetStatus::Removed) | None => driver,

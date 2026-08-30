@@ -107,12 +107,14 @@ The assigned driver confirms they have picked up the package. Validations:
 Transitions status to `InTransit`.
 Emits a `delivery_in_transit` event.
 
-### `confirm_delivery(env, driver, delivery_id)`
-The driver confirms delivery completion (proof of delivery). Validations:
-- Only the assigned driver can call this
+### `confirm_delivery(env, recipient, delivery_id)`
+The recipient confirms delivery completion (proof of delivery). Validations:
+- Only the delivery recipient can call this
 - Delivery must be in `InTransit` status
 
-Transitions status to `Delivered` and calls the escrow contract's `release_escrow` to release funds to the driver.
+This call does not pay the driver immediately. It transitions the delivery to `Delivered` and invokes the escrow contract's `mark_holdback_escrow`, which moves the matching escrow into the `Holdback` state. The driver is paid only after a separate `release_holdback_escrow` call by the recipient or an admin.
+
+`Holdback` is the escrow-side intermediate state between confirmation and final settlement: funds are reserved for the driver, but still require the follow-up release step before payout is complete.
 Emits a `delivery_confirmed` event.
 
 ### `cancel_delivery(env, caller, delivery_id)`
@@ -143,7 +145,7 @@ The delivery contract provides a `get_combined_state(delivery_id)` view that fet
 | `Pending`       | `Locked`               |
 | `Active`        | `Locked`               |
 | `InTransit`     | `Locked`               |
-| `Delivered`     | `Released`             |
+| `Delivered`     | `Holdback` or `Released` |
 | `Disputed`      | `Paused`               |
 | `Cancelled`     | `Refunded`             |
 
@@ -157,11 +159,11 @@ Returns `(DeliveryRecord, EscrowRecord, is_synchronized)`. The boolean `is_synch
 ┌───────────────────┐     ┌─────────────────────┐
 │  DeliveryContract  │────►│   EscrowContract    │
 │                   │     │  fund_escrow         │
-│  create_delivery  │     │  release_escrow      │
-│  confirm_delivery │     │  refund_escrow       │
-│  cancel_delivery  │     │  freeze_funds        │
-│  dispute_delivery │     └─────────────────────┘
-│                   │
+│  create_delivery  │     │  mark_holdback_escrow│
+│  confirm_delivery │     │  release_holdback_escrow |
+│  cancel_delivery  │     │  refund_escrow       │
+│  dispute_delivery │     │  freeze_funds        │
+│                   │     └─────────────────────┘
 │  assign_driver    │────►│ IdentityReputation   │
 │                   │     │  get_driver_profile  │
 └───────────────────┘     └─────────────────────┘

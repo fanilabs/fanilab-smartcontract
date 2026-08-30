@@ -12,7 +12,7 @@ The delivery protocol is tightly coupled with the **escrow contract** for financ
 
 ## Delivery State Machine
 
-Every delivery follows a strict state machine enforced by `validate_transition()`. The implementation allows `Delivered → Disputed` for the post-confirmation dispute window; `Cancelled` is the only terminal state in the delivery lifecycle.
+Every delivery follows a strict state machine enforced by `validate_transition()`. The implementation allows `Delivered → Disputed` for the post-confirmation dispute window, and the dispute window is bounded by `dispute_time_limit` in `dispute_resolution_contract`. `Cancelled` is the only terminal state in the delivery lifecycle.
 
 ```
 Pending ──► Active ──► InTransit ──► Delivered
@@ -33,11 +33,11 @@ Pending ──► Active ──► InTransit ──► Delivered
 | `Active`     | `Cancelled` | Sender or admin cancels the delivery                             |
 | `InTransit`  | `Delivered` | Recipient confirms delivery (proof of delivery)                  |
 | `InTransit`  | `Disputed`  | Sender, recipient, or driver raises a dispute                    |
-| `Delivered`  | `Disputed`  | Sender, recipient, or driver raises a dispute within limit       |
+| `Delivered`  | `Disputed`  | Sender, recipient, or driver disputes within the configured window |
 | `Disputed`   | `Delivered` | Dispute resolved in driver's favor → delivery completes          |
 | `Disputed`   | `Cancelled` | Dispute resolved with refund → delivery cancelled                |
 
-Only `Cancelled` is terminal. `Delivered` remains valid as a pre-dispute state and can be re-entered from `Disputed` after a ruling.
+Only `Cancelled` is terminal. `Delivered` remains valid as a pre-dispute state, and the `Delivered → Disputed` transition is constrained by the dispute window rather than being an unconditional terminal-state exit.
 
 ### Delivery Record
 

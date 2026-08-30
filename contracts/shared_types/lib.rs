@@ -804,11 +804,29 @@ mod test {
     }
 
     #[test]
-    fn delivery_id_wraps_raw_u64() {
-        let delivery_id = DeliveryId::new(42);
+    fn delivery_id_round_trips_u64_and_matches_partial_eq_contract() {
+        let basic = DeliveryId::new(42);
+        assert_eq!(basic, 42);
+        assert_eq!(u64::from(basic), 42);
 
-        assert_eq!(delivery_id, 42);
-        assert_eq!(u64::from(delivery_id), 42);
+        for value in [0u64, 1, 42, u64::MAX] {
+            let id = DeliveryId::new(value);
+
+            assert_eq!(id.value(), value);
+            assert_eq!(DeliveryId::from(value), id);
+            assert_eq!(u64::from(id), value);
+            assert_eq!(id, value);
+            assert_eq!(value, id);
+            assert_eq!(delivery_key(id), StorageKey::Delivery(id));
+            assert_eq!(escrow_key(id), StorageKey::Escrow(id));
+            assert_ne!(delivery_key(id), escrow_key(id));
+
+            let other = DeliveryId::new(value.wrapping_add(1));
+            assert_ne!(id, other);
+            assert_ne!(other, id);
+            assert_ne!(id, other.value());
+            assert_ne!(other.value(), id);
+        }
     }
 
     #[test]

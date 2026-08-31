@@ -17,3 +17,5 @@ Cargo.lock
 
 # Soroban test snapshots
 test_snapshots/
+# proptest failure-seed files
+**/proptest-regressions/

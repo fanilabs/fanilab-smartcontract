@@ -100,6 +100,10 @@ pub enum DeliveryError {
     InvalidDriver = 4,
     /// Sender and recipient must be different parties.
     InvalidParties = 5,
+    /// The escrow securing this delivery is not present, or is not in the
+    /// `Locked` state, at a point where funded escrow is a precondition
+    /// (currently: the `Active -> InTransit` transition). See Issue #298.
+    EscrowNotLocked = 6,
 }
 
 mod constants {
@@ -496,6 +500,15 @@ impl DeliveryContract {
             .publish((events::delivery_cancelled(&env),), (delivery_id, sender));
     }
 
+    /// Assign a driver and move the delivery `Pending -> Active`.
+    ///
+    /// Issue #298 decision: `assign_driver` deliberately does **not** verify
+    /// that the escrow exists and is `Locked`. Assignment is a weak,
+    /// reversible commitment (the delivery can still be cancelled, and a
+    /// different driver assigned), and during onboarding it frequently races
+    /// escrow funding. The escrow precondition is enforced one step later, at
+    /// `mark_in_transit` — the point where the driver physically takes
+    /// custody of the package and the commitment becomes real.
     #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
     pub fn assign_driver(env: Env, caller: Address, delivery_id: DeliveryId, driver: Address) {
         caller.require_auth();
@@ -542,7 +555,19 @@ impl DeliveryContract {
     }
 
     /// Allow the assigned driver to mark a delivery as actively in transit.
-    /// Transitions: Active â†’ InTransit. Records the ledger timestamp.
+    /// Transitions: Active -> InTransit. Records the ledger timestamp.
+    ///
+    /// Issue #298: before advancing, this verifies via a cross-call to
+    /// `escrow_contract::get_escrow` that the escrow securing this delivery
+    /// exists and is `Locked`. escrow creation is a separate call on a
+    /// separate contract, so without this a driver could take custody of a
+    /// package for a delivery that has no escrow at all, or one whose escrow
+    /// was already refunded (e.g. by `reclaim_expired_escrow`, which does not
+    /// touch the delivery). A missing escrow surfaces as the escrow
+    /// contract's `DeliveryNotFound`; a present-but-not-`Locked` escrow
+    /// yields the typed `DeliveryError::EscrowNotLocked`. This adds one
+    /// cross-contract call to a hot path, which is a deliberate trade-off:
+    /// the driver's assurance that funds exist is worth the extra read.
     #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
     pub fn mark_in_transit(env: Env, driver: Address, delivery_id: DeliveryId) {
         driver.require_auth();
@@ -563,6 +588,22 @@ impl DeliveryContract {
 
         validate_transition(delivery.status, DeliveryStatus::InTransit)
             .unwrap_or_else(|_| panic_with_error!(&env, FaniLabError::InvalidState));
+
+        // Issue #298: the escrow securing this delivery must exist and be
+        // Locked before the driver commits to transit.
+        let escrow_address: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::EscrowContract)
+            .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::NotInitialized));
+        let escrow: shared_types::EscrowRecord = env.invoke_contract(
+            &escrow_address,
+            &Symbol::new(&env, "get_escrow"),
+            soroban_sdk::vec![&env, u64::from(delivery_id).into_val(&env)],
+        );
+        if escrow.status != shared_types::EscrowStatus::Locked {
+            panic_with_error!(&env, DeliveryError::EscrowNotLocked);
+        }
 
         let timestamp = env.ledger().timestamp();
         delivery.status = DeliveryStatus::InTransit;
@@ -677,7 +718,7 @@ impl DeliveryContract {
 
         let is_sender = caller == delivery.sender;
         let is_recipient = caller == delivery.recipient;
-        let is_driver = delivery.driver.as_ref().map(|d| d == caller).unwrap_or(false);
+        let is_driver = delivery.driver.as_ref().map(|d| *d == caller).unwrap_or(false);
         if !is_sender && !is_recipient && !is_driver {
             panic_with_error!(&env, FaniLabError::Unauthorized);
         }

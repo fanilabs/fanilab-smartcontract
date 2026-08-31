@@ -1,9 +1,10 @@
 #![no_std]
 
 use shared_types::{
-    events, is_admin, ttl, DriverProfile, DriverRegisteredEvent, FaniLabError,
-    KycStatusUpdatedEvent, ReputationAwardedEvent, ReputationDecreasedEvent,
-    ReputationIncreasedEvent, StorageKey, UserProfile, UserRegisteredEvent,
+    events, is_admin, ttl, DriverProfile, DriverRegisteredEvent, DriverReinstatedEvent,
+    DriverStatus, DriverSuspendedEvent, FaniLabError, KycStatusUpdatedEvent,
+    ReputationAwardedEvent, ReputationDecreasedEvent, ReputationIncreasedEvent, StorageKey,
+    UserProfile, UserRegisteredEvent,
 };
 use soroban_sdk::{contract, contractimpl, contracttype, panic_with_error, Address, Env};
 
@@ -486,12 +487,7 @@ impl IdentityReputationContract {
     #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional
     pub fn suspend_driver(env: Env, admin: Address, driver: Address) {
         admin.require_auth();
-        let stored_admin: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::Admin)
-            .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::NotInitialized));
-        if admin != stored_admin {
+        if !is_admin(&env, &admin) {
             panic_with_error!(&env, FaniLabError::Unauthorized);
         }
 
@@ -532,12 +528,7 @@ impl IdentityReputationContract {
     #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional
     pub fn reinstate_driver(env: Env, admin: Address, driver: Address) {
         admin.require_auth();
-        let stored_admin: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::Admin)
-            .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::NotInitialized));
-        if admin != stored_admin {
+        if !is_admin(&env, &admin) {
             panic_with_error!(&env, FaniLabError::Unauthorized);
         }
 

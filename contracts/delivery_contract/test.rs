@@ -73,9 +73,25 @@ impl MockEscrowContract {
     /// Minimal stand-in for get_combined_state's cross-call. Reflect the
     /// escrow operation recorded by the mock, while defaulting to Locked for
     /// pre-Delivered/Disputed/Cancelled delivery states.
+    ///
+    /// Two magic delivery_ids let tests exercise `mark_in_transit`'s escrow
+    /// precondition (Issue #298) without a realistic mock (Issue #231).
+    /// They are distinct from the `9999` trigger the other mock methods use
+    /// so the pre-existing escrow-failure rollback tests, which now also run
+    /// through `mark_in_transit`, keep seeing a `Locked` escrow here:
+    ///   - `7777` panics, standing in for the real `get_escrow`'s
+    ///     `DeliveryNotFound` when no escrow was ever created.
+    ///   - `8888` reports a `Refunded` escrow, standing in for an escrow that
+    ///     was returned to the sender (e.g. via `reclaim_expired_escrow`)
+    ///     while the delivery advanced independently.
     pub fn get_escrow(_env: Env, delivery_id: u64) -> shared_types::EscrowRecord {
+        if delivery_id == 7777 {
+            panic!("MockEscrowFailure");
+        }
         let placeholder = Address::generate(&_env);
-        let status = if _env
+        let status = if delivery_id == 8888 {
+            shared_types::EscrowStatus::Refunded
+        } else if _env
             .storage()
             .temporary()
             .get::<_, u64>(&Symbol::new(&_env, "holdback"))
@@ -578,6 +594,88 @@ fn test_unauthorized_mark_in_transit() {
 
     let unauthorized = Address::generate(&env);
     client.mark_in_transit(&unauthorized, &delivery_id);
+}
+
+// ── Issue #298: mark_in_transit requires a funded (Locked) escrow ─────────────
+
+/// A driver must not be able to advance a delivery to InTransit when no escrow
+/// was ever created for it. The real `escrow_contract::get_escrow` panics with
+/// `DeliveryNotFound`; the mock stands in with a panic on delivery_id 7777.
+#[test]
+#[should_panic(expected = "MockEscrowFailure")]
+fn test_mark_in_transit_rejects_missing_escrow() {
+    let env = Env::default();
+    let (client, shipper, driver, recipient, _, _) = setup_full(&env);
+    let metadata = get_test_metadata(&env, 7777);
+    // Force the next delivery's real (counter-assigned) ID to 7777 so the
+    // MockEscrowContract's get_escrow failure trigger fires.
+    env.as_contract(&client.address, || {
+        env.storage()
+            .persistent()
+            .set(&DataKey::DeliveryCounter, &7776u64);
+    });
+    let delivery_id = client.create_delivery(&shipper, &recipient, &metadata);
+    client.assign_driver(&driver, &delivery_id, &driver);
+
+    // No escrow exists for this delivery → mark_in_transit must reject.
+    client.mark_in_transit(&driver, &delivery_id);
+}
+
+/// A driver must not be able to advance a delivery to InTransit when the escrow
+/// securing it has already been refunded to the sender.
+#[test]
+#[should_panic(expected = "6")] // DeliveryError::EscrowNotLocked
+fn test_mark_in_transit_rejects_refunded_escrow() {
+    let env = Env::default();
+    let (client, shipper, driver, recipient, _, _) = setup_full(&env);
+    let metadata = get_test_metadata(&env, 8888);
+    // Force the next delivery's real ID to 8888 so the MockEscrowContract
+    // reports a Refunded (non-Locked) escrow for it.
+    env.as_contract(&client.address, || {
+        env.storage()
+            .persistent()
+            .set(&DataKey::DeliveryCounter, &8887u64);
+    });
+    let delivery_id = client.create_delivery(&shipper, &recipient, &metadata);
+    client.assign_driver(&driver, &delivery_id, &driver);
+
+    client.mark_in_transit(&driver, &delivery_id);
+}
+
+/// Regression: with a Locked escrow (the mock's default), the transition
+/// proceeds exactly as before Issue #298.
+#[test]
+fn test_mark_in_transit_succeeds_with_locked_escrow() {
+    let env = Env::default();
+    let (client, shipper, driver, recipient, _, _) = setup_full(&env);
+    let metadata = get_test_metadata(&env, 1);
+    let delivery_id = client.create_delivery(&shipper, &recipient, &metadata);
+    client.assign_driver(&driver, &delivery_id, &driver);
+
+    client.mark_in_transit(&driver, &delivery_id);
+
+    let delivery = client.get_delivery(&delivery_id);
+    assert_eq!(delivery.status, DeliveryStatus::InTransit);
+    assert!(
+        delivery.transit_started_at.is_some(),
+        "transit_started_at must be recorded"
+    );
+}
+
+/// The escrow precondition is checked only after the state-machine and
+/// authorization guards, so a non-assigned caller still fails as Unauthorized
+/// rather than leaking an escrow error.
+#[test]
+#[should_panic(expected = "1")] // FaniLabError::Unauthorized
+fn test_mark_in_transit_escrow_check_does_not_mask_authorization() {
+    let env = Env::default();
+    let (client, shipper, driver, recipient, _, _) = setup_full(&env);
+    let metadata = get_test_metadata(&env, 1);
+    let delivery_id = client.create_delivery(&shipper, &recipient, &metadata);
+    client.assign_driver(&driver, &delivery_id, &driver);
+
+    let stranger = Address::generate(&env);
+    client.mark_in_transit(&stranger, &delivery_id);
 }
 
 #[test]
@@ -1774,10 +1872,22 @@ fn test_create_delivery_and_batch_emit_consistent_events() {
 
 // Tests for issue #269: delivery_contract secondary-index accessors and identity getter
 
+/// Minimal delivery client with only `init` run — deliberately does NOT
+/// configure an identity reputation contract, unlike `setup_full`.
+fn setup_bare(env: &Env) -> (DeliveryContractClient<'static>, Address) {
+    env.mock_all_auths();
+    let escrow_id = env.register(MockEscrowContract, ());
+    let contract_id = env.register(DeliveryContract, ());
+    let client = DeliveryContractClient::new(env, &contract_id);
+    let admin = Address::generate(env);
+    client.init(&admin, &escrow_id);
+    (client, admin)
+}
+
 #[test]
 fn test_get_identity_reputation_contract_returns_none_before_configuration() {
     let env = Env::default();
-    let (client, _shipper, _driver, _recipient, _escrow_id, _admin) = setup_full(&env);
+    let (client, _admin) = setup_bare(&env);
 
     assert_eq!(client.get_identity_reputation_contract(), None);
 }
@@ -1785,7 +1895,7 @@ fn test_get_identity_reputation_contract_returns_none_before_configuration() {
 #[test]
 fn test_set_and_get_identity_reputation_contract_round_trip() {
     let env = Env::default();
-    let (client, _shipper, _driver, _recipient, _escrow_id, admin) = setup_full(&env);
+    let (client, admin) = setup_bare(&env);
     let identity_contract = Address::generate(&env);
 
     assert_eq!(client.get_identity_reputation_contract(), None);
@@ -1801,10 +1911,10 @@ fn test_set_and_get_identity_reputation_contract_round_trip() {
 #[test]
 fn test_index_contents_unchanged_after_delivery_completion() {
     let env = Env::default();
-    let (client, shipper, driver, recipient, escrow_id, _admin) = setup_full(&env);
+    let (client, shipper, driver, recipient, _escrow_id, _admin) = setup_full(&env);
 
     let first_id = client.create_delivery(&shipper, &recipient, &get_test_metadata(&env, 1));
-    let second_id = client.create_delivery(&shipper, &recipient, &get_test_metadata(&env, 2));
+    let _second_id = client.create_delivery(&shipper, &recipient, &get_test_metadata(&env, 2));
 
     // Get indexes before state change
     let sender_before = client.get_deliveries_by_sender(&shipper);
@@ -1814,9 +1924,9 @@ fn test_index_contents_unchanged_after_delivery_completion() {
     assert_eq!(recipient_before.len(), 2);
 
     // Assign, mark in transit, and confirm first delivery
-    client.assign_driver(&driver, &first_id);
+    client.assign_driver(&driver, &first_id, &driver);
     client.mark_in_transit(&driver, &first_id);
-    client.confirm_delivery(&recipient, &first_id, &escrow_id);
+    client.confirm_delivery(&recipient, &first_id);
 
     // Index contents should be unchanged
     let sender_after = client.get_deliveries_by_sender(&shipper);
@@ -1836,7 +1946,7 @@ fn test_index_contents_unchanged_after_delivery_cancellation() {
     let (client, shipper, _driver, recipient, _escrow_id, _admin) = setup_full(&env);
 
     let first_id = client.create_delivery(&shipper, &recipient, &get_test_metadata(&env, 1));
-    let second_id = client.create_delivery(&shipper, &recipient, &get_test_metadata(&env, 2));
+    let _second_id = client.create_delivery(&shipper, &recipient, &get_test_metadata(&env, 2));
 
     // Get indexes before cancellation
     let sender_before = client.get_deliveries_by_sender(&shipper);

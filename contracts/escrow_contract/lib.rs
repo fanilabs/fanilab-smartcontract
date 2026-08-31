@@ -53,6 +53,11 @@ fn require_admin(env: &Env, caller: &Address) {
 }
 
 fn is_protocol_paused(env: &Env) -> bool {
+    // Reads fail *open*: an absent entry is treated as "not paused". If the
+    // instance entry were ever archived, a protocol paused during an incident
+    // would silently become unpaused — which is why every writer of the
+    // paused flag (and of anything else in instance storage) must call
+    // `extend_instance_ttl` after writing. See Issue #299.
     env.storage()
         .instance()
         .get(&DataKey::Paused)
@@ -76,6 +81,24 @@ fn save_protocol_config(env: &Env, config: &ProtocolConfig) {
     env.storage()
         .instance()
         .set(&StorageKey::ProtocolConfig, config);
+}
+
+/// Extend the TTL of the contract's instance-storage entry.
+///
+/// Instance storage holds the admin address, `ProtocolConfig`, the paused
+/// flag, and every peer-contract address. Every function that writes to
+/// instance storage must call this immediately afterwards so the entry
+/// cannot be archived while the protocol is otherwise idle — the sharpest
+/// edge being a protocol paused during an incident (when ordinary escrow
+/// activity, which would otherwise keep the entry alive, has stopped).
+///
+/// Routing every call site through this one helper is the guard against a
+/// future admin function silently omitting the extension: Issue #25 fixed
+/// three writers and left three behind, and Issue #299 is that follow-up.
+fn extend_instance_ttl(env: &Env) {
+    env.storage()
+        .instance()
+        .extend_ttl(ttl::LEDGER_TTL_THRESHOLD, ttl::LEDGER_TTL_EXTEND_TO);
 }
 
 fn calculate_fee(amount: i128, platform_fee_bps: u32) -> i128 {
@@ -147,6 +170,7 @@ fn get_identity_reputation_contract(env: &Env) -> Option<Address> {
         .get(&DataKey::IdentityReputationContract)
 }
 
+#[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
 fn payout_driver(
     env: &Env,
     token: &Address,
@@ -221,21 +245,19 @@ fn payout_driver(
     );
 }
 
+/// Pay `driver_amount` to the driver and `platform_fee` to the admin. The
+/// caller is responsible for computing these from the *effective*
+/// (volume-discounted) fee before incrementing the sender's volume, so the
+/// amounts that move on-chain match the ones the caller reports in its event
+/// (Issue #190).
 fn settle_escrow_funds(
     env: &Env,
     delivery_id: u64,
     record: &EscrowRecord,
     fleet_management_addr: Option<Address>,
+    driver_amount: i128,
+    platform_fee: i128,
 ) {
-    let platform_fee_bps: u32 = env
-        .storage()
-        .instance()
-        .get::<_, ProtocolConfig>(&StorageKey::ProtocolConfig)
-        .map(|config| config.platform_fee_bps)
-        .unwrap_or(0);
-    let platform_fee = calculate_fee(record.amount, platform_fee_bps);
-    let driver_amount = record.amount.saturating_sub(platform_fee);
-
     payout_driver(
         env,
         &record.token,
@@ -311,7 +333,7 @@ fn settle_holdback_escrow(env: &Env, delivery_id: u64, mut record: EscrowRecord)
     );
 
     let fleet_management = get_fleet_management_contract(env);
-    settle_escrow_funds(env, delivery_id, &record, fleet_management);
+    settle_escrow_funds(env, delivery_id, &record, fleet_management, driver_amount, platform_fee);
 
     (driver_amount, platform_fee)
 }
@@ -410,6 +432,8 @@ pub enum EscrowError {
     TimelockNotElapsed = 9,
     InvalidDriver = 10,
     InvalidParties = 11,
+    /// A batch operation (`create_escrows_batch`) exceeded `MAX_BATCH_SIZE`.
+    BatchTooLarge = 12,
 }
 
 #[contracttype]
@@ -492,9 +516,7 @@ impl EscrowContract {
             },
         );
 
-        env.storage()
-            .instance()
-            .extend_ttl(ttl::LEDGER_TTL_THRESHOLD, ttl::LEDGER_TTL_EXTEND_TO);
+        extend_instance_ttl(&env);
     }
 
     #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
@@ -523,9 +545,7 @@ impl EscrowContract {
             },
         );
 
-        env.storage()
-            .instance()
-            .extend_ttl(ttl::LEDGER_TTL_THRESHOLD, ttl::LEDGER_TTL_EXTEND_TO);
+        extend_instance_ttl(&env);
     }
 
     pub fn get_platform_fee(env: Env) -> u32 {
@@ -563,6 +583,7 @@ impl EscrowContract {
         let mut config = load_protocol_config(&env);
         config.slippage_tolerance_bps = new_slippage_bps;
         save_protocol_config(&env, &config);
+        extend_instance_ttl(&env);
     }
 
     pub fn get_slippage_tolerance(env: Env) -> u32 {
@@ -594,9 +615,7 @@ impl EscrowContract {
         env.storage()
             .instance()
             .set(&DataKey::PendingSettlementContract, &pending);
-        env.storage()
-            .instance()
-            .extend_ttl(ttl::LEDGER_TTL_THRESHOLD, ttl::LEDGER_TTL_EXTEND_TO);
+        extend_instance_ttl(&env);
 
         env.events().publish(
             (events::settlement_contract_proposed(&env),),
@@ -632,9 +651,7 @@ impl EscrowContract {
         env.storage()
             .instance()
             .remove(&DataKey::PendingSettlementContract);
-        env.storage()
-            .instance()
-            .extend_ttl(ttl::LEDGER_TTL_THRESHOLD, ttl::LEDGER_TTL_EXTEND_TO);
+        extend_instance_ttl(&env);
 
         env.events().publish(
             (events::settlement_contract_updated(&env),),
@@ -668,6 +685,7 @@ impl EscrowContract {
         env.storage()
             .instance()
             .remove(&DataKey::PendingSettlementContract);
+        extend_instance_ttl(&env);
     }
 
     pub fn set_fleet_management_contract(env: Env, admin: Address, fleet_contract: Address) {
@@ -676,6 +694,7 @@ impl EscrowContract {
         env.storage()
             .instance()
             .set(&DataKey::FleetManagementContract, &fleet_contract);
+        extend_instance_ttl(&env);
     }
 
     pub fn get_fleet_management_contract(env: Env) -> Option<Address> {
@@ -704,6 +723,7 @@ impl EscrowContract {
         env.storage()
             .instance()
             .remove(&DataKey::FleetManagementContract);
+        extend_instance_ttl(&env);
     }
 
     pub fn set_dispute_resolution_contract(env: Env, admin: Address, dispute_contract: Address) {
@@ -712,6 +732,7 @@ impl EscrowContract {
         env.storage()
             .instance()
             .set(&DataKey::DisputeResolutionContract, &dispute_contract);
+        extend_instance_ttl(&env);
     }
 
     pub fn get_dispute_resolution_contract(env: Env) -> Option<Address> {
@@ -726,6 +747,7 @@ impl EscrowContract {
         env.storage()
             .instance()
             .set(&DataKey::IdentityReputationContract, &identity_contract);
+        extend_instance_ttl(&env);
     }
 
     pub fn get_identity_contract(env: Env) -> Option<Address> {
@@ -747,9 +769,7 @@ impl EscrowContract {
         env.storage()
             .instance()
             .set(&DataKey::PendingAdmin, &new_admin);
-        env.storage()
-            .instance()
-            .extend_ttl(ttl::LEDGER_TTL_THRESHOLD, ttl::LEDGER_TTL_EXTEND_TO);
+        extend_instance_ttl(&env);
     }
 
     #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
@@ -770,9 +790,7 @@ impl EscrowContract {
             .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::NotInitialized));
         env.storage().instance().set(&StorageKey::Admin, &new_admin);
         env.storage().instance().remove(&DataKey::PendingAdmin);
-        env.storage()
-            .instance()
-            .extend_ttl(ttl::LEDGER_TTL_THRESHOLD, ttl::LEDGER_TTL_EXTEND_TO);
+        extend_instance_ttl(&env);
         env.events()
             .publish((events::admin_transferred(&env),), (old_admin, new_admin));
     }
@@ -782,6 +800,12 @@ impl EscrowContract {
         admin.require_auth();
         require_admin(&env, &admin);
         env.storage().instance().set(&DataKey::Paused, &paused);
+        // The paused flag lives in instance storage and is read fail-open
+        // (`is_protocol_paused` → `unwrap_or(false)`), so this write is the
+        // one that most needs to outlast a quiet period — precisely when a
+        // paused protocol has stopped all the escrow activity that would
+        // otherwise keep the instance entry alive. See Issue #299.
+        extend_instance_ttl(&env);
         env.events().publish(
             (events::protocol_pause_status_changed(&env),),
             (admin, paused),
@@ -966,6 +990,12 @@ impl EscrowContract {
             panic_with_error!(&env, EscrowError::BatchTooLarge);
         }
 
+        // Every escrow in the batch uses the configured protocol token; reject a
+        // foreign token before any transfer is attempted, mirroring create_escrow.
+        if token != load_protocol_config(&env).token {
+            panic_with_error!(&env, EscrowError::InvalidToken);
+        }
+
         /* Legacy index batching (replaced by bounded pages).
         let sender_key = DataKey::EscrowsBySender(sender.clone());
         let mut sender_escrows: soroban_sdk::Vec<u64> = env
@@ -988,7 +1018,7 @@ impl EscrowContract {
         let mut count = 0u32;
         let mut batch_total: i128 = 0;
         for i in 0..escrow_list.len() {
-            if let Some((delivery_id, driver, amount)) = escrow_list.get(i) {
+            if let Some((delivery_id, driver, amount, fleet_id)) = escrow_list.get(i) {
                 if driver == sender || driver == recipient {
                     panic_with_error!(&env, EscrowError::InvalidDriver);
                 }
@@ -1188,7 +1218,14 @@ impl EscrowContract {
         );
 
         let fleet_management = get_fleet_management_contract(&env);
-        settle_escrow_funds(&env, delivery_id, &record, fleet_management);
+        settle_escrow_funds(
+            &env,
+            delivery_id,
+            &record,
+            fleet_management,
+            driver_amount,
+            platform_fee,
+        );
 
         env.events().publish(
             (events::escrow_released(&env),),
@@ -1373,19 +1410,21 @@ impl EscrowContract {
 
         // Checks + effects (state) are resolved per-branch first; the actual
         // fund transfer (interaction) happens only after all state below is
-        // committed, per checks-effects-interactions.
-        let mut platform_fee: i128 = 0;
-        let fleet_management: Option<Address> = if release_to_driver {
+        // committed, per checks-effects-interactions. The release branch
+        // computes the volume-discounted effective fee here — before the
+        // sender-volume increment — so the amounts that move on-chain match
+        // (Issue #190).
+        let settle_params: Option<(Option<Address>, i128, i128)> = if release_to_driver {
             let base_fee_bps: u32 = env
                 .storage()
                 .instance()
                 .get::<_, ProtocolConfig>(&StorageKey::ProtocolConfig)
                 .map(|config| config.platform_fee_bps)
                 .unwrap_or(0);
-
             let sender_volume = Self::get_sender_volume(env.clone(), record.sender.clone());
             let effective_fee_bps = get_effective_fee_bps(&env, base_fee_bps, sender_volume);
-            platform_fee = calculate_fee(record.amount, effective_fee_bps);
+            let platform_fee = calculate_fee(record.amount, effective_fee_bps);
+            let driver_amount = record.amount.saturating_sub(platform_fee);
 
             let sender_volume_key = DataKey::SenderVolume(record.sender.clone());
             env.storage()
@@ -1393,7 +1432,11 @@ impl EscrowContract {
                 .set(&sender_volume_key, &sender_volume.saturating_add(1));
 
             record.status = EscrowStatus::Released;
-            get_fleet_management_contract(&env)
+            Some((
+                get_fleet_management_contract(&env),
+                driver_amount,
+                platform_fee,
+            ))
         } else {
             record.status = EscrowStatus::Refunded;
             None
@@ -1412,8 +1455,15 @@ impl EscrowContract {
             &current_total.saturating_sub(record.amount),
         );
 
-        if release_to_driver {
-            settle_escrow_funds(&env, delivery_id, &record, fleet_management);
+        if let Some((fleet_management, driver_amount, platform_fee)) = settle_params {
+            settle_escrow_funds(
+                &env,
+                delivery_id,
+                &record,
+                fleet_management,
+                driver_amount,
+                platform_fee,
+            );
         } else {
             token::Client::new(&env, &record.token).transfer(
                 &env.current_contract_address(),
@@ -1618,6 +1668,7 @@ impl EscrowContract {
         env.storage()
             .instance()
             .set(&DataKey::HoldbackWindow, &new_window_seconds);
+        extend_instance_ttl(&env);
         env.events().publish(
             (Symbol::new(&env, "holdback_window_updated"),),
             (admin, new_window_seconds),

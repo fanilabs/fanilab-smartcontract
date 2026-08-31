@@ -12,48 +12,32 @@ The delivery protocol is tightly coupled with the **escrow contract** for financ
 
 ## Delivery State Machine
 
-Every delivery follows a strict state machine enforced by `validate_transition()`:
+Every delivery follows a strict state machine enforced by `validate_transition()`. The implementation allows `Delivered → Disputed` for the post-confirmation dispute window, and the dispute window is bounded by `dispute_time_limit` in `dispute_resolution_contract`. `Cancelled` is the only terminal state in the delivery lifecycle.
 
 ```
-            ┌─────────────────────────────┐
-            │          Pending             │
-            └──────────┬───────────────────┘
-                       │
-              ┌────────┴────────┐
-              ▼                 ▼
-        ┌──────────┐    ┌────────────┐
-        │  Active   │    │ Cancelled  │ (terminal)
-        └─────┬─────┘    └────────────┘
-              │
-        ┌─────┴─────┐
-        ▼           ▼
-  ┌──────────┐ ┌──────────┐
-  │ InTransit │ │ Disputed │
-  └─────┬─────┘ └─────┬────┘
-        │              │
-        ▼              ├──────────────┐
-  ┌──────────┐        ▼              ▼
-  │ Delivered │  ┌──────────┐  ┌────────────┐
-  │(terminal) │  │ Delivered │  │ Cancelled  │
-  └───────────┘  │(terminal) │  │ (terminal) │
-                 └───────────┘  └────────────┘
+Pending ──► Active ──► InTransit ──► Delivered
+   │          │            │             │
+   │          └────────────► Disputed ──► Delivered
+   │                              │
+   └────────────► Cancelled        └────► Cancelled
 ```
 
 ### Allowed Transitions
 
-| From         | To          | Trigger                                                  |
-|--------------|-------------|----------------------------------------------------------|
-| `Pending`    | `Active`    | Sender funds escrow → delivery goes active               |
-| `Pending`    | `Cancelled` | Sender cancels before funding                            |
-| `Active`     | `InTransit` | Driver picks up the package and confirms                 |
-| `Active`     | `Disputed`  | Sender (only) raises a dispute                           |
-| `Active`     | `Cancelled` | Sender or admin cancels the delivery                     |
-| `InTransit`  | `Delivered` | Driver confirms delivery (proof of delivery)             |
-| `InTransit`  | `Disputed`  | Sender or driver raises a dispute                        |
-| `Disputed`   | `Delivered` | Dispute resolved in driver's favor → delivery completes  |
-| `Disputed`   | `Cancelled` | Dispute resolved with refund → delivery cancelled        |
+| From         | To          | Trigger                                                          |
+|--------------|-------------|------------------------------------------------------------------|
+| `Pending`    | `Active`    | Sender funds escrow → delivery goes active                       |
+| `Pending`    | `Cancelled` | Sender cancels before funding                                    |
+| `Active`     | `InTransit` | Driver picks up the package and confirms                         |
+| `Active`     | `Disputed`  | Sender, recipient, or driver raises a dispute                    |
+| `Active`     | `Cancelled` | Sender or admin cancels the delivery                             |
+| `InTransit`  | `Delivered` | Recipient confirms delivery (proof of delivery)                  |
+| `InTransit`  | `Disputed`  | Sender, recipient, or driver raises a dispute                    |
+| `Delivered`  | `Disputed`  | Sender, recipient, or driver disputes within the configured window |
+| `Disputed`   | `Delivered` | Dispute resolved in driver's favor → delivery completes          |
+| `Disputed`   | `Cancelled` | Dispute resolved with refund → delivery cancelled                |
 
-`Delivered` and `Cancelled` are **terminal states** — no further transitions are permitted.
+Only `Cancelled` is terminal. `Delivered` remains valid as a pre-dispute state, and the `Delivered → Disputed` transition is constrained by the dispute window rather than being an unconditional terminal-state exit.
 
 ### Delivery Record
 
@@ -107,12 +91,14 @@ The assigned driver confirms they have picked up the package. Validations:
 Transitions status to `InTransit`.
 Emits a `delivery_in_transit` event.
 
-### `confirm_delivery(env, driver, delivery_id)`
-The driver confirms delivery completion (proof of delivery). Validations:
-- Only the assigned driver can call this
+### `confirm_delivery(env, recipient, delivery_id)`
+The recipient confirms delivery completion (proof of delivery). Validations:
+- Only the delivery recipient can call this
 - Delivery must be in `InTransit` status
 
-Transitions status to `Delivered` and calls the escrow contract's `release_escrow` to release funds to the driver.
+This call does not pay the driver immediately. It transitions the delivery to `Delivered` and invokes the escrow contract's `mark_holdback_escrow`, which moves the matching escrow into the `Holdback` state. The driver is paid only after a separate `release_holdback_escrow` call by the recipient or an admin.
+
+`Holdback` is the escrow-side intermediate state between confirmation and final settlement: funds are reserved for the driver, but still require the follow-up release step before payout is complete.
 Emits a `delivery_confirmed` event.
 
 ### `cancel_delivery(env, caller, delivery_id)`
@@ -126,8 +112,10 @@ Emits a `delivery_cancelled` event.
 
 ### `dispute_delivery(env, reporter, delivery_id)`
 Raises a dispute on a delivery. Valid transitions:
-- `Active` → `Disputed` (only sender can raise)
-- `InTransit` → `Disputed` (sender or driver can raise)
+- `Active` → `Disputed` (sender, recipient, or driver can raise)
+- `InTransit` → `Disputed` (sender, recipient, or driver can raise)
+
+The delivery contract authorizes the same three parties as the escrow and dispute-resolution contracts today: sender, recipient, and driver. The document reflects the implementation rather than an older design assumption; if a future contract broadens or narrows that set, this section should be updated to match the live authorization branch.
 
 Calls the escrow contract's `freeze_funds` to pause the escrow.
 Emits a `delivery_disputed` event.
@@ -143,7 +131,7 @@ The delivery contract provides a `get_combined_state(delivery_id)` view that fet
 | `Pending`       | `Locked`               |
 | `Active`        | `Locked`               |
 | `InTransit`     | `Locked`               |
-| `Delivered`     | `Released`             |
+| `Delivered`     | `Holdback` or `Released` |
 | `Disputed`      | `Paused`               |
 | `Cancelled`     | `Refunded`             |
 
@@ -157,11 +145,11 @@ Returns `(DeliveryRecord, EscrowRecord, is_synchronized)`. The boolean `is_synch
 ┌───────────────────┐     ┌─────────────────────┐
 │  DeliveryContract  │────►│   EscrowContract    │
 │                   │     │  fund_escrow         │
-│  create_delivery  │     │  release_escrow      │
-│  confirm_delivery │     │  refund_escrow       │
-│  cancel_delivery  │     │  freeze_funds        │
-│  dispute_delivery │     └─────────────────────┘
-│                   │
+│  create_delivery  │     │  mark_holdback_escrow│
+│  confirm_delivery │     │  release_holdback_escrow |
+│  cancel_delivery  │     │  refund_escrow       │
+│  dispute_delivery │     │  freeze_funds        │
+│                   │     └─────────────────────┘
 │  assign_driver    │────►│ IdentityReputation   │
 │                   │     │  get_driver_profile  │
 └───────────────────┘     └─────────────────────┘

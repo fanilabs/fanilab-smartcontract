@@ -692,6 +692,23 @@ pub struct EscrowRecord {
     pub fleet_id: Option<u64>,
 }
 
+/// Lifecycle status for a driver profile.
+///
+/// `Active` is the initial state for every newly registered driver.
+/// `Suspended` is set by an admin via `suspend_driver` and can be reversed
+/// with `reinstate_driver`.  The profile record is **never deleted** — this
+/// preserves audit history and prevents a suspended driver from re-registering
+/// to reset their score (register_driver panics if a profile already exists).
+#[contracttype]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+pub enum DriverStatus {
+    /// Driver is registered and may participate in the protocol.
+    Active,
+    /// Driver has been administratively suspended; profile is preserved for
+    /// audit purposes but the driver may not accept new assignments.
+    Suspended,
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DriverProfile {
@@ -751,9 +768,9 @@ mod test {
     use super::{
         delivery_key, escrow_key, CargoCategory, CargoDescriptor, DeliveryConfirmedEvent,
         DeliveryCreatedEvent, DeliveryDisputedEvent, DeliveryId, DeliveryMetadata, DeliveryRecord,
-        DeliveryStatus, DriverAssignedEvent, DriverProfile, EscrowFundedEvent, EscrowRecord,
-        EscrowRefundedEvent, EscrowReleasedEvent, EscrowState, FaniLabError, ProtocolConfig,
-        StorageKey, UserProfile,
+        DeliveryStatus, DriverAssignedEvent, DriverProfile, DriverStatus, EscrowFundedEvent,
+        EscrowRecord, EscrowRefundedEvent, EscrowReleasedEvent, EscrowState, FaniLabError,
+        ProtocolConfig, StorageKey, UserProfile,
     };
     use soroban_sdk::{contract, testutils::Address as _, Address, Env, String};
 

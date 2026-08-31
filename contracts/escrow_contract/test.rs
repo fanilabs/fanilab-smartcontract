@@ -32,8 +32,12 @@ proptest! {
 
     #[test]
     fn effective_fee_never_exceeds_base(base in 0u32..=10_000, volume in any::<u32>()) {
+        // get_effective_fee_bps reads persistent storage, which SDK 27 only
+        // permits from within a contract's execution context.
         let env = Env::default();
-        prop_assert!(get_effective_fee_bps(&env, base, volume) <= base);
+        let contract_id = env.register(EscrowContract, ());
+        let effective = env.as_contract(&contract_id, || get_effective_fee_bps(&env, base, volume));
+        prop_assert!(effective <= base);
     }
 }
 
@@ -188,16 +192,30 @@ impl ReentrantToken {
     }
 
     pub fn transfer(env: Env, from: Address, to: Address, amount: i128) {
-        let target: Address = env
+        let _ = &from;
+        // Only re-enter once the test has armed a target (via arm_reentrant_mock);
+        // the transfer during create_escrow runs before arming and must be inert.
+        if let Some(target) = env
             .storage()
             .instance()
-            .get(&Symbol::new(&env, "target"))
-            .unwrap();
-        let _: () = env.invoke_contract(
-            &target,
-            &Symbol::new(&env, "release_escrow"),
-            soroban_sdk::vec![&env, to.into_val(&env), 0u64.into_val(&env)],
-        );
+            .get::<_, Address>(&Symbol::new(&env, "target"))
+        {
+            let method: Symbol = env
+                .storage()
+                .instance()
+                .get(&Symbol::new(&env, "method"))
+                .unwrap_or_else(|| Symbol::new(&env, "release_escrow"));
+            let delivery_id: u64 = env
+                .storage()
+                .instance()
+                .get(&Symbol::new(&env, "delivery_id"))
+                .unwrap_or(0);
+            let _: () = env.invoke_contract(
+                &target,
+                &method,
+                soroban_sdk::vec![&env, to.into_val(&env), delivery_id.into_val(&env)],
+            );
+        }
         let key = Symbol::new(&env, "balance");
         let mut balance: i128 = env.storage().persistent().get(&key).unwrap_or(0);
         if balance >= amount {
@@ -3137,7 +3155,7 @@ fn test_batch_rejects_invalid_driver_and_parties() {
     mint(&env, &token, &sender, 2000);
 
     let mut invalid_driver_batch = soroban_sdk::Vec::new(&env);
-    invalid_driver_batch.push_back((400u64, sender.clone(), 1000i128));
+    invalid_driver_batch.push_back((400u64, sender.clone(), 1000i128, None));
 
     let result = client.try_create_escrows_batch(&sender, &recipient, &token, &invalid_driver_batch);
     match result {
@@ -3146,7 +3164,7 @@ fn test_batch_rejects_invalid_driver_and_parties() {
     }
 
     let mut invalid_party_batch = soroban_sdk::Vec::new(&env);
-    invalid_party_batch.push_back((401u64, recipient.clone(), 1000i128));
+    invalid_party_batch.push_back((401u64, recipient.clone(), 1000i128, None));
 
     let result = client.try_create_escrows_batch(&sender, &sender, &token, &invalid_party_batch);
     match result {
@@ -4667,4 +4685,152 @@ fn test_release_escrow_event_carries_correct_fields() {
     assert_eq!(balance(&env, &token, &driver), 1140); // 1200 - 5% = 1140
     assert_eq!(balance(&env, &token, &admin), 60);    // 5% of 1200
     assert_eq!(balance(&env, &token, &contract_id), 0);
+}
+
+// ── Issue #299: instance-storage TTL is extended by every instance writer ─────
+//
+// Instance storage holds the admin address, `ProtocolConfig`, the paused flag,
+// and every peer-contract address. Three admin setters
+// (`update_slippage_tolerance`, `set_fleet_management_contract`, `set_paused`)
+// previously wrote and returned without extending the instance TTL, so a value
+// written during a quiet period could be archived before the next escrow
+// operation re-extended it. `extend_instance_ttl` is now called by all of them.
+
+/// Advance the ledger sequence to just before the instance entry would be
+/// archived by `init`'s own TTL extension, so the next write is the only thing
+/// that can keep the entry alive.
+fn advance_near_instance_archival(env: &Env) {
+    env.ledger().with_mut(|l| {
+        l.sequence_number += ttl::LEDGER_TTL_EXTEND_TO - 10;
+    });
+}
+
+#[test]
+fn test_set_paused_extends_instance_ttl_and_survives_ledger_advance() {
+    use soroban_sdk::testutils::Deployer as _;
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+    client.init(&admin, &token, &0);
+
+    client.set_paused(&admin, &true);
+    advance_near_instance_archival(&env);
+    // Re-pausing here is the write under test; without the TTL extension the
+    // instance entry would be near archival and nothing would rescue it.
+    client.set_paused(&admin, &true);
+
+    let ttl_after = env.deployer().get_contract_instance_ttl(&contract_id);
+    assert!(
+        ttl_after >= ttl::LEDGER_TTL_THRESHOLD,
+        "set_paused must extend the instance TTL (got {ttl_after})"
+    );
+
+    // A long ledger advance with no other activity: the paused flag must not
+    // silently flip back to false via `is_protocol_paused`'s fail-open read.
+    env.ledger().with_mut(|l| {
+        l.sequence_number += ttl::LEDGER_TTL_EXTEND_TO - 10;
+    });
+    assert!(
+        client.is_paused(),
+        "paused flag must persist across a substantial ledger advance"
+    );
+}
+
+#[test]
+fn test_update_slippage_tolerance_persists_across_ledger_advance() {
+    use soroban_sdk::testutils::Deployer as _;
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+    client.init(&admin, &token, &0);
+
+    advance_near_instance_archival(&env);
+    client.update_slippage_tolerance(&admin, &750);
+
+    let ttl_after = env.deployer().get_contract_instance_ttl(&contract_id);
+    assert!(
+        ttl_after >= ttl::LEDGER_TTL_THRESHOLD,
+        "update_slippage_tolerance must extend the instance TTL (got {ttl_after})"
+    );
+
+    env.ledger().with_mut(|l| {
+        l.sequence_number += ttl::LEDGER_TTL_EXTEND_TO - 10;
+    });
+    assert_eq!(
+        client.get_slippage_tolerance(),
+        750,
+        "slippage tolerance must persist across a substantial ledger advance"
+    );
+}
+
+#[test]
+fn test_set_fleet_management_contract_persists_across_ledger_advance() {
+    use soroban_sdk::testutils::Deployer as _;
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+    let fleet_contract = Address::generate(&env);
+    client.init(&admin, &token, &0);
+
+    advance_near_instance_archival(&env);
+    client.set_fleet_management_contract(&admin, &fleet_contract);
+
+    let ttl_after = env.deployer().get_contract_instance_ttl(&contract_id);
+    assert!(
+        ttl_after >= ttl::LEDGER_TTL_THRESHOLD,
+        "set_fleet_management_contract must extend the instance TTL (got {ttl_after})"
+    );
+
+    env.ledger().with_mut(|l| {
+        l.sequence_number += ttl::LEDGER_TTL_EXTEND_TO - 10;
+    });
+    assert_eq!(
+        client.get_fleet_management_contract(),
+        Some(fleet_contract),
+        "fleet management contract address must persist across a substantial ledger advance"
+    );
+}
+
+/// Regression guard: the three admin setters that already extended the instance
+/// TTL still do, now that they route through the shared `extend_instance_ttl`
+/// helper.
+#[test]
+fn test_existing_instance_writers_still_extend_ttl() {
+    use soroban_sdk::testutils::Deployer as _;
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+    let dispute_contract = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+    client.init(&admin, &token, &0);
+
+    advance_near_instance_archival(&env);
+    client.update_platform_fee(&admin, &250);
+    assert!(env.deployer().get_contract_instance_ttl(&contract_id) >= ttl::LEDGER_TTL_THRESHOLD);
+
+    advance_near_instance_archival(&env);
+    client.set_dispute_resolution_contract(&admin, &dispute_contract);
+    assert!(env.deployer().get_contract_instance_ttl(&contract_id) >= ttl::LEDGER_TTL_THRESHOLD);
+
+    advance_near_instance_archival(&env);
+    client.propose_admin(&admin, &new_admin);
+    assert!(env.deployer().get_contract_instance_ttl(&contract_id) >= ttl::LEDGER_TTL_THRESHOLD);
+
+    assert_eq!(client.get_platform_fee(), 250);
+    assert_eq!(
+        client.get_dispute_resolution_contract(),
+        Some(dispute_contract)
+    );
 }

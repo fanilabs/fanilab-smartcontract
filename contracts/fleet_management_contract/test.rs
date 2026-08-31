@@ -715,7 +715,7 @@ fn test_roster_driver_can_leave_voluntarily() {
 
 #[test]
 fn test_roster_empty_for_unknown_fleet() {
-    let (env, client, _admin) = setup_test();
+    let (_env, client, _admin) = setup_test();
     let unknown_fleet_id = 999;
 
     assert!(client.get_fleet_roster(&unknown_fleet_id).is_empty());
@@ -1339,7 +1339,7 @@ fn test_full_protocol_happy_path() {
         estimated_delivery: env.ledger().timestamp() + 86400,
     };
     let delivery_record_id = delivery.create_delivery(&sender, &recipient, &metadata);
-    assert_eq!(delivery_record_id, 1u64.into());
+    assert_eq!(delivery_record_id, 1u64);
 
     StellarAssetClient::new(&env, &token).mint(&sender, &1000);
     escrow.create_escrow(

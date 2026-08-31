@@ -55,6 +55,12 @@ pub struct MockEscrowContract;
 
 #[contractimpl]
 impl MockEscrowContract {
+    /// `require_escrow_not_paused` in the dispute contract cross-calls this;
+    /// the mock is never paused.
+    pub fn is_paused(_env: Env) -> bool {
+        false
+    }
+
     pub fn get_escrow(env: Env, delivery_id: u64) -> shared_types::EscrowRecord {
         env.storage()
             .instance()
@@ -461,12 +467,14 @@ fn test_raise_dispute_delivered_exceeds_time_limit() {
 }
 
 #[test]
-fn test_update_dispute_time_limit_allows_below_minimum_and_getter_returns_value() {
+fn test_update_dispute_time_limit_getter_returns_updated_value() {
     let (_env, admin, _, _, _, _, _, dispute_client) = setup_test();
 
-    dispute_client.update_dispute_time_limit(&admin, &1000);
+    // 2 days — at or above MIN_DISPUTE_TIME_LIMIT (below-minimum values are
+    // rejected; see test_init_with_below_minimum_dispute_time_limit).
+    dispute_client.update_dispute_time_limit(&admin, &172800);
 
-    assert_eq!(dispute_client.get_dispute_time_limit(), 1000);
+    assert_eq!(dispute_client.get_dispute_time_limit(), 172800);
 }
 
 #[test]
@@ -505,8 +513,9 @@ fn test_updated_dispute_time_limit_shortens_delivered_dispute_window() {
 fn test_set_dispute_resolution_limit_getter_and_force_resolution_window() {
     let (env, admin, sender, recipient, driver, delivery_id, escrow_id, dispute_client) =
         setup_test();
-    dispute_client.set_dispute_resolution_limit(&admin, &1000);
-    assert_eq!(dispute_client.get_dispute_resolution_limit(), 1000);
+    // At MIN_DISPUTE_RESOLUTION_LIMIT (1 day); below-minimum values are rejected.
+    dispute_client.set_dispute_resolution_limit(&admin, &86400);
+    assert_eq!(dispute_client.get_dispute_resolution_limit(), 86400);
 
     let delivery_record = create_mock_delivery_record(
         &env,
@@ -529,7 +538,8 @@ fn test_set_dispute_resolution_limit_getter_and_force_resolution_window() {
     set_mock_escrow(&env, &escrow_id, 12, &escrow_record);
 
     dispute_client.raise_dispute(&sender, &did(12));
-    env.ledger().set_timestamp(1001);
+    // raised_at is 0; advance past raised_at + resolution_limit (86400).
+    env.ledger().set_timestamp(86401);
     dispute_client.force_resolve_dispute(&sender, &did(12));
 
     assert_eq!(
@@ -1747,7 +1757,7 @@ fn test_force_resolve_dispute_with_non_paused_escrow_fails() {
         resolved_at: None,
         resolved_by: None,
     };
-    env.as_contract(&env.register(DisputeResolutionContract, ()), || {
+    env.as_contract(&dispute_client.address, || {
         env.storage().persistent().set(&dispute_key, &dispute);
     });
 

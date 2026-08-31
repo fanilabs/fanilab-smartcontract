@@ -41,6 +41,26 @@ fn require_escrow_not_paused(env: &Env) {
     }
 }
 
+/// Require that `caller` is one of the fleet's configured signers and that the
+/// fleet's `signature_threshold` is satisfiable by that single authorization.
+/// A caller who is not a signer, or a threshold that a lone signer cannot meet,
+/// is rejected with `FleetError::Unauthorized`.
+fn require_signer_threshold(env: &Env, profile: &FleetProfile, caller: &Address) {
+    let mut authorized_signer_count = 0u32;
+    for i in 0..profile.signers.len() {
+        if let Some(signer) = profile.signers.get(i) {
+            if signer == *caller {
+                authorized_signer_count += 1;
+                break;
+            }
+        }
+    }
+
+    if authorized_signer_count < profile.signature_threshold {
+        panic_with_error!(env, FleetError::Unauthorized);
+    }
+}
+
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]

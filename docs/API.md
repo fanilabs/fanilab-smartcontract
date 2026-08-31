@@ -266,6 +266,64 @@ escrow_contract.set_dispute_resolution_contract(
 );
 ```
 
+#### `set_delivery_contract`
+Configure the delivery contract address that `create_escrow` and
+`create_escrows_batch` cross-call to verify delivery integrity (Issue #295).
+
+When configured, both creation entry points:
+1. Confirm that a delivery record for the supplied `delivery_id` exists
+   (panics with `DeliveryNotFound` if not, reverting the escrow creation and
+   preventing orphaned or permanently-consumed delivery IDs).
+2. Verify the supplied `recipient` matches the delivery record.
+3. Verify the supplied `driver` matches the delivery record's driver **if** a
+   driver has already been assigned (`assign_driver` has been called). If the
+   driver field is still `None` the check is deferred — escrow creation may
+   precede driver assignment.
+
+When **not** configured (i.e. `get_delivery_contract` returns `None`), both
+functions behave exactly as before this change, making the check fully opt-in
+for existing deployments.
+
+**Design note:** the check adds one `get_delivery` cross-contract call to the
+escrow-creation hot path. The integrity benefit — preventing orphaned escrows and
+mismatched-party escrows that permanently consume a `delivery_id` via the
+`DuplicateDelivery` guard — is judged to outweigh the resource cost for
+deployments that enable it. Deployments that cannot afford the overhead may
+leave the delivery contract unconfigured.
+
+**Parameters:**
+- `admin: Address` - Admin address (must match the stored admin)
+- `delivery_contract: Address` - Address of the deployed `delivery_contract`
+
+**Authorization:** Admin only
+
+**Errors:**
+- `Unauthorized` - Caller is not the configured admin
+- `NotInitialized` - Contract has not been initialised
+
+**Events:** none (configuration change only)
+
+**Example:**
+```rust
+escrow_contract.set_delivery_contract(
+    &admin_address,
+    &delivery_contract_address,
+);
+```
+
+#### `get_delivery_contract`
+Return the configured delivery contract address, or `None` if delivery
+verification is disabled.
+
+**Parameters:** none
+
+**Returns:** `Option<Address>`
+
+**Example:**
+```rust
+let addr: Option<Address> = escrow_contract.get_delivery_contract();
+```
+
 #### `update_slippage_tolerance`
 Update the slippage tolerance (in basis points) used when settlement swaps are
 executed. The default is 500 (5%); the maximum is 10000 (100%).

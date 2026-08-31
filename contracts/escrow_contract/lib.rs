@@ -1,8 +1,8 @@
 #![no_std]
 
 use shared_types::{
-    escrow_key, events, is_admin, ttl, EscrowRecord, EscrowStatus, FaniLabError, ProtocolConfig,
-    StorageKey,
+    escrow_key, events, is_admin, ttl, DeliveryRecord, EscrowRecord, EscrowStatus, FaniLabError,
+    ProtocolConfig, StorageKey,
 };
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, token, Address, Env,
@@ -156,6 +156,63 @@ fn get_holdback_window(env: &Env) -> u64 {
         .instance()
         .get(&DataKey::HoldbackWindow)
         .unwrap_or(constants::DEFAULT_HOLDBACK_WINDOW_SECONDS)
+}
+
+/// Return the configured delivery contract address, if any.
+/// Used by `create_escrow` / `create_escrows_batch` to optionally verify that
+/// a delivery record exists and matches the supplied parties (Issue #295).
+fn get_delivery_contract(env: &Env) -> Option<Address> {
+    env.storage().instance().get(&DataKey::DeliveryContract)
+}
+
+/// When the delivery contract is configured, cross-call it to verify that:
+/// 1. The delivery exists (panics with DeliveryNotFound if not).
+/// 2. The supplied `recipient` matches the delivery record's recipient.
+/// 3. The supplied `driver` matches the delivery record's driver, OR the
+///    delivery has no driver yet (the driver field is `None`, meaning
+///    `assign_driver` hasn't been called yet — the ordering constraint is
+///    documented: escrow creation may precede or follow driver assignment, but
+///    if a driver is already assigned its address must agree with the escrow).
+///
+/// When no delivery contract is configured the check is skipped entirely so
+/// existing deployments and tests that don't wire up the delivery contract
+/// continue to work unchanged — matching the optional integration pattern used
+/// by the fleet-management and settlement integrations.
+///
+/// Cross-contract call cost note: this adds one `get_delivery` call to the hot
+/// escrow-creation path. The integrity benefit — preventing orphaned escrows
+/// and mismatched-party escrows that permanently consume a delivery_id — is
+/// judged to outweigh the ~1 instruction overhead for deployments that enable
+/// the check. Deployments that cannot afford the cost simply leave the delivery
+/// contract unconfigured (Issue #295).
+fn verify_delivery_if_configured(
+    env: &Env,
+    delivery_id: u64,
+    recipient: &Address,
+    driver: &Address,
+) {
+    let delivery_addr = match get_delivery_contract(env) {
+        Some(addr) => addr,
+        None => return,
+    };
+
+    let delivery: DeliveryRecord = env.invoke_contract(
+        &delivery_addr,
+        &Symbol::new(env, "get_delivery"),
+        soroban_sdk::vec![env, delivery_id.into_val(env)],
+    );
+
+    if delivery.recipient != *recipient {
+        panic_with_error!(env, EscrowError::InvalidParties);
+    }
+
+    // If a driver is already assigned, it must match. If unassigned (None),
+    // the check is deferred — the driver may be assigned after escrow creation.
+    if let Some(assigned_driver) = &delivery.driver {
+        if *assigned_driver != *driver {
+            panic_with_error!(env, EscrowError::InvalidDriver);
+        }
+    }
 }
 
 fn get_fleet_management_contract(env: &Env) -> Option<Address> {
@@ -376,6 +433,12 @@ enum DataKey {
     FleetManagementContract,
     DisputeResolutionContract,
     IdentityReputationContract,
+    /// Optional delivery_contract address used by create_escrow /
+    /// create_escrows_batch to cross-verify that a delivery record exists and
+    /// that recipient / driver match before locking funds (Issue #295).
+    /// When absent the check is skipped so existing deployments and tests that
+    /// do not wire up the delivery contract continue to work unchanged.
+    DeliveryContract,
     /// Track total locked value per token
     TotalLocked(Address),
     /// Track sender volume (number of completed deliveries)
@@ -756,6 +819,32 @@ impl EscrowContract {
             .get(&DataKey::IdentityReputationContract)
     }
 
+    /// Configure the delivery contract address used by `create_escrow` and
+    /// `create_escrows_batch` to cross-verify that a delivery record exists and
+    /// that the supplied recipient/driver match before locking funds (Issue #295).
+    ///
+    /// The check is **optional**: when no delivery contract is configured the
+    /// verification is skipped entirely, so existing deployments and tests that
+    /// do not wire up the delivery contract continue to work unchanged — matching
+    /// the optional integration pattern used by the fleet-management and
+    /// settlement integrations.
+    ///
+    /// Only an admin may call this, mirroring every other peer-contract setter.
+    pub fn set_delivery_contract(env: Env, admin: Address, delivery_contract: Address) {
+        admin.require_auth();
+        require_admin(&env, &admin);
+        env.storage()
+            .instance()
+            .set(&DataKey::DeliveryContract, &delivery_contract);
+        extend_instance_ttl(&env);
+    }
+
+    /// Return the configured delivery contract address, if any.
+    /// `None` means delivery verification is disabled (see `set_delivery_contract`).
+    pub fn get_delivery_contract(env: Env) -> Option<Address> {
+        get_delivery_contract(&env)
+    }
+
     pub fn propose_admin(env: Env, current_admin: Address, new_admin: Address) {
         current_admin.require_auth();
         let stored_admin: Address = env
@@ -852,6 +941,11 @@ impl EscrowContract {
         if token != config.token {
             panic_with_error!(&env, EscrowError::InvalidToken);
         }
+        // Issue #295: when a delivery contract is configured, cross-call it to
+        // confirm the delivery exists and that the supplied recipient/driver
+        // match the delivery record. Skipped when unconfigured so existing
+        // deployments and tests continue to work unchanged.
+        verify_delivery_if_configured(&env, delivery_id, &recipient, &driver);
         let payout_address: Option<Address> = if let (Some(fleet_addr), Some(fid)) =
             (get_fleet_management_contract(&env), fleet_id)
         {
@@ -1028,6 +1122,9 @@ impl EscrowContract {
                 if env.storage().persistent().has(&escrow_key(delivery_id)) {
                     panic_with_error!(&env, EscrowError::DuplicateDelivery);
                 }
+                // Issue #295: same optional delivery-verification check as
+                // create_escrow — skipped when no delivery contract is configured.
+                verify_delivery_if_configured(&env, delivery_id, &recipient, &driver);
                 token::Client::new(&env, &token).transfer(
                     &sender,
                     env.current_contract_address(),
@@ -1707,14 +1804,40 @@ impl EscrowContract {
             panic_with_error!(&env, FaniLabError::Unauthorized);
         }
         let mut record = load_escrow(&env, delivery_id);
-        if record.status == EscrowStatus::Locked || record.status == EscrowStatus::Holdback {
-            record.status = EscrowStatus::Paused;
-            record.disputed_at = Some(env.ledger().timestamp());
-            save_escrow(&env, delivery_id, &record);
-            env.events().publish(
-                (Symbol::new(&env, "funds_frozen"), delivery_id),
-                (caller, env.ledger().timestamp()),
-            );
+        // Issue #294: reject terminal states (Released, Refunded, Split) with a
+        // typed error so the caller — typically dispute_resolution_contract::
+        // raise_dispute — gets a transaction revert rather than a silent no-op.
+        // This prevents an unresolvable DisputeCase from being recorded against
+        // a delivery whose funds are already gone.
+        //
+        // Already-Paused is treated as a safe no-op: raise_dispute in the
+        // delivery contract may call freeze_funds a second time in certain
+        // re-entry paths (e.g. Delivered → Disputed after the escrow was already
+        // paused by a direct escrow::raise_dispute call), and that double-call
+        // must succeed harmlessly rather than reverting the whole dispute chain.
+        // An already-Paused escrow has its funds secured — the goal of freeze —
+        // so repeating the operation changes nothing meaningful and is documented
+        // here as an intentional, stable contract.
+        match record.status {
+            EscrowStatus::Locked | EscrowStatus::Holdback => {
+                record.status = EscrowStatus::Paused;
+                record.disputed_at = Some(env.ledger().timestamp());
+                save_escrow(&env, delivery_id, &record);
+                env.events().publish(
+                    (Symbol::new(&env, "funds_frozen"), delivery_id),
+                    (caller, env.ledger().timestamp()),
+                );
+            }
+            EscrowStatus::Paused => {
+                // Already frozen — safe no-op (see comment above).
+            }
+            // Released, Refunded, Split: funds are no longer held by this
+            // contract; freezing them is meaningless and would leave the
+            // dispute contract with an unresolvable DisputeCase. Panic so
+            // the calling transaction reverts cleanly.
+            _ => {
+                panic_with_error!(&env, EscrowError::InvalidState);
+            }
         }
     }
 

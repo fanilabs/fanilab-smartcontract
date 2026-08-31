@@ -4834,3 +4834,508 @@ fn test_existing_instance_writers_still_extend_ttl() {
         Some(dispute_contract)
     );
 }
+
+// ── Issue #294: freeze_funds terminal-state regression tests ─────────────────
+//
+// Acceptance criteria (issue #294):
+//   • freeze_funds rejects Released, Refunded, Split with EscrowError::InvalidState
+//   • Already-Paused is a safe no-op (documented decision)
+//   • Freezing Locked / Holdback still works as before
+//
+// The pause-exemption and authorization tests (test_freeze_funds_remains_available_while_paused
+// and test_freeze_funds_unauthorized_caller_rejected) are the originals and remain
+// unchanged above.
+
+/// freeze_funds on a Released escrow → typed EscrowError::InvalidState.
+/// Without the fix this would silently succeed (return ()) instead.
+#[test]
+fn test_freeze_funds_rejects_released_escrow() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let driver = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+    let dispute_contract = Address::generate(&env);
+
+    client.init(&admin, &token, &0);
+    client.set_dispute_resolution_contract(&admin, &dispute_contract);
+    mint(&env, &token, &sender, 1000);
+    client.create_escrow(&sender, &recipient, &driver, &2940u64, &token, &1000, &None);
+    // Release the escrow → terminal state Released
+    client.release_escrow(&recipient, &2940u64);
+    assert_eq!(client.get_escrow(&2940u64).status, EscrowStatus::Released);
+
+    let result = client.try_freeze_funds(&dispute_contract, &2940u64);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, EscrowError::InvalidState.into()),
+        _ => panic!("Expected EscrowError::InvalidState for Released escrow"),
+    }
+    // State must not have changed
+    assert_eq!(client.get_escrow(&2940u64).status, EscrowStatus::Released);
+}
+
+/// freeze_funds on a Refunded escrow → typed EscrowError::InvalidState.
+#[test]
+fn test_freeze_funds_rejects_refunded_escrow() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let driver = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+    let dispute_contract = Address::generate(&env);
+
+    client.init(&admin, &token, &0);
+    client.set_dispute_resolution_contract(&admin, &dispute_contract);
+    mint(&env, &token, &sender, 1000);
+    client.create_escrow(&sender, &recipient, &driver, &2941u64, &token, &1000, &None);
+    // Refund the escrow → terminal state Refunded
+    client.refund_escrow(&sender, &2941u64);
+    assert_eq!(client.get_escrow(&2941u64).status, EscrowStatus::Refunded);
+
+    let result = client.try_freeze_funds(&dispute_contract, &2941u64);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, EscrowError::InvalidState.into()),
+        _ => panic!("Expected EscrowError::InvalidState for Refunded escrow"),
+    }
+    assert_eq!(client.get_escrow(&2941u64).status, EscrowStatus::Refunded);
+}
+
+/// freeze_funds on a Split escrow → typed EscrowError::InvalidState.
+#[test]
+fn test_freeze_funds_rejects_split_escrow() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let driver = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+    let dispute_contract = Address::generate(&env);
+
+    client.init(&admin, &token, &0);
+    client.set_dispute_resolution_contract(&admin, &dispute_contract);
+    mint(&env, &token, &sender, 1000);
+    client.create_escrow(&sender, &recipient, &driver, &2942u64, &token, &1000, &None);
+    // Pause then split → terminal state Split
+    client.freeze_funds(&dispute_contract, &2942u64);
+    client.resolve_dispute_split(&admin, &2942u64, &5000u32);
+    assert_eq!(client.get_escrow(&2942u64).status, EscrowStatus::Split);
+
+    let result = client.try_freeze_funds(&dispute_contract, &2942u64);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, EscrowError::InvalidState.into()),
+        _ => panic!("Expected EscrowError::InvalidState for Split escrow"),
+    }
+    assert_eq!(client.get_escrow(&2942u64).status, EscrowStatus::Split);
+}
+
+/// freeze_funds on an already-Paused escrow is a documented safe no-op:
+/// the funds are already secured, repeating the freeze changes nothing
+/// meaningful and must not revert (Issue #294 decision).
+#[test]
+fn test_freeze_funds_already_paused_is_safe_noop() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let driver = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+    let dispute_contract = Address::generate(&env);
+
+    client.init(&admin, &token, &0);
+    client.set_dispute_resolution_contract(&admin, &dispute_contract);
+    mint(&env, &token, &sender, 1000);
+    client.create_escrow(&sender, &recipient, &driver, &2943u64, &token, &1000, &None);
+    // First freeze — transitions to Paused
+    client.freeze_funds(&dispute_contract, &2943u64);
+    assert_eq!(client.get_escrow(&2943u64).status, EscrowStatus::Paused);
+    // Second freeze — must succeed as a no-op, not revert
+    client.freeze_funds(&dispute_contract, &2943u64);
+    assert_eq!(client.get_escrow(&2943u64).status, EscrowStatus::Paused);
+}
+
+/// freeze_funds on a Locked escrow still works (regression guard).
+#[test]
+fn test_freeze_funds_locked_escrow_succeeds() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let driver = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+    let dispute_contract = Address::generate(&env);
+
+    client.init(&admin, &token, &0);
+    client.set_dispute_resolution_contract(&admin, &dispute_contract);
+    mint(&env, &token, &sender, 1000);
+    client.create_escrow(&sender, &recipient, &driver, &2944u64, &token, &1000, &None);
+    assert_eq!(client.get_escrow(&2944u64).status, EscrowStatus::Locked);
+
+    client.freeze_funds(&dispute_contract, &2944u64);
+    assert_eq!(client.get_escrow(&2944u64).status, EscrowStatus::Paused);
+}
+
+/// freeze_funds on a Holdback escrow still works (regression guard).
+#[test]
+fn test_freeze_funds_holdback_escrow_succeeds() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let driver = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+    let dispute_contract = Address::generate(&env);
+
+    client.init(&admin, &token, &0);
+    client.set_dispute_resolution_contract(&admin, &dispute_contract);
+    mint(&env, &token, &sender, 1000);
+    client.create_escrow(&sender, &recipient, &driver, &2945u64, &token, &1000, &None);
+    client.mark_holdback_escrow(&recipient, &2945u64);
+    assert_eq!(client.get_escrow(&2945u64).status, EscrowStatus::Holdback);
+
+    client.freeze_funds(&dispute_contract, &2945u64);
+    assert_eq!(client.get_escrow(&2945u64).status, EscrowStatus::Paused);
+}
+
+// ── Issue #295: create_escrow delivery verification tests ───────────────────
+//
+// Acceptance criteria (issue #295):
+//   • When configured, create_escrow rejects a delivery_id with no delivery record
+//   • When configured, it rejects a mismatched recipient
+//   • When configured, it rejects a mismatched driver (if driver is already assigned)
+//   • When driver is unassigned (None), create_escrow proceeds without error
+//   • When unconfigured, behavior is unchanged
+//   • Only an admin may call set_delivery_contract
+//   • Normal create-delivery-then-create-escrow flow still works
+
+/// Helper that builds a minimal DeliveryMetadata for use in delivery-contract
+/// integration tests (mirrors the pattern in setup_confirmed_delivery_in_holdback).
+fn make_delivery_metadata(env: &Env, delivery_id: u64) -> shared_types::DeliveryMetadata {
+    shared_types::DeliveryMetadata {
+        delivery_id,
+        origin: soroban_sdk::String::from_str(env, "Origin"),
+        destination: soroban_sdk::String::from_str(env, "Destination"),
+        cargo_description: shared_types::CargoDescriptor {
+            weight_grams: 500,
+            category: shared_types::CargoCategory::Electronics,
+            fragile: false,
+        },
+        created_at: env.ledger().timestamp(),
+        estimated_delivery: env.ledger().timestamp() + 3600,
+    }
+}
+
+/// When the delivery contract is configured and a delivery with `delivery_id`
+/// does not exist, `create_escrow` must revert (delivery_contract::get_delivery
+/// panics with DeliveryNotFound which propagates through the invoke_contract call).
+#[test]
+fn test_create_escrow_rejects_nonexistent_delivery_when_configured() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let escrow_id = env.register(EscrowContract, ());
+    let delivery_id_raw = env.register(delivery_contract::DeliveryContract, ());
+    let client = EscrowContractClient::new(&env, &escrow_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let driver = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+
+    client.init(&admin, &token, &0);
+    // Point escrow → delivery contract: verification is now active
+    client.set_delivery_contract(&admin, &delivery_id_raw);
+    // DO NOT create a delivery record: delivery_id 9990 does not exist
+    delivery_contract::DeliveryContractClient::new(&env, &delivery_id_raw)
+        .init(&admin, &escrow_id);
+    mint(&env, &token, &sender, 1000);
+
+    // Expect a panic from the delivery contract's DeliveryNotFound
+    let result = client.try_create_escrow(
+        &sender, &recipient, &driver, &9990u64, &token, &1000, &None,
+    );
+    assert!(result.is_err(), "Expected error for nonexistent delivery");
+}
+
+/// When the delivery contract is configured and the recipient supplied to
+/// `create_escrow` does not match the delivery record, the call must revert
+/// with EscrowError::InvalidParties.
+#[test]
+fn test_create_escrow_rejects_mismatched_recipient() {
+    let env = Env::default();
+    env.mock_all_auths_allowing_non_root_auth();
+
+    let escrow_id = env.register(EscrowContract, ());
+    let delivery_id_raw = env.register(delivery_contract::DeliveryContract, ());
+    let client = EscrowContractClient::new(&env, &escrow_id);
+    let delivery_client =
+        delivery_contract::DeliveryContractClient::new(&env, &delivery_id_raw);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let real_recipient = Address::generate(&env);
+    let wrong_recipient = Address::generate(&env);
+    let driver = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+
+    client.init(&admin, &token, &0);
+    delivery_client.init(&admin, &escrow_id);
+    client.set_delivery_contract(&admin, &delivery_id_raw);
+
+    // Create a delivery with real_recipient
+    let did = delivery_client.create_delivery(
+        &sender,
+        &real_recipient,
+        &make_delivery_metadata(&env, 0),
+    );
+    mint(&env, &token, &sender, 1000);
+
+    // Try to fund with wrong_recipient — must be rejected
+    let result = client.try_create_escrow(
+        &sender,
+        &wrong_recipient,
+        &driver,
+        &u64::from(did),
+        &token,
+        &1000,
+        &None,
+    );
+    match result {
+        Err(Ok(err)) => assert_eq!(err, EscrowError::InvalidParties.into()),
+        _ => panic!("Expected EscrowError::InvalidParties for mismatched recipient"),
+    }
+}
+
+/// When the delivery contract is configured and an assigned driver does not
+/// match the one supplied to `create_escrow`, the call must revert with
+/// EscrowError::InvalidDriver.
+#[test]
+fn test_create_escrow_rejects_mismatched_driver_when_assigned() {
+    let env = Env::default();
+    env.mock_all_auths_allowing_non_root_auth();
+
+    let escrow_id = env.register(EscrowContract, ());
+    let delivery_id_raw = env.register(delivery_contract::DeliveryContract, ());
+    let identity_id =
+        env.register(identity_reputation_contract::IdentityReputationContract, ());
+    let client = EscrowContractClient::new(&env, &escrow_id);
+    let delivery_client =
+        delivery_contract::DeliveryContractClient::new(&env, &delivery_id_raw);
+    let identity_client =
+        identity_reputation_contract::IdentityReputationContractClient::new(&env, &identity_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let real_driver = Address::generate(&env);
+    let wrong_driver = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+
+    client.init(&admin, &token, &0);
+    delivery_client.init(&admin, &escrow_id);
+    identity_client.init(&admin, &delivery_id_raw, &Address::generate(&env));
+    delivery_client.set_identity_reputation_contract(&admin, &identity_id);
+    client.set_delivery_contract(&admin, &delivery_id_raw);
+
+    identity_client.register_driver(&real_driver);
+    let did = delivery_client.create_delivery(
+        &sender,
+        &recipient,
+        &make_delivery_metadata(&env, 0),
+    );
+    delivery_client.assign_driver(&admin, &did, &real_driver);
+    mint(&env, &token, &sender, 1000);
+
+    // Try to fund with wrong_driver (real_driver is assigned)
+    let result = client.try_create_escrow(
+        &sender,
+        &recipient,
+        &wrong_driver,
+        &u64::from(did),
+        &token,
+        &1000,
+        &None,
+    );
+    match result {
+        Err(Ok(err)) => assert_eq!(err, EscrowError::InvalidDriver.into()),
+        _ => panic!("Expected EscrowError::InvalidDriver for mismatched driver"),
+    }
+}
+
+/// When the delivery contract is configured and the delivery has no driver
+/// assigned yet (driver is None), `create_escrow` must succeed — the driver
+/// check is deferred until assign_driver runs (Issue #295 ordering note).
+#[test]
+fn test_create_escrow_allows_unassigned_driver() {
+    let env = Env::default();
+    env.mock_all_auths_allowing_non_root_auth();
+
+    let escrow_id = env.register(EscrowContract, ());
+    let delivery_id_raw = env.register(delivery_contract::DeliveryContract, ());
+    let client = EscrowContractClient::new(&env, &escrow_id);
+    let delivery_client =
+        delivery_contract::DeliveryContractClient::new(&env, &delivery_id_raw);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let driver = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+
+    client.init(&admin, &token, &0);
+    delivery_client.init(&admin, &escrow_id);
+    client.set_delivery_contract(&admin, &delivery_id_raw);
+
+    // Create delivery with no driver assigned yet
+    let did = delivery_client.create_delivery(
+        &sender,
+        &recipient,
+        &make_delivery_metadata(&env, 0),
+    );
+    mint(&env, &token, &sender, 1000);
+
+    // Must succeed even though the driver supplied may differ from what's on the delivery
+    client.create_escrow(
+        &sender,
+        &recipient,
+        &driver,
+        &u64::from(did),
+        &token,
+        &1000,
+        &None,
+    );
+    assert_eq!(
+        client.get_escrow(&u64::from(did)).status,
+        EscrowStatus::Locked
+    );
+}
+
+/// When no delivery contract is configured, `create_escrow` behaves exactly
+/// as before: no cross-contract call is made and creation succeeds even for a
+/// delivery_id that has no corresponding delivery record.
+#[test]
+fn test_create_escrow_unconfigured_path_unchanged() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let driver = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+
+    client.init(&admin, &token, &0);
+    // No set_delivery_contract call → get_delivery_contract returns None
+    assert_eq!(client.get_delivery_contract(), None);
+    mint(&env, &token, &sender, 1000);
+
+    // Must succeed even with an arbitrary delivery_id (9999) that has no record
+    client.create_escrow(&sender, &recipient, &driver, &9999u64, &token, &1000, &None);
+    assert_eq!(client.get_escrow(&9999u64).status, EscrowStatus::Locked);
+}
+
+/// Only an admin may call `set_delivery_contract`; a non-admin caller must be
+/// rejected with FaniLabError::Unauthorized.
+#[test]
+fn test_set_delivery_contract_admin_only() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let attacker = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+    let fake_delivery = Address::generate(&env);
+
+    client.init(&admin, &token, &0);
+
+    let result = client.try_set_delivery_contract(&attacker, &fake_delivery);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::Unauthorized.into()),
+        _ => panic!("Expected FaniLabError::Unauthorized for non-admin caller"),
+    }
+    // Confirm nothing was stored
+    assert_eq!(client.get_delivery_contract(), None);
+}
+
+/// Full integration: create a delivery record, then fund it via create_escrow
+/// with the matching parties — the happy path must succeed end-to-end.
+#[test]
+fn test_create_escrow_happy_path_with_delivery_contract_configured() {
+    let env = Env::default();
+    env.mock_all_auths_allowing_non_root_auth();
+
+    let escrow_id = env.register(EscrowContract, ());
+    let delivery_id_raw = env.register(delivery_contract::DeliveryContract, ());
+    let identity_id =
+        env.register(identity_reputation_contract::IdentityReputationContract, ());
+    let client = EscrowContractClient::new(&env, &escrow_id);
+    let delivery_client =
+        delivery_contract::DeliveryContractClient::new(&env, &delivery_id_raw);
+    let identity_client =
+        identity_reputation_contract::IdentityReputationContractClient::new(&env, &identity_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let driver = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+
+    client.init(&admin, &token, &0);
+    delivery_client.init(&admin, &escrow_id);
+    identity_client.init(&admin, &delivery_id_raw, &Address::generate(&env));
+    delivery_client.set_identity_reputation_contract(&admin, &identity_id);
+    client.set_delivery_contract(&admin, &delivery_id_raw);
+
+    identity_client.register_driver(&driver);
+    let did = delivery_client.create_delivery(
+        &sender,
+        &recipient,
+        &make_delivery_metadata(&env, 0),
+    );
+    // Assign driver before creating the escrow so the driver check is exercised
+    delivery_client.assign_driver(&admin, &did, &driver);
+    mint(&env, &token, &sender, 5000);
+
+    // Happy path: all parties match the delivery record
+    client.create_escrow(
+        &sender,
+        &recipient,
+        &driver,
+        &u64::from(did),
+        &token,
+        &5000,
+        &None,
+    );
+    let record = client.get_escrow(&u64::from(did));
+    assert_eq!(record.status, EscrowStatus::Locked);
+    assert_eq!(record.recipient, recipient);
+    assert_eq!(record.driver, driver);
+    assert_eq!(record.amount, 5000);
+}

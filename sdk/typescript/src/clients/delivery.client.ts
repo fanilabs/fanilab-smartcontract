@@ -153,6 +153,31 @@ export class DeliveryClient {
   }
 
   /**
+   * Get a driver profile from the identity contract
+   */
+  async getDriverProfile(driver: string, options?: ContractInvokeOptions): Promise<DeliveryTypes.DriverProfile> {
+    return decodeDriverProfile(await this.identity().call('get_driver_profile', [address(driver)], options));
+  }
+
+  /**
+   * Get the combined delivery state (delivery record plus escrow status)
+   */
+  async getCombinedState(deliveryId: bigint, options?: ContractInvokeOptions): Promise<DeliveryTypes.CombinedDeliveryState> {
+    return decodeCombinedState(await this.invoker.call('get_combined_state', [u64(deliveryId)], options));
+  }
+
+  /**
+   * Get a paginated list of deliveries
+   */
+  async getDeliveriesPage(
+    offset: number,
+    limit: number,
+    options?: ContractInvokeOptions
+  ): Promise<DeliveryTypes.DeliveryPage> {
+    return decodeDeliveryPage(await this.invoker.call('get_deliveries_page', [u32(offset), u32(limit)], options));
+  }
+
+  /**
    * Check if a driver is registered
    */
   async isDriverRegistered(driver: string): Promise<boolean> {
@@ -206,6 +231,39 @@ function decodeOptional(value: unknown): string | null {
 
 function decodeIds(value: unknown): bigint[] {
   return (value as unknown[]).map((id) => BigInt(String(id)));
+}
+
+function decodeDriverProfile(value: unknown): DeliveryTypes.DriverProfile {
+  const record = value as Record<string, unknown>;
+  return {
+    driver: String(record.driver),
+    name: String(record.name),
+    vehicleType: String(record.vehicle_type),
+    licenseNumber: String(record.license_number),
+    isVerified: Boolean(record.is_verified),
+    rating: Number(record.rating),
+    completedDeliveries: Number(record.completed_deliveries),
+  };
+}
+
+function decodeCombinedState(value: unknown): DeliveryTypes.CombinedDeliveryState {
+  const record = value as Record<string, unknown>;
+  return {
+    delivery: decodeDelivery(record.delivery),
+    escrowStatus: record.escrow_status === null ? undefined : String(record.escrow_status),
+    escrowAmount: record.escrow_amount === null ? undefined : BigInt(String(record.escrow_amount)),
+  };
+}
+
+function decodeDeliveryPage(value: unknown): DeliveryTypes.DeliveryPage {
+  const record = value as Record<string, unknown>;
+  const items = (record.items as unknown[]) ?? [];
+  return {
+    items: items.map((item) => decodeDelivery(item)),
+    total: Number(record.total),
+    offset: Number(record.offset),
+    limit: Number(record.limit),
+  };
 }
 
 function decodeDelivery(value: unknown): DeliveryTypes.DeliveryRecord {

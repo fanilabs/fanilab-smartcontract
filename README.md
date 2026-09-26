@@ -387,3 +387,8 @@ This project is licensed under the MIT License - see the `LICENSE` file for deta
 ---
 
 Built with ❤️ by the FaniLab Team | Powered by Stellar Soroban
+
+## Handsoff notes
+
+<!-- handsoff-issue-426 -->
+- #426: `cancel_invite` does not emit an event

@@ -101,6 +101,37 @@ export class DeliveryClient {
   }
 
   /**
+   * Update the metadata of an existing delivery
+   */
+  async updateDeliveryMetadata(
+    params: DeliveryTypes.UpdateDeliveryMetadataParams,
+    options?: ContractInvokeOptions
+  ): Promise<void> {
+    const metadata = map([
+      ['origin', string(params.metadata.pickupLocation ?? '')],
+      ['destination', string(params.metadata.dropoffLocation ?? '')],
+      ['cargo_description', map([
+        ['weight_grams', u32(1)],
+        ['category', symbol('General')],
+        ['fragile', bool(false)],
+      ])],
+      ['created_at', u64(Math.floor(Date.now() / 1000))],
+      ['estimated_delivery', u64(Math.floor(Date.now() / 1000) + (params.metadata.estimatedDistance ?? 0))],
+    ]);
+    await this.invoker.call('update_delivery_metadata', [address(params.caller), u64(params.deliveryId), metadata], options);
+  }
+
+  /**
+   * Raise a dispute for a delivery
+   */
+  async raiseDispute(
+    params: DeliveryTypes.RaiseDisputeParams,
+    options?: ContractInvokeOptions
+  ): Promise<void> {
+    await this.invoker.call('raise_dispute', [address(params.caller), u64(params.deliveryId), string(params.reason)], options);
+  }
+
+  /**
    * Get a delivery record
    */
   async getDelivery(deliveryId: bigint, options?: ContractInvokeOptions): Promise<DeliveryTypes.DeliveryRecord> {

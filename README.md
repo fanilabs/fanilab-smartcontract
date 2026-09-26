@@ -392,3 +392,6 @@ Built with ❤️ by the FaniLab Team | Powered by Stellar Soroban
 
 <!-- handsoff-issue-426 -->
 - #426: `cancel_invite` does not emit an event
+
+<!-- handsoff-issue-427 -->
+- #427: Drivers cannot unassign themselves from an Active delivery

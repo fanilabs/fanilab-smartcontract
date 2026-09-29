@@ -82,18 +82,7 @@ export class DeliveryClient {
     params: DeliveryTypes.CreateDeliveryParams,
     options?: ContractInvokeOptions
   ): Promise<bigint> {
-    const metadata = map([
-      ['delivery_id', u64(params.deliveryId)],
-      ['origin', string(params.metadata.pickupLocation ?? '')],
-      ['destination', string(params.metadata.dropoffLocation ?? '')],
-      ['cargo_description', map([
-        ['weight_grams', u32(1)],
-        ['category', symbol('General')],
-        ['fragile', bool(false)],
-      ])],
-      ['created_at', u64(Math.floor(Date.now() / 1000))],
-      ['estimated_delivery', u64(Math.floor(Date.now() / 1000) + (params.metadata.estimatedDistance ?? 0))],
-    ]);
+    const metadata = encodeDeliveryMetadata(params.deliveryId, params.metadata);
     return BigInt(String(await this.invoker.call('create_delivery', [address(params.sender), address(params.recipient), metadata], options)));
   }
 
@@ -105,18 +94,7 @@ export class DeliveryClient {
     options?: ContractInvokeOptions
   ): Promise<bigint[]> {
     const metadatas = params.deliveries.map((delivery) =>
-      map([
-        ['delivery_id', u64(delivery.deliveryId)],
-        ['origin', string(delivery.metadata.pickupLocation ?? '')],
-        ['destination', string(delivery.metadata.dropoffLocation ?? '')],
-        ['cargo_description', map([
-          ['weight_grams', u32(1)],
-          ['category', symbol('General')],
-          ['fragile', bool(false)],
-        ])],
-        ['created_at', u64(Math.floor(Date.now() / 1000))],
-        ['estimated_delivery', u64(Math.floor(Date.now() / 1000) + (delivery.metadata.estimatedDistance ?? 0))],
-      ])
+      encodeDeliveryMetadata(delivery.deliveryId, delivery.metadata)
     );
     const result = await this.invoker.call(
       'create_deliveries_batch',
@@ -174,18 +152,7 @@ export class DeliveryClient {
     params: DeliveryTypes.UpdateDeliveryMetadataParams,
     options?: ContractInvokeOptions
   ): Promise<void> {
-    const metadata = map([
-      ['delivery_id', u64(params.deliveryId)],
-      ['origin', string(params.metadata.pickupLocation ?? '')],
-      ['destination', string(params.metadata.dropoffLocation ?? '')],
-      ['cargo_description', map([
-        ['weight_grams', u32(1)],
-        ['category', symbol('General')],
-        ['fragile', bool(false)],
-      ])],
-      ['created_at', u64(Math.floor(Date.now() / 1000))],
-      ['estimated_delivery', u64(Math.floor(Date.now() / 1000) + (params.metadata.estimatedDistance ?? 0))],
-    ]);
+    const metadata = encodeDeliveryMetadata(params.deliveryId, params.metadata);
     await this.invoker.call(
       'update_delivery_metadata',
       [address(params.sender), u64(params.deliveryId), metadata],
@@ -332,12 +299,42 @@ function decodeDeliveryPage(value: unknown): DeliveryTypes.DeliveryPage {
 function decodeDelivery(value: unknown): DeliveryTypes.DeliveryRecord {
   const record = value as Record<string, unknown>;
   const metadata = record.metadata as Record<string, unknown>;
+  const cargo = metadata.cargo_description as Record<string, unknown>;
   return {
     deliveryId: BigInt(String(record.delivery_id)), sender: String(record.sender), recipient: String(record.recipient),
     driver: record.driver === null ? undefined : String(record.driver), status: record.status as DeliveryTypes.DeliveryRecord['status'],
     metadata: {
-      pickupLocation: String(metadata.origin), dropoffLocation: String(metadata.destination),
+      pickupLocation: String(metadata.origin),
+      dropoffLocation: String(metadata.destination),
+      cargoDescription: {
+        weightGrams: Number(cargo.weight_grams),
+        category: String(cargo.category) as DeliveryTypes.CargoCategory,
+        fragile: Boolean(cargo.fragile),
+      },
+      deliveryId: BigInt(String(metadata.delivery_id)),
+      createdAt: Number(metadata.created_at),
+      estimatedDelivery: Number(metadata.estimated_delivery),
     }, createdAt: Number(record.created_at), deliveredAt: record.delivered_at === null ? undefined : Number(record.delivered_at),
     transitStartedAt: record.transit_started_at === null ? undefined : Number(record.transit_started_at),
   };
+}
+
+function encodeDeliveryMetadata(
+  deliveryId: bigint,
+  metadata: DeliveryTypes.DeliveryMetadata
+) {
+  const now = Math.floor(Date.now() / 1000);
+  const cargo = metadata.cargoDescription;
+  return map([
+    ['delivery_id', u64(deliveryId)],
+    ['origin', string(metadata.pickupLocation)],
+    ['destination', string(metadata.dropoffLocation)],
+    ['cargo_description', map([
+      ['weight_grams', u32(cargo?.weightGrams ?? 1)],
+      ['category', symbol(cargo?.category ?? DeliveryTypes.CargoCategory.General)],
+      ['fragile', bool(cargo?.fragile ?? false)],
+    ])],
+    ['created_at', u64(metadata.createdAt ?? now)],
+    ['estimated_delivery', u64(metadata.estimatedDelivery ?? now + (metadata.estimatedDistance ?? 0))],
+  ]);
 }

@@ -196,6 +196,14 @@ Create a new delivery.
 - `params.deliveryId`: Unique delivery identifier
 - `params.metadata`: Delivery metadata (location, items, notes, etc.)
 
+Delivery metadata accepts `pickupLocation`, `dropoffLocation`, and an optional
+`cargoDescription` with `weightGrams`, `category`, and `fragile`. The cargo
+category is one of `Documents`, `Electronics`, `Perishables`, `Clothing`, or
+`General`. Optional `createdAt` and `estimatedDelivery` values are Unix
+timestamps in seconds. If omitted, the SDK supplies the current creation time
+and estimates delivery from the legacy `estimatedDistance` value. Reads return
+the complete cargo description and all contract metadata fields.
+
 ##### `assignDriver(params: AssignDriverParams, options?: ContractInvokeOptions): Promise<void>`
 Assign a driver to a delivery.
 

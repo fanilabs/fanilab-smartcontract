@@ -11,19 +11,33 @@ export interface CreateDeliveryParams {
   metadata: DeliveryMetadata;
 }
 
+export enum CargoCategory {
+  Documents = 'Documents',
+  Electronics = 'Electronics',
+  Perishables = 'Perishables',
+  Clothing = 'Clothing',
+  General = 'General',
+}
+
 export interface CargoDescriptor {
-  description: string;
-  weight?: number;
-  dimensions?: string;
-  fragile?: boolean;
+  weightGrams: number;
+  category: CargoCategory;
+  fragile: boolean;
 }
 
 export interface DeliveryMetadata {
-  origin: string;
-  destination: string;
-  cargo_description: string;
-  created_at: number;
-  estimated_delivery: number;
+  pickupLocation: string;
+  dropoffLocation: string;
+  cargoDescription?: CargoDescriptor;
+  deliveryId?: bigint;
+  createdAt?: number;
+  estimatedDelivery?: number;
+  /** @deprecated Use estimatedDelivery, which is an absolute Unix timestamp. */
+  estimatedDistance?: number;
+  /** Legacy application-only metadata; it is not stored by the contract. */
+  items?: string;
+  /** Legacy application-only metadata; it is not stored by the contract. */
+  notes?: string;
 }
 
 export interface AssignDriverParams {

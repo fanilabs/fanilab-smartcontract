@@ -15,6 +15,16 @@ export interface UpdatePlatformFeeParams {
   newFeeBps: number;
 }
 
+export interface VolumeTier {
+  volumeThreshold: number;
+  discountBps: number;
+}
+
+export interface SetVolumeTiersParams {
+  admin: string;
+  tiers: VolumeTier[];
+}
+
 export interface SweepUntrackedBalanceParams {
   admin: string;
   token: string;

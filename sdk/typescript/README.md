@@ -167,6 +167,15 @@ Get the contract's token balance that is not tracked as locked escrow funds.
 Sweep the untracked balance to a recipient (admin only) and return the amount
 transferred.
 
+##### `setVolumeTiers(params: SetVolumeTiersParams): Promise<void>`
+Configure the volume thresholds and fee discounts for senders (admin only).
+
+##### `getVolumeTiers(): Promise<VolumeTier[]>`
+Read the configured volume thresholds and discounts.
+
+##### `getSenderVolume(sender: string): Promise<number>`
+Read a sender's accumulated volume.
+
 ### DeliveryClient
 
 #### Methods

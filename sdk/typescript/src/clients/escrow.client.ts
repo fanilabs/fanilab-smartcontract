@@ -81,6 +81,40 @@ export class EscrowClient {
   }
 
   /**
+   * Set volume thresholds and fee discounts for high-volume senders (admin only)
+   */
+  async setVolumeTiers(
+    params: EscrowTypes.SetVolumeTiersParams,
+    options?: ContractInvokeOptions
+  ): Promise<void> {
+    const tiers = vec(params.tiers.map((tier) =>
+      map([
+        ['volume_threshold', u32(tier.volumeThreshold)],
+        ['discount_bps', u32(tier.discountBps)],
+      ])
+    ));
+    await this.invoker.call('set_volume_tiers', [address(params.admin), tiers], options);
+  }
+
+  /**
+   * Get configured sender volume thresholds and discounts
+   */
+  async getVolumeTiers(options?: ContractInvokeOptions): Promise<EscrowTypes.VolumeTier[]> {
+    const result = await this.invoker.call('get_volume_tiers', [], options);
+    return (result as Array<Record<string, unknown>>).map((tier) => ({
+      volumeThreshold: Number(tier.volume_threshold),
+      discountBps: Number(tier.discount_bps),
+    }));
+  }
+
+  /**
+   * Get a sender's accumulated volume
+   */
+  async getSenderVolume(sender: string, options?: ContractInvokeOptions): Promise<number> {
+    return Number(await this.invoker.call('get_sender_volume', [address(sender)], options));
+  }
+
+  /**
    * Create a new escrow for a delivery
    */
   async createEscrow(params: EscrowTypes.CreateEscrowParams, options?: ContractInvokeOptions): Promise<bigint> {

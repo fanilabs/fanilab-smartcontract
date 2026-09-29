@@ -16,6 +16,16 @@ use soroban_sdk::{
 /// Maximum number of drivers per fleet roster to prevent unbounded storage growth.
 pub const MAX_ROSTER_SIZE: u32 = 10000;
 
+/// Maximum number of signers a fleet may configure (Issue #463).
+///
+/// `FleetProfile.signers` is stored as one vector that must be fully
+/// deserialized on every signer-gated call. Soroban's strict CPU/memory
+/// bounds mean an oversized vector would make loading the profile panic
+/// permanently, bricking the fleet — including any admin override. The cap
+/// keeps the stored vector safely within the deserialization budget while
+/// leaving ample room for realistic multisig setups.
+pub const MAX_SIGNERS_PER_FLEET: u32 = 20;
+
 /// Minimum delay between proposing a fleet treasury change and it becoming
 /// eligible for confirmation, giving active drivers advance notice before
 /// their future payouts are redirected (Issue #70).
@@ -1029,6 +1039,13 @@ impl FleetManagementContract {
 
         if profile.owner != owner {
             panic_with_error!(&env, FleetError::Unauthorized);
+        }
+
+        // Issue #463: reject an oversized signer vector before it can be
+        // persisted, so the profile never grows past the point where loading
+        // it would exceed Soroban's deserialization budget and brick the fleet.
+        if signers.len() > MAX_SIGNERS_PER_FLEET {
+            panic_with_error!(&env, FleetError::InvalidConfiguration);
         }
 
         if threshold == 0 || threshold > signers.len() {

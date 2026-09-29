@@ -1,7 +1,32 @@
 use super::*;
 use proptest::prelude::*;
 use shared_types::FaniLabError;
-use soroban_sdk::{testutils::Address as _, Address, Env};
+use soroban_sdk::{
+    testutils::{Address as _, Events},
+    xdr, Address, Env, Symbol, TryFromVal, Val,
+};
+
+/// Decode the most recently published event into a (topics, data) pair. SDK 27's
+/// `ContractEvents` only exposes the raw XDR form, so it has to be converted back
+/// to host values before assertions can be made against it.
+fn last_event(env: &Env) -> (soroban_sdk::Vec<Val>, Val) {
+    let events = env.events().all();
+    let raw = events.events().last().expect("no events emitted").clone();
+    let xdr::ContractEventBody::V0(body) = raw.body;
+    let mut topics = soroban_sdk::Vec::new(env);
+    for topic in body.topics.iter() {
+        topics.push_back(Val::try_from_val(env, topic).expect("failed to decode topic"));
+    }
+    let data = Val::try_from_val(env, &body.data).expect("failed to decode event data");
+    (topics, data)
+}
+
+/// Assert that the most recently published event's first topic is `expected`.
+fn assert_last_topic(env: &Env, expected: &str) {
+    let (topics, _) = last_event(env);
+    let topic0: Symbol = Symbol::try_from_val(env, &topics.get(0).unwrap()).unwrap();
+    assert_eq!(topic0, Symbol::new(env, expected));
+}
 
 #[rustfmt::skip]
 proptest! {
@@ -486,6 +511,55 @@ fn test_admin_can_repoint_cross_contracts() {
 
     let profile = client.get_driver_profile(&driver);
     assert_eq!(profile.reputation_score, 53);
+}
+
+// ── Admin setter observability (Issue #465) ─────────────────────────────────
+
+/// set_authorized_contract must publish `authorized_contract_updated` so a
+/// compromised admin key can't silently whitelist a malicious contract.
+#[test]
+fn test_set_authorized_contract_publishes_event() {
+    let (env, admin, client, _, _) = setup();
+    let target = Address::generate(&env);
+
+    client.set_authorized_contract(&admin, &target, &true);
+    assert_last_topic(&env, "authorized_contract_updated");
+}
+
+/// set_delivery_contract must publish `delivery_contract_updated`.
+#[test]
+fn test_set_delivery_contract_publishes_event() {
+    let (env, admin, client, _, _) = setup();
+    let new_contract = Address::generate(&env);
+
+    client.set_delivery_contract(&admin, &new_contract);
+    assert_last_topic(&env, "delivery_contract_updated");
+}
+
+/// set_dispute_contract must publish `dispute_contract_updated`.
+#[test]
+fn test_set_dispute_contract_publishes_event() {
+    let (env, admin, client, _, _) = setup();
+    let new_contract = Address::generate(&env);
+
+    client.set_dispute_contract(&admin, &new_contract);
+    assert_last_topic(&env, "dispute_contract_updated");
+}
+
+/// set_reputation_config must publish `reputation_config_updated`.
+#[test]
+fn test_set_reputation_config_publishes_event() {
+    let (env, admin, client, _, _) = setup();
+
+    client.set_reputation_config(
+        &admin,
+        &ReputationConfig {
+            base_points: 7,
+            heavy_cargo_points: 4,
+            fragile_points: 3,
+        },
+    );
+    assert_last_topic(&env, "reputation_config_updated");
 }
 
 // ── AuthorizedContract allowlist tests ──────────────────────────────────────

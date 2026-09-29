@@ -117,6 +117,10 @@ impl IdentityReputationContract {
             .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::NotInitialized))
     }
 
+    /// Grant or revoke a contract's ability to adjust driver reputation.
+    /// Publishes `authorized_contract_updated` so allowlist changes are
+    /// visible to indexers and monitoring (Issue #465).
+    #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
     pub fn set_authorized_contract(
         env: Env,
         admin: Address,
@@ -127,7 +131,7 @@ impl IdentityReputationContract {
         if !is_admin(&env, &admin) {
             panic_with_error!(&env, FaniLabError::Unauthorized);
         }
-        let key = DataKey::AuthorizedContract(contract_addr);
+        let key = DataKey::AuthorizedContract(contract_addr.clone());
         if authorized {
             env.storage().persistent().set(&key, &true);
             env.storage().persistent().extend_ttl(
@@ -138,8 +142,13 @@ impl IdentityReputationContract {
         } else {
             env.storage().persistent().remove(&key);
         }
+        env.events().publish(
+            (events::authorized_contract_updated(&env),),
+            (admin, contract_addr, authorized),
+        );
     }
 
+    #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
     pub fn set_reputation_config(env: Env, admin: Address, config: ReputationConfig) {
         admin.require_auth();
         if !is_admin(&env, &admin) {
@@ -166,6 +175,8 @@ impl IdentityReputationContract {
         env.storage()
             .instance()
             .set(&DataKey::ReputationConfig, &config);
+        env.events()
+            .publish((events::reputation_config_updated(&env),), (admin, config));
     }
 
     pub fn get_reputation_config(env: Env) -> ReputationConfig {
@@ -179,6 +190,7 @@ impl IdentityReputationContract {
             })
     }
 
+    #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
     pub fn set_delivery_contract(env: Env, admin: Address, delivery_contract: Address) {
         admin.require_auth();
         if !is_admin(&env, &admin) {
@@ -187,8 +199,13 @@ impl IdentityReputationContract {
         env.storage()
             .instance()
             .set(&DataKey::DeliveryContract, &delivery_contract);
+        env.events().publish(
+            (events::delivery_contract_updated(&env),),
+            (admin, delivery_contract),
+        );
     }
 
+    #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
     pub fn set_dispute_contract(env: Env, admin: Address, dispute_contract: Address) {
         admin.require_auth();
         if !is_admin(&env, &admin) {
@@ -197,6 +214,10 @@ impl IdentityReputationContract {
         env.storage()
             .instance()
             .set(&DataKey::DisputeContract, &dispute_contract);
+        env.events().publish(
+            (events::dispute_contract_updated(&env),),
+            (admin, dispute_contract),
+        );
     }
 
     pub fn get_delivery_contract(env: Env) -> Address {

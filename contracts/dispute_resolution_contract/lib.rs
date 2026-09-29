@@ -10,9 +10,14 @@ use soroban_sdk::{
     Vec,
 };
 
+// Fallbacks for the three admin-configurable reputation adjustments. Each is
+// used by the corresponding `get_dispute_reputation_*` getter when no explicit
+// configuration has been stored, and each can be retuned at runtime through
+// `set_dispute_reputation_penalty`, `set_dispute_reputation_reward`, and
+// `set_dispute_split_penalty` (Issues #139 and #462).
 const DEFAULT_DISPUTE_REPUTATION_PENALTY: u32 = 10;
-const DISPUTE_REPUTATION_REWARD: u32 = 5;
-const DISPUTE_REPUTATION_SPLIT_PENALTY: u32 = 5;
+const DEFAULT_DISPUTE_REPUTATION_REWARD: u32 = 5;
+const DEFAULT_DISPUTE_REPUTATION_SPLIT_PENALTY: u32 = 5;
 
 /// Mirror of `identity_reputation_contract::MAX_REPUTATION` (the score ceiling,
 /// currently 100). The dispute contract cannot import that crate without taking
@@ -29,16 +34,16 @@ const IDENTITY_MAX_REPUTATION: u32 = 100;
 const MAX_DISPUTE_REPUTATION_PENALTY: u32 = IDENTITY_MAX_REPUTATION / 2;
 
 // Compile-time sanity checks: every reputation adjustment this contract can
-// apply — the fixed constants and the default penalty — must sit within the
-// same ceiling enforced on the configurable penalty, which in turn must sit
-// within the reputation score ceiling itself. A future edit that violates one
-// of these fails the build rather than shipping a silently unsafe value.
+// apply — the default constants — must sit within the same ceiling enforced on
+// the configurable values, which in turn must sit within the reputation score
+// ceiling itself. A future edit that violates one of these fails the build
+// rather than shipping a silently unsafe value.
 #[allow(clippy::assertions_on_constants)]
 const _: () = {
     assert!(MAX_DISPUTE_REPUTATION_PENALTY <= IDENTITY_MAX_REPUTATION);
     assert!(DEFAULT_DISPUTE_REPUTATION_PENALTY <= MAX_DISPUTE_REPUTATION_PENALTY);
-    assert!(DISPUTE_REPUTATION_REWARD <= MAX_DISPUTE_REPUTATION_PENALTY);
-    assert!(DISPUTE_REPUTATION_SPLIT_PENALTY <= MAX_DISPUTE_REPUTATION_PENALTY);
+    assert!(DEFAULT_DISPUTE_REPUTATION_REWARD <= MAX_DISPUTE_REPUTATION_PENALTY);
+    assert!(DEFAULT_DISPUTE_REPUTATION_SPLIT_PENALTY <= MAX_DISPUTE_REPUTATION_PENALTY);
 };
 
 const MIN_DISPUTE_TIME_LIMIT: u64 = 86400; // 1 day in seconds
@@ -60,6 +65,16 @@ const MIN_DISPUTE_RESOLUTION_LIMIT: u64 = 86400; // 1 day in seconds
 /// ceiling is `3 * MAX_EVIDENCE_HASHES_PER_PARTY`, so storage growth stays
 /// bounded (the original intent of issue #49).
 const MAX_EVIDENCE_HASHES_PER_PARTY: u32 = 20;
+
+/// Upper bound on the total admin roster size (Issue #464).
+///
+/// `AdminList` is loaded, iterated, and re-serialized by every governance
+/// call. Soroban's strict CPU/memory budget means an unbounded roster could
+/// be grown until deserializing it exceeds those limits, permanently bricking
+/// `remove_admin`/`add_admin` and locking out governance entirely. The cap
+/// keeps the vector safely within budget while leaving ample room for a
+/// realistic multisig roster.
+const MAX_ADMINS: u32 = 50;
 
 fn require_escrow_not_paused(env: &Env) {
     let escrow_contract: Address = env
@@ -124,6 +139,8 @@ pub enum DataKey {
     DisputeResolutionLimit,
     Dispute(DeliveryId),
     DisputeReputationPenalty,
+    DisputeReputationReward,
+    DisputeSplitPenalty,
 }
 
 #[contract]
@@ -211,15 +228,23 @@ impl DisputeResolutionContract {
         if !Self::is_admin(env.clone(), caller.clone()) {
             panic_with_error!(&env, FaniLabError::Unauthorized);
         }
-        env.storage()
-            .instance()
-            .set(&DataKey::Admin(new_admin.clone()), &true);
 
         let mut admin_list: Vec<Address> = env
             .storage()
             .instance()
             .get(&DataKey::AdminList)
             .unwrap_or_else(|| Vec::new(&env));
+
+        // Issue #464: bound the roster so it can never grow past the point
+        // where loading it exceeds Soroban's deserialization budget. Checked
+        // before any write so the whole call reverts cleanly.
+        if admin_list.len() >= MAX_ADMINS {
+            panic_with_error!(&env, FaniLabError::LimitExceeded);
+        }
+
+        env.storage()
+            .instance()
+            .set(&DataKey::Admin(new_admin.clone()), &true);
 
         if !admin_list.iter().any(|a| a == new_admin) {
             admin_list.push_back(new_admin.clone());
@@ -366,6 +391,67 @@ impl DisputeResolutionContract {
             .instance()
             .get(&DataKey::DisputeReputationPenalty)
             .unwrap_or(DEFAULT_DISPUTE_REPUTATION_PENALTY)
+    }
+
+    /// Configure the flat reputation credit awarded to the driver when a
+    /// dispute resolves in their favour (`resolve_dispute_pay_driver`).
+    /// Mirrors `set_dispute_reputation_penalty`: admin-only and bounded by
+    /// `MAX_DISPUTE_REPUTATION_PENALTY` so a single ruling can never wipe out
+    /// a driver's score (Issue #462).
+    #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
+    pub fn set_dispute_reputation_reward(env: Env, caller: Address, reward: u32) {
+        caller.require_auth();
+        if !Self::is_admin(env.clone(), caller.clone()) {
+            panic_with_error!(&env, FaniLabError::Unauthorized);
+        }
+        if reward > MAX_DISPUTE_REPUTATION_PENALTY {
+            panic_with_error!(&env, FaniLabError::InvalidState);
+        }
+        let old_reward = Self::get_dispute_reputation_reward(env.clone());
+        env.storage()
+            .instance()
+            .set(&DataKey::DisputeReputationReward, &reward);
+        env.events().publish(
+            (Symbol::new(&env, "dispute_reward_updated"),),
+            (caller, old_reward, reward),
+        );
+    }
+
+    pub fn get_dispute_reputation_reward(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::DisputeReputationReward)
+            .unwrap_or(DEFAULT_DISPUTE_REPUTATION_REWARD)
+    }
+
+    /// Configure the flat reputation penalty applied to the driver when a
+    /// dispute is split (`resolve_dispute_split_funds`). Mirrors
+    /// `set_dispute_reputation_penalty`: admin-only and bounded by
+    /// `MAX_DISPUTE_REPUTATION_PENALTY` (Issue #462).
+    #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
+    pub fn set_dispute_split_penalty(env: Env, caller: Address, penalty: u32) {
+        caller.require_auth();
+        if !Self::is_admin(env.clone(), caller.clone()) {
+            panic_with_error!(&env, FaniLabError::Unauthorized);
+        }
+        if penalty > MAX_DISPUTE_REPUTATION_PENALTY {
+            panic_with_error!(&env, FaniLabError::InvalidState);
+        }
+        let old_penalty = Self::get_dispute_split_penalty(env.clone());
+        env.storage()
+            .instance()
+            .set(&DataKey::DisputeSplitPenalty, &penalty);
+        env.events().publish(
+            (Symbol::new(&env, "dispute_split_penalty_updated"),),
+            (caller, old_penalty, penalty),
+        );
+    }
+
+    pub fn get_dispute_split_penalty(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::DisputeSplitPenalty)
+            .unwrap_or(DEFAULT_DISPUTE_REPUTATION_SPLIT_PENALTY)
     }
 
     pub fn get_dispute_resolution_limit(env: Env) -> u64 {
@@ -701,6 +787,7 @@ impl DisputeResolutionContract {
         let escrow_addr = Self::get_escrow_contract(env.clone());
 
         // Apply a partial reputation penalty to the driver for a split outcome
+        let split_penalty = Self::get_dispute_split_penalty(env.clone());
         let delivery_contract_addr = Self::get_delivery_contract(env.clone());
         let delivery: shared_types::DeliveryRecord = env.invoke_contract(
             &delivery_contract_addr,
@@ -720,7 +807,7 @@ impl DisputeResolutionContract {
                         &env,
                         env.current_contract_address().into_val(&env),
                         driver.clone().into_val(&env),
-                        DISPUTE_REPUTATION_SPLIT_PENALTY.into_val(&env),
+                        split_penalty.into_val(&env),
                     ],
                 );
             }
@@ -798,6 +885,8 @@ impl DisputeResolutionContract {
         // `deliveries_completed` (that would double-count if the delivery is
         // later confirmed) and must not derive points from cargo attributes.
         // The reputation contract caps the resulting score at its maximum.
+        // The credit amount is the admin-configurable reward (Issue #462).
+        let reward = Self::get_dispute_reputation_reward(env.clone());
         let delivery_contract_addr = Self::get_delivery_contract(env.clone());
         let delivery: shared_types::DeliveryRecord = env.invoke_contract(
             &delivery_contract_addr,
@@ -817,7 +906,7 @@ impl DisputeResolutionContract {
                         &env,
                         env.current_contract_address().into_val(&env),
                         driver.clone().into_val(&env),
-                        DISPUTE_REPUTATION_REWARD.into_val(&env),
+                        reward.into_val(&env),
                     ],
                 );
             }

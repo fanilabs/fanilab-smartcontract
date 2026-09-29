@@ -180,6 +180,25 @@ pub mod events {
         Symbol::new(env, "reputation_awarded")
     }
 
+    // Identity/admin configuration events (Issue #465). These privileged
+    // setters control which contracts may mint or slash reputation and how
+    // scores are computed, so every change must be observable on-chain.
+    pub fn authorized_contract_updated(env: &Env) -> Symbol {
+        Symbol::new(env, "authorized_contract_updated")
+    }
+
+    pub fn delivery_contract_updated(env: &Env) -> Symbol {
+        Symbol::new(env, "delivery_contract_updated")
+    }
+
+    pub fn dispute_contract_updated(env: &Env) -> Symbol {
+        Symbol::new(env, "dispute_contract_updated")
+    }
+
+    pub fn reputation_config_updated(env: &Env) -> Symbol {
+        Symbol::new(env, "reputation_config_updated")
+    }
+
     // Protocol/admin lifecycle events. These previously used raw inline
     // Symbol::new(&env, "PascalCase") calls at each contract's call site
     // instead of going through this module, the one place in the codebase

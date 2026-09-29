@@ -1098,6 +1098,7 @@ Grant admin privileges to a new address.
 
 **Errors:**
 - `Unauthorized` - Caller is not an admin
+- `LimitExceeded` - The admin roster already holds `MAX_ADMINS` (50) entries
 
 **Example:**
 ```rust
@@ -1145,6 +1146,36 @@ Set the flat driver reputation penalty applied when a dispute resolves in the se
 **Errors:**
 - `Unauthorized` - Caller is not an admin
 - `InvalidState` - New penalty exceeds the configured maximum
+
+#### `set_dispute_reputation_reward`
+Set the flat driver reputation credit awarded when a dispute resolves in the driver's favour (`resolve_dispute_pay_driver`).
+
+**Parameters:**
+- `caller: Address` - Admin address
+- `reward: u32` - New reward value (must be at most `MAX_DISPUTE_REPUTATION_PENALTY`)
+
+**Authorization:** Admin only
+
+**Errors:**
+- `Unauthorized` - Caller is not an admin
+- `InvalidState` - New reward exceeds the configured maximum
+
+**Events:** `dispute_reward_updated` - `(caller, old_reward, reward)`
+
+#### `set_dispute_split_penalty`
+Set the flat driver reputation penalty applied when a dispute is split (`resolve_dispute_split_funds`).
+
+**Parameters:**
+- `caller: Address` - Admin address
+- `penalty: u32` - New penalty value (must be at most `MAX_DISPUTE_REPUTATION_PENALTY`)
+
+**Authorization:** Admin only
+
+**Errors:**
+- `Unauthorized` - Caller is not an admin
+- `InvalidState` - New penalty exceeds the configured maximum
+
+**Events:** `dispute_split_penalty_updated` - `(caller, old_penalty, penalty)`
 
 #### `set_dispute_resolution_limit`
 Set the dispute auto-resolution window.
@@ -1218,6 +1249,16 @@ List the current dispute-resolution admins.
 
 #### `get_dispute_reputation_penalty`
 Return the configured dispute reputation penalty. If unset, the contract falls back to the default of 10 points.
+
+**Returns:** `u32`
+
+#### `get_dispute_reputation_reward`
+Return the configured driver reward for a pay-driver dispute ruling. If unset, the contract falls back to the default of 5 points.
+
+**Returns:** `u32`
+
+#### `get_dispute_split_penalty`
+Return the configured driver penalty for a split dispute ruling. If unset, the contract falls back to the default of 5 points.
 
 **Returns:** `u32`
 
@@ -1327,6 +1368,7 @@ Admin verdict: full payout to driver.
 **State Changes:**
 - Sets `DisputeCase.status` to `ResolvedPayout`
 - Calls `escrow_contract.resolve_dispute` with `release_to_driver = true`
+- Calls `identity_reputation_contract.award_reputation` with the configured `get_dispute_reputation_reward()` (default 5 points, if configured)
 
 **Example:**
 ```rust
@@ -1353,6 +1395,7 @@ Admin verdict: split escrow funds between sender and driver.
 **State Changes:**
 - Sets `DisputeCase.status` to `Split`
 - Calls `escrow_contract.resolve_dispute_split` with the specified basis-point split
+- Calls `identity_reputation_contract.decrease_reputation` with the configured `get_dispute_split_penalty()` (default 5 points, if configured)
 
 **Example:**
 ```rust
@@ -1690,7 +1733,7 @@ Configure the signer set and signature threshold for a fleet.
 **Errors:**
 - `FleetNotFound` - No fleet with that ID exists
 - `Unauthorized` - Caller is not the fleet owner
-- `InvalidConfiguration` - Threshold is zero or exceeds the signer set size
+- `InvalidConfiguration` - Threshold is zero or exceeds the signer set size, or the signer set exceeds `MAX_SIGNERS_PER_FLEET` (20)
 
 **Events:** `signers_configured`
 
@@ -1808,6 +1851,8 @@ Set the scoring config for delivery completion-based reputation awards.
 **Errors:**
 - `Unauthorized` - Caller is not the stored admin
 
+**Events:** `reputation_config_updated` - `(admin, config)`
+
 **Defaults:**
 - `base_points = 5`
 - `heavy_cargo_points = 3`
@@ -1830,6 +1875,8 @@ Set the address of the delivery contract that may call into reputation updates.
 **Errors:**
 - `Unauthorized` - Caller is not the stored admin
 
+**Events:** `delivery_contract_updated` - `(admin, delivery_contract)`
+
 #### `set_dispute_contract`
 Set the address of the dispute-resolution contract that may authorize reputation changes.
 
@@ -1841,6 +1888,8 @@ Set the address of the dispute-resolution contract that may authorize reputation
 
 **Errors:**
 - `Unauthorized` - Caller is not the stored admin
+
+**Events:** `dispute_contract_updated` - `(admin, dispute_contract)`
 
 #### `get_delivery_contract`
 Return the configured delivery contract address.
@@ -1870,6 +1919,8 @@ Grant or revoke cross-contract call authorization.
 
 **Errors:**
 - `Unauthorized` - Caller is not the stored admin
+
+**Events:** `authorized_contract_updated` - `(admin, contract_addr, authorized)`
 
 #### `is_authorized_contract`
 Check whether a contract address is authorized to make cross-contract calls.

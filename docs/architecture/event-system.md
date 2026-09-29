@@ -74,6 +74,10 @@ All topic helpers live in `shared_types::events`. Each helper wraps `Symbol::new
 | `kyc_status_updated` | `"kyc_status_updated"` | `identity_reputation_contract` |
 | `reputation_increased` | `"reputation_increased"` | `identity_reputation_contract` |
 | `reputation_decreased` | `"reputation_decreased"` | `identity_reputation_contract` |
+| `authorized_contract_updated` | `"authorized_contract_updated"` | `identity_reputation_contract` |
+| `delivery_contract_updated` | `"delivery_contract_updated"` | `identity_reputation_contract` |
+| `dispute_contract_updated` | `"dispute_contract_updated"` | `identity_reputation_contract` |
+| `reputation_config_updated` | `"reputation_config_updated"` | `identity_reputation_contract` |
 | `protocol_initialized` | `"protocol_initialized"` | `escrow_contract` |
 | `fee_updated` | `"fee_updated"` | `escrow_contract` |
 | `settlement_contract_proposed` | `"settlement_contract_proposed"` | `escrow_contract` |
@@ -99,6 +103,8 @@ The live contracts currently still emit a set of inline topics in addition to th
 | `volume_tiers_updated` | `escrow_contract::set_volume_tiers` | `(admin, tiers.len())` |
 | `dispute_force_resolved` | `dispute_resolution_contract::force_resolve_dispute` | `(delivery_id)` |
 | `dispute_penalty_updated` | `dispute_resolution_contract::set_dispute_reputation_penalty` | `(caller, old_penalty, penalty)` |
+| `dispute_reward_updated` | `dispute_resolution_contract::set_dispute_reputation_reward` | `(caller, old_reward, reward)` |
+| `dispute_split_penalty_updated` | `dispute_resolution_contract::set_dispute_split_penalty` | `(caller, old_penalty, penalty)` |
 | `dispute_time_limit_updated` | `dispute_resolution_contract::update_dispute_time_limit` | `(caller, old_limit, new_limit)` |
 | `fleet_deactivated` | `fleet_management_contract::deactivate_fleet` | `FleetDeactivatedEvent { fleet_id, caller }` |
 | `fleet_owner_reassigned` | `fleet_management_contract::admin_reassign_fleet_owner` | `FleetOwnerReassignedEvent { fleet_id, admin, old_owner, new_owner }` |

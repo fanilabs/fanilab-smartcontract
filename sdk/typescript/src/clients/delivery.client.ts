@@ -167,6 +167,33 @@ export class DeliveryClient {
   }
 
   /**
+   * Update metadata for a Pending delivery. Only the original sender may call
+   * this, and only while the delivery is still in the Pending state.
+   */
+  async updateDeliveryMetadata(
+    params: DeliveryTypes.UpdateDeliveryMetadataParams,
+    options?: ContractInvokeOptions
+  ): Promise<void> {
+    const metadata = map([
+      ['delivery_id', u64(params.deliveryId)],
+      ['origin', string(params.metadata.pickupLocation ?? '')],
+      ['destination', string(params.metadata.dropoffLocation ?? '')],
+      ['cargo_description', map([
+        ['weight_grams', u32(1)],
+        ['category', symbol('General')],
+        ['fragile', bool(false)],
+      ])],
+      ['created_at', u64(Math.floor(Date.now() / 1000))],
+      ['estimated_delivery', u64(Math.floor(Date.now() / 1000) + (params.metadata.estimatedDistance ?? 0))],
+    ]);
+    await this.invoker.call(
+      'update_delivery_metadata',
+      [address(params.sender), u64(params.deliveryId), metadata],
+      options
+    );
+  }
+
+  /**
    * Get a delivery record
    */
   async getDelivery(deliveryId: bigint, options?: ContractInvokeOptions): Promise<DeliveryTypes.DeliveryRecord> {

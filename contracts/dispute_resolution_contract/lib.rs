@@ -736,6 +736,16 @@ impl DisputeResolutionContract {
             panic_with_error!(&env, FaniLabError::InvalidState);
         }
 
+        // Issue #473: validate sender_share_bps before any state mutation or
+        // cross-contract call. Although escrow_contract::resolve_dispute_split
+        // also checks this bound, a value > 10000 here would cause
+        // sender_amount > record.amount, draining the protocol's pooled
+        // balance into the sender address. Fail fast in the dispute contract
+        // so the escrow state is never touched when the input is invalid.
+        if sender_share_bps > 10000 {
+            panic_with_error!(&env, FaniLabError::InvalidState);
+        }
+
         // Issue #211: reject a non-Paused escrow before any state mutation or
         // cross-contract side effect, via the same shared precondition used by
         // the other two resolution entry points.

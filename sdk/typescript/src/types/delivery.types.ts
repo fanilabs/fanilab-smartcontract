@@ -47,6 +47,12 @@ export interface MarkInTransitParams {
   deliveryId: bigint;
 }
 
+export interface UpdateDeliveryMetadataParams {
+  sender: string;
+  deliveryId: bigint;
+  metadata: DeliveryMetadata;
+}
+
 export interface GetDeliveryParams {
   deliveryId: bigint;
 }

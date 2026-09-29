@@ -39,6 +39,43 @@ export class DeliveryClient {
   }
 
   /**
+   * Set the identity reputation contract address (admin only)
+   */
+  async setIdentityReputationContract(
+    identityContractId: string,
+    options?: ContractInvokeOptions
+  ): Promise<void> {
+    const admin = options?.sourceAccount;
+    if (!admin) {
+      throw new Error('setIdentityReputationContract requires options.sourceAccount as admin');
+    }
+    this.identityInvoker = new ContractInvoker(identityContractId, options);
+    await this.invoker.call(
+      'set_identity_reputation_contract',
+      [address(admin), address(identityContractId)],
+      options
+    );
+  }
+
+  /**
+   * Set the escrow contract address (admin only)
+   */
+  async setEscrowContract(
+    escrowContractId: string,
+    options?: ContractInvokeOptions
+  ): Promise<void> {
+    const admin = options?.sourceAccount;
+    if (!admin) {
+      throw new Error('setEscrowContract requires options.sourceAccount as admin');
+    }
+    await this.invoker.call(
+      'set_escrow_contract',
+      [address(admin), address(escrowContractId)],
+      options
+    );
+  }
+
+  /**
    * Create a new delivery
    */
   async createDelivery(
@@ -58,6 +95,35 @@ export class DeliveryClient {
       ['estimated_delivery', u64(Math.floor(Date.now() / 1000) + (params.metadata.estimatedDistance ?? 0))],
     ]);
     return BigInt(String(await this.invoker.call('create_delivery', [address(params.sender), address(params.recipient), metadata], options)));
+  }
+
+  /**
+   * Create multiple deliveries in a single batch
+   */
+  async createDeliveriesBatch(
+    params: DeliveryTypes.CreateDeliveriesBatchParams,
+    options?: ContractInvokeOptions
+  ): Promise<bigint[]> {
+    const metadatas = params.deliveries.map((delivery) =>
+      map([
+        ['delivery_id', u64(delivery.deliveryId)],
+        ['origin', string(delivery.metadata.pickupLocation ?? '')],
+        ['destination', string(delivery.metadata.dropoffLocation ?? '')],
+        ['cargo_description', map([
+          ['weight_grams', u32(1)],
+          ['category', symbol('General')],
+          ['fragile', bool(false)],
+        ])],
+        ['created_at', u64(Math.floor(Date.now() / 1000))],
+        ['estimated_delivery', u64(Math.floor(Date.now() / 1000) + (delivery.metadata.estimatedDistance ?? 0))],
+      ])
+    );
+    const result = await this.invoker.call(
+      'create_deliveries_batch',
+      [address(params.sender), address(params.recipient), metadatas],
+      options
+    );
+    return decodeIds(result);
   }
 
   /**
@@ -101,13 +167,15 @@ export class DeliveryClient {
   }
 
   /**
-   * Update the metadata of an existing delivery
+   * Update metadata for a Pending delivery. Only the original sender may call
+   * this, and only while the delivery is still in the Pending state.
    */
   async updateDeliveryMetadata(
     params: DeliveryTypes.UpdateDeliveryMetadataParams,
     options?: ContractInvokeOptions
   ): Promise<void> {
     const metadata = map([
+      ['delivery_id', u64(params.deliveryId)],
       ['origin', string(params.metadata.pickupLocation ?? '')],
       ['destination', string(params.metadata.dropoffLocation ?? '')],
       ['cargo_description', map([
@@ -118,17 +186,11 @@ export class DeliveryClient {
       ['created_at', u64(Math.floor(Date.now() / 1000))],
       ['estimated_delivery', u64(Math.floor(Date.now() / 1000) + (params.metadata.estimatedDistance ?? 0))],
     ]);
-    await this.invoker.call('update_delivery_metadata', [address(params.caller), u64(params.deliveryId), metadata], options);
-  }
-
-  /**
-   * Raise a dispute for a delivery
-   */
-  async raiseDispute(
-    params: DeliveryTypes.RaiseDisputeParams,
-    options?: ContractInvokeOptions
-  ): Promise<void> {
-    await this.invoker.call('raise_dispute', [address(params.caller), u64(params.deliveryId), string(params.reason)], options);
+    await this.invoker.call(
+      'update_delivery_metadata',
+      [address(params.sender), u64(params.deliveryId), metadata],
+      options
+    );
   }
 
   /**
@@ -214,7 +276,8 @@ export class DeliveryClient {
    * Get all deliveries for a driver
    */
   async getDeliveriesByDriver(driver: string): Promise<bigint[]> {
-    throw new Error('DeliveryContract does not expose get_deliveries_by_driver');
+    const result = await this.invoker.call('get_deliveries_by_driver', [address(driver)], this.options);
+    return decodeIds(result);
   }
 
   private identity(): ContractInvoker {

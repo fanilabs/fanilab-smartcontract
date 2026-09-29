@@ -67,12 +67,13 @@ export class EscrowClient {
     params: EscrowTypes.CreateEscrowBatchParams,
     options?: ContractInvokeOptions
   ): Promise<bigint[]> {
-    const entries = params.escrowList.map((entry) => map([
-      ['delivery_id', u64(entry.deliveryId)],
-      ['driver', address(entry.driver)],
-      ['amount', i128(entry.amount)],
-    ]));
-    const result = await this.invoker.call('create_escrows_batch', [address(params.sender), address(params.recipient), address(params.token), vec(entries)], options);
+    const entries = params.escrowList.map((entry) => [
+      u64(entry.deliveryId),
+      address(entry.driver),
+      i128(entry.amount),
+      entry.fleetId === undefined ? xdrVoid() : u64(entry.fleetId),
+    ] as unknown[]);
+    const result = await this.invoker.call('create_escrows_batch', [address(params.sender), address(params.recipient), address(params.token), u64(params.fleetId ?? 0), vec(entries)], options);
     return decodeIds(result);
   }
 
@@ -254,5 +255,7 @@ function decodeEscrow(value: unknown): EscrowRecord {
     disputedBy: record.disputed_by === null ? undefined : String(record.disputed_by),
     disputedAt: record.disputed_at === null ? undefined : Number(record.disputed_at),
     fleetId: record.fleet_id === null ? undefined : Number(record.fleet_id),
+    deliveryId: BigInt(String(record.delivery_id ?? 0)),
+    holdbackStartedAt: record.holdback_started_at === null ? undefined : Number(record.holdback_started_at),
   };
 }

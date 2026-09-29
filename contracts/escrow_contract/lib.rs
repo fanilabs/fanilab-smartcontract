@@ -1,8 +1,8 @@
 #![no_std]
 
 use shared_types::{
-    escrow_key, events, is_admin, ttl, DeliveryRecord, EscrowRecord, EscrowStatus, FaniLabError,
-    ProtocolConfig, StorageKey,
+    escrow_key, events, is_admin, ttl, DeliveryRecord, DeliveryStatus, EscrowRecord, EscrowStatus,
+    FaniLabError, ProtocolConfig, StorageKey,
 };
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, token, Address, Env,
@@ -1125,6 +1125,31 @@ impl EscrowContract {
                 // Issue #295: same optional delivery-verification check as
                 // create_escrow — skipped when no delivery contract is configured.
                 verify_delivery_if_configured(&env, delivery_id, &recipient, &driver);
+
+                // Issue #378: snapshot the fleet payout address at creation time,
+                // mirroring create_escrow. Without this, batch-created escrows
+                // resolve the payout address live during settlement, which means
+                // a driver who switches fleets after escrow creation will have
+                // funds routed to their new fleet instead of the one that was
+                // active at the time the escrow was locked — breaking accounting
+                // invariants and diverging from create_escrow behaviour.
+                let payout_address: Option<Address> =
+                    if let (Some(fleet_addr), Some(fid)) =
+                        (get_fleet_management_contract(&env), fleet_id)
+                    {
+                        Some(env.invoke_contract(
+                            &fleet_addr,
+                            &Symbol::new(&env, "get_payout_address"),
+                            soroban_sdk::vec![
+                                &env,
+                                driver.clone().into_val(&env),
+                                fid.into_val(&env),
+                            ],
+                        ))
+                    } else {
+                        None
+                    };
+
                 token::Client::new(&env, &token).transfer(
                     &sender,
                     env.current_contract_address(),
@@ -1153,6 +1178,18 @@ impl EscrowContract {
                         fleet_id,
                     },
                 );
+
+                // Persist the snapshotted payout address so settle_escrow_funds
+                // uses it instead of resolving live at settlement time.
+                if let Some(addr) = payout_address {
+                    let payout_key = DataKey::EscrowPayoutAddress(delivery_id);
+                    env.storage().persistent().set(&payout_key, &addr);
+                    env.storage().persistent().extend_ttl(
+                        &payout_key,
+                        ttl::LEDGER_TTL_THRESHOLD,
+                        ttl::LEDGER_TTL_EXTEND_TO,
+                    );
+                }
                 /*
                 sender_escrows.push_back(delivery_id);
                 recipient_escrows.push_back(delivery_id);
@@ -1366,6 +1403,45 @@ impl EscrowContract {
             }
         } else if !admin_authorized && !sender_authorized {
             panic_with_error!(&env, FaniLabError::Unauthorized);
+        }
+        // Issue #372 (SECURITY): Block sender-initiated refund when the delivery
+        // is already `InTransit`.
+        //
+        // The delivery_contract state machine correctly rejects sender cancellation
+        // from `InTransit`, but `refund_escrow` previously only checked the
+        // *escrow* state (still `Locked`) and the sender's identity, allowing the
+        // sender to bypass the stricter delivery-contract restriction by calling the
+        // escrow contract directly.  This leaves the driver unpaid after they have
+        // taken custody of the goods and the cross-contract state inconsistent
+        // (Delivery: InTransit, Escrow: Refunded).
+        //
+        // The fix: when the delivery contract is configured and the caller is the
+        // sender (not the admin — admins retain the recovery path), cross-call the
+        // delivery contract to read the current delivery state.  If the delivery is
+        // `InTransit` (or any later non-cancellable state), the sender's refund
+        // request is rejected with `Unauthorized`.  When the delivery contract is
+        // not configured the check is skipped so existing deployments and tests that
+        // do not wire up the delivery contract continue to work unchanged.
+        if sender_authorized && !admin_authorized && record.status == EscrowStatus::Locked {
+            if let Some(delivery_addr) = get_delivery_contract(&env) {
+                let delivery: DeliveryRecord = env.invoke_contract(
+                    &delivery_addr,
+                    &Symbol::new(&env, "get_delivery"),
+                    soroban_sdk::vec![&env, delivery_id.into_val(&env)],
+                );
+                match delivery.status {
+                    // These states mean the driver is already in custody of the
+                    // goods — sender may not self-refund from any of them.
+                    DeliveryStatus::InTransit
+                    | DeliveryStatus::Delivered
+                    | DeliveryStatus::Disputed => {
+                        panic_with_error!(&env, FaniLabError::Unauthorized);
+                    }
+                    // Pending / Active / Cancelled — sender refund is still
+                    // permissible; fall through to the rest of the function.
+                    _ => {}
+                }
+            }
         }
         if record.status != EscrowStatus::Locked
             && record.status != EscrowStatus::Paused
@@ -1778,12 +1854,30 @@ impl EscrowContract {
         get_holdback_window(&env)
     }
 
+    /// Returns `true` if an escrow record exists for the given `delivery_id`.
+    ///
+    /// Used by `delivery_contract::get_combined_state` to determine whether the
+    /// escrow has been created yet before attempting to fetch it, avoiding a
+    /// panic for freshly created, unfunded deliveries (Issue #395).
+    pub fn has_escrow(env: Env, delivery_id: u64) -> bool {
+        env.storage().persistent().has(&escrow_key(delivery_id))
+    }
+
     pub fn get_escrow(env: Env, delivery_id: u64) -> EscrowRecord {
         let key = escrow_key(delivery_id);
         env.storage()
             .persistent()
             .get(&key)
             .unwrap_or_else(|| panic_with_error!(env, EscrowError::DeliveryNotFound))
+    }
+
+    /// Returns `true` if an escrow record exists for the given delivery ID,
+    /// `false` otherwise.  Never panics for an unknown ID.  No authorization
+    /// is required.  Use this to check presence before calling `get_escrow`
+    /// if you want to avoid the panic that accessor raises for missing records
+    /// (Issue #312).
+    pub fn has_escrow(env: Env, delivery_id: u64) -> bool {
+        env.storage().persistent().has(&escrow_key(delivery_id))
     }
 
     #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
@@ -1858,13 +1952,6 @@ impl EscrowContract {
         }
         let contract_balance =
             token::Client::new(&env, &record.token).balance(&env.current_contract_address());
-        if contract_balance < record.amount {
-            panic_with_error!(&env, EscrowError::InsufficientFunds);
-        }
-        // Effects (state) are committed before the interaction (transfer)
-        // below, per checks-effects-interactions.
-        record.status = EscrowStatus::Refunded;
-        save_escrow(&env, delivery_id, &record);
 
         let total_locked_key = DataKey::TotalLocked(record.token.clone());
         let current_total: i128 = env
@@ -1872,6 +1959,14 @@ impl EscrowContract {
             .persistent()
             .get(&total_locked_key)
             .unwrap_or(0);
+
+        if contract_balance < record.amount || current_total > contract_balance {
+            panic_with_error!(&env, EscrowError::InsufficientFunds);
+        }
+        // Effects (state) are committed before the interaction (transfer)
+        // below, per checks-effects-interactions.
+        record.status = EscrowStatus::Refunded;
+        save_escrow(&env, delivery_id, &record);
         env.storage().persistent().set(
             &total_locked_key,
             &current_total.saturating_sub(record.amount),

@@ -40,6 +40,10 @@ export function string(value: string): ScVal {
   return nativeToScVal(value);
 }
 
+export function bytes(value: Uint8Array): ScVal {
+  return xdr.ScVal.scvBytes(Buffer.from(value));
+}
+
 export function vec(values: ScVal[]): ScVal {
   return xdr.ScVal.scvVec(values);
 }

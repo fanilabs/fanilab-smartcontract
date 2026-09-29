@@ -64,3 +64,20 @@ assignees: ''
 
 ## Possible Solution
 <!-- If you have suggestions on how to fix the bug -->
+
+---
+
+## Complexity
+<!-- How complex is this bug to investigate or fix? Choose one: -->
+- [ ] **Trivial** — Isolated, well-understood, 1–2 hours
+- [ ] **Medium** — Requires investigation across multiple areas, 2–8 hours
+- [ ] **High** — Deep architectural impact or unclear root cause, 8+ hours
+
+## Estimated Effort
+<!-- How long do you estimate this will take to resolve? -->
+<!-- Examples: "1–2 hours", "half a day", "1–2 days" -->
+
+## Acceptance Criteria
+<!-- What must be true for this issue to be considered resolved? -->
+- [ ] 
+- [ ] 

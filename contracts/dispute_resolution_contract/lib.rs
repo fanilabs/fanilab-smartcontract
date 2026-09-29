@@ -124,6 +124,35 @@ pub enum DataKey {
     DisputeResolutionLimit,
     Dispute(DeliveryId),
     DisputeReputationPenalty,
+    /// Paged index page: (page_number) → Vec<DeliveryId>
+    /// Page size is `DISPUTE_INDEX_PAGE` entries.
+    DisputeIndex(u32),
+    /// Total number of disputes ever recorded (monotonically increasing).
+    DisputeIndexLen,
+}
+
+/// Number of dispute IDs stored per index page.  Matches the paging
+/// constant used by `escrow_contract` and `delivery_contract` (Issue #234).
+const DISPUTE_INDEX_PAGE: u32 = 64;
+
+/// Append `delivery_id` to the dispute enumeration index.
+fn dispute_index_push(env: &Env, delivery_id: DeliveryId) {
+    let len: u32 = env
+        .storage()
+        .instance()
+        .get(&DataKey::DisputeIndexLen)
+        .unwrap_or(0);
+    let page_key = DataKey::DisputeIndex(len / DISPUTE_INDEX_PAGE);
+    let mut page: soroban_sdk::Vec<DeliveryId> = env
+        .storage()
+        .instance()
+        .get(&page_key)
+        .unwrap_or_else(|| soroban_sdk::Vec::new(env));
+    page.push_back(delivery_id);
+    env.storage().instance().set(&page_key, &page);
+    env.storage()
+        .instance()
+        .set(&DataKey::DisputeIndexLen, &(len + 1));
 }
 
 #[contract]
@@ -311,6 +340,7 @@ impl DisputeResolutionContract {
             .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::NotInitialized))
     }
 
+    #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
     pub fn set_identity_reputation_contract(
         env: Env,
         caller: Address,
@@ -323,6 +353,12 @@ impl DisputeResolutionContract {
         env.storage()
             .instance()
             .set(&DataKey::IdentityReputationContract, &reputation_contract);
+        // #382: emit event so off-chain indexers can track when this critical
+        // contract pointer is updated by an admin.
+        env.events().publish(
+            (Symbol::new(&env, "identity_reputation_contract_set"),),
+            (caller, reputation_contract),
+        );
     }
 
     pub fn get_identity_reputation_contract(env: Env) -> Address {
@@ -375,6 +411,7 @@ impl DisputeResolutionContract {
             .unwrap_or(0)
     }
 
+    #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
     pub fn set_dispute_resolution_limit(env: Env, caller: Address, new_limit: u64) {
         caller.require_auth();
         if !Self::is_admin(env.clone(), caller.clone()) {
@@ -386,9 +423,16 @@ impl DisputeResolutionContract {
         if new_limit < MIN_DISPUTE_RESOLUTION_LIMIT {
             panic_with_error!(&env, FaniLabError::InvalidState);
         }
+        let old_limit = Self::get_dispute_resolution_limit(env.clone());
         env.storage()
             .instance()
             .set(&DataKey::DisputeResolutionLimit, &new_limit);
+        // #382: emit event so off-chain indexers can track admin changes to
+        // this security-relevant parameter.
+        env.events().publish(
+            (Symbol::new(&env, "dispute_resolution_limit_updated"),),
+            (caller, old_limit, new_limit),
+        );
     }
 
     #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
@@ -438,7 +482,7 @@ impl DisputeResolutionContract {
                 let delivered_at = delivery.delivered_at.unwrap_or(0);
                 let current_time = env.ledger().timestamp();
                 let dispute_limit = Self::get_dispute_time_limit(env.clone());
-                if current_time > delivered_at + dispute_limit {
+                if current_time > delivered_at.saturating_add(dispute_limit) {
                     panic_with_error!(&env, FaniLabError::InvalidState);
                 }
                 // Call delivery contract to transition to Disputed
@@ -493,6 +537,15 @@ impl DisputeResolutionContract {
             ttl::LEDGER_TTL_THRESHOLD,
             ttl::LEDGER_TTL_EXTEND_TO,
         );
+        // #380: extend instance TTL so contract configuration (contract pointers,
+        // limits) does not archive while the contract is actively being used.
+        env.storage()
+            .instance()
+            .extend_ttl(ttl::LEDGER_TTL_THRESHOLD, ttl::LEDGER_TTL_EXTEND_TO);
+
+        // Issue #313: maintain enumeration index so admins can page through
+        // all disputes without prior knowledge of delivery IDs.
+        dispute_index_push(&env, delivery_id);
 
         env.events().publish(
             (events::dispute_raised(&env), delivery_id),
@@ -680,6 +733,16 @@ impl DisputeResolutionContract {
             .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::DeliveryNotFound));
 
         if dispute.status != DisputeStatus::Open {
+            panic_with_error!(&env, FaniLabError::InvalidState);
+        }
+
+        // Issue #473: validate sender_share_bps before any state mutation or
+        // cross-contract call. Although escrow_contract::resolve_dispute_split
+        // also checks this bound, a value > 10000 here would cause
+        // sender_amount > record.amount, draining the protocol's pooled
+        // balance into the sender address. Fail fast in the dispute contract
+        // so the escrow state is never touched when the input is invalid.
+        if sender_share_bps > 10000 {
             panic_with_error!(&env, FaniLabError::InvalidState);
         }
 
@@ -896,11 +959,39 @@ impl DisputeResolutionContract {
             ttl::LEDGER_TTL_THRESHOLD,
             ttl::LEDGER_TTL_EXTEND_TO,
         );
+        // #380: extend instance TTL so contract configuration remains alive
+        // under active usage (force_resolve_dispute is a high-traffic entry point).
+        env.storage()
+            .instance()
+            .extend_ttl(ttl::LEDGER_TTL_THRESHOLD, ttl::LEDGER_TTL_EXTEND_TO);
 
         // Perform external interactions
         // Pass this contract's address as the caller so the escrow contract's
         // require_admin check succeeds; the actual party (sender/recipient/driver)
         // only needs to authorize this call, not the subsequent escrow call.
+
+        // #381: apply the same split reputation penalty as the standard
+        // resolve_dispute_split_funds path — a forced split must not let the
+        // driver evade the reputational consequence of an unresolved dispute.
+        if let Some(driver) = delivery.driver {
+            if let Some(reputation_addr) = env
+                .storage()
+                .instance()
+                .get::<DataKey, Address>(&DataKey::IdentityReputationContract)
+            {
+                let _: () = env.invoke_contract(
+                    &reputation_addr,
+                    &Symbol::new(&env, "decrease_reputation"),
+                    soroban_sdk::vec![
+                        &env,
+                        env.current_contract_address().into_val(&env),
+                        driver.clone().into_val(&env),
+                        DISPUTE_REPUTATION_SPLIT_PENALTY.into_val(&env),
+                    ],
+                );
+            }
+        }
+
         let _: () = env.invoke_contract(
             &escrow_addr,
             &Symbol::new(&env, "resolve_dispute_split"),
@@ -916,6 +1007,63 @@ impl DisputeResolutionContract {
             (Symbol::new(&env, "dispute_force_resolved"), delivery_id),
             (delivery_id, DEFAULT_SENDER_SHARE_BPS),
         );
+    }
+
+    /// Returns `true` if a dispute record exists for the given delivery ID,
+    /// `false` otherwise.  Never panics for an unknown ID.  No authorization
+    /// is required.  Use this to check presence before calling `get_dispute`
+    /// if you want to avoid the panic that accessor raises for missing records
+    /// (Issue #312).
+    pub fn has_dispute(env: Env, delivery_id: DeliveryId) -> bool {
+        env.storage()
+            .persistent()
+            .has(&DataKey::Dispute(delivery_id))
+    }
+
+    /// Return a page of dispute delivery IDs from the enumeration index
+    /// (Issue #313).  `offset` is the zero-based start position; `limit` is
+    /// the maximum number of IDs to return (capped at 100).  The caller
+    /// can resolve each returned ID to a full `DisputeCase` via `get_dispute`.
+    ///
+    /// The index is append-only and ordered by raise time.  Status filtering
+    /// is left to the caller: load each `DisputeCase` and inspect
+    /// `DisputeCase.status` to distinguish `Open` from resolved entries.
+    ///
+    /// No authorization is required.
+    pub fn get_disputes_page(
+        env: Env,
+        offset: u32,
+        limit: u32,
+    ) -> soroban_sdk::Vec<DeliveryId> {
+        let len: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::DisputeIndexLen)
+            .unwrap_or(0);
+        let mut out = soroban_sdk::Vec::new(&env);
+        let cap = limit.min(100);
+        let end = len.min(offset.saturating_add(cap));
+        for i in offset.min(len)..end {
+            let page: soroban_sdk::Vec<DeliveryId> = env
+                .storage()
+                .instance()
+                .get(&DataKey::DisputeIndex(i / DISPUTE_INDEX_PAGE))
+                .unwrap_or_else(|| soroban_sdk::Vec::new(&env));
+            if let Some(id) = page.get(i % DISPUTE_INDEX_PAGE) {
+                out.push_back(id);
+            }
+        }
+        out
+    }
+
+    /// Return the total number of disputes ever recorded (monotonically
+    /// increasing).  Combined with `get_disputes_page` this lets callers
+    /// paginate the full index without an extra sentinel call.
+    pub fn get_dispute_count(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::DisputeIndexLen)
+            .unwrap_or(0)
     }
 
     pub fn get_dispute(env: Env, delivery_id: DeliveryId) -> DisputeCase {

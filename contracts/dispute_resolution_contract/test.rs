@@ -1853,3 +1853,29 @@ fn test_force_resolve_dispute_non_open_dispute_fails() {
     // Attempt to force-resolve an already-resolved dispute (should fail)
     dispute_client.force_resolve_dispute(&recipient, &did(15));
 }
+
+// ── UNAUTHORIZED-CALLER TESTS FOR ADMIN SETTERS (Issue #383) ─────────────────
+
+/// Non-admin callers must be rejected by update_dispute_time_limit.
+/// Without this test, future refactoring could silently drop the is_admin
+/// guard on this security-relevant parameter setter.
+#[test]
+#[should_panic(expected = "HostError: Error(Contract, #1)")] // FaniLabError::Unauthorized
+fn test_unauthorized_update_dispute_time_limit_fails() {
+    let (_env, _admin, sender, _, _, _, _, dispute_client) = setup_test();
+
+    // Non-admin caller (sender) attempts to change the dispute time limit.
+    dispute_client.update_dispute_time_limit(&sender, &172800);
+}
+
+/// Non-admin callers must be rejected by set_dispute_resolution_limit.
+/// Without this test, future refactoring could silently drop the is_admin
+/// guard on this security-relevant parameter setter.
+#[test]
+#[should_panic(expected = "HostError: Error(Contract, #1)")] // FaniLabError::Unauthorized
+fn test_unauthorized_set_dispute_resolution_limit_fails() {
+    let (_env, _admin, sender, _, _, _, _, dispute_client) = setup_test();
+
+    // Non-admin caller (sender) attempts to change the dispute resolution limit.
+    dispute_client.set_dispute_resolution_limit(&sender, &172800);
+}

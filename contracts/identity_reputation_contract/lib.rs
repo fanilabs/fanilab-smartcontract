@@ -117,6 +117,10 @@ impl IdentityReputationContract {
             .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::NotInitialized))
     }
 
+    /// Grant or revoke a contract's ability to adjust driver reputation.
+    /// Publishes `authorized_contract_updated` so allowlist changes are
+    /// visible to indexers and monitoring (Issue #465).
+    #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
     pub fn set_authorized_contract(
         env: Env,
         admin: Address,
@@ -127,7 +131,7 @@ impl IdentityReputationContract {
         if !is_admin(&env, &admin) {
             panic_with_error!(&env, FaniLabError::Unauthorized);
         }
-        let key = DataKey::AuthorizedContract(contract_addr);
+        let key = DataKey::AuthorizedContract(contract_addr.clone());
         if authorized {
             env.storage().persistent().set(&key, &true);
             env.storage().persistent().extend_ttl(
@@ -138,16 +142,41 @@ impl IdentityReputationContract {
         } else {
             env.storage().persistent().remove(&key);
         }
+        env.events().publish(
+            (events::authorized_contract_updated(&env),),
+            (admin, contract_addr, authorized),
+        );
     }
 
+    #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
     pub fn set_reputation_config(env: Env, admin: Address, config: ReputationConfig) {
         admin.require_auth();
         if !is_admin(&env, &admin) {
             panic_with_error!(&env, FaniLabError::Unauthorized);
         }
+
+        // Upper-bound validation: each point field must not exceed MAX_REPUTATION.
+        // A single-delivery point award above MAX_REPUTATION is nonsensical — it
+        // would allow one delivery to pin any driver at the tier ceiling,
+        // destroying reputation scaling economics (Issue #391).
+        if config.base_points > MAX_REPUTATION
+            || config.heavy_cargo_points > MAX_REPUTATION
+            || config.fragile_points > MAX_REPUTATION
+        {
+            panic_with_error!(&env, FaniLabError::InvalidState);
+        }
+
+        // Lower-bound validation: zero-point awards are no-ops and indicate a
+        // misconfigured transaction rather than intentional policy.
+        if config.base_points == 0 {
+            panic_with_error!(&env, FaniLabError::InvalidState);
+        }
+
         env.storage()
             .instance()
             .set(&DataKey::ReputationConfig, &config);
+        env.events()
+            .publish((events::reputation_config_updated(&env),), (admin, config));
     }
 
     pub fn get_reputation_config(env: Env) -> ReputationConfig {
@@ -161,6 +190,7 @@ impl IdentityReputationContract {
             })
     }
 
+    #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
     pub fn set_delivery_contract(env: Env, admin: Address, delivery_contract: Address) {
         admin.require_auth();
         if !is_admin(&env, &admin) {
@@ -169,8 +199,13 @@ impl IdentityReputationContract {
         env.storage()
             .instance()
             .set(&DataKey::DeliveryContract, &delivery_contract);
+        env.events().publish(
+            (events::delivery_contract_updated(&env),),
+            (admin, delivery_contract),
+        );
     }
 
+    #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
     pub fn set_dispute_contract(env: Env, admin: Address, dispute_contract: Address) {
         admin.require_auth();
         if !is_admin(&env, &admin) {
@@ -179,6 +214,10 @@ impl IdentityReputationContract {
         env.storage()
             .instance()
             .set(&DataKey::DisputeContract, &dispute_contract);
+        env.events().publish(
+            (events::dispute_contract_updated(&env),),
+            (admin, dispute_contract),
+        );
     }
 
     pub fn get_delivery_contract(env: Env) -> Address {
@@ -197,16 +236,12 @@ impl IdentityReputationContract {
 
     pub fn is_authorized_contract(env: Env, contract_addr: Address) -> bool {
         let key = DataKey::AuthorizedContract(contract_addr);
-        if env.storage().persistent().get(&key).unwrap_or(false) {
-            env.storage().persistent().extend_ttl(
-                &key,
-                ttl::LEDGER_TTL_THRESHOLD,
-                ttl::LEDGER_TTL_EXTEND_TO,
-            );
-            true
-        } else {
-            false
-        }
+        // Read-only check: TTL extension is intentionally omitted here.
+        // Extending TTL inside a query function incurs unexpected write fees
+        // and violates read-only semantics (Issue #392). TTL extension happens
+        // in set_authorized_contract, which is the only mutating path for
+        // authorization data.
+        env.storage().persistent().get(&key).unwrap_or(false)
     }
 
     pub fn has_driver_profile(env: Env, driver: Address) -> bool {
@@ -427,6 +462,7 @@ impl IdentityReputationContract {
     /// The resulting score is still capped at `MAX_REPUTATION`.
     #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
     pub fn award_reputation(env: Env, caller: Address, driver: Address, points: u32) {
+        require_escrow_not_paused(&env);
         if !Self::is_authorized_contract(env.clone(), caller.clone()) {
             panic_with_error!(&env, FaniLabError::Unauthorized);
         }
@@ -439,7 +475,7 @@ impl IdentityReputationContract {
             .get(&key)
             .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::ProviderNotFound));
 
-        profile.reputation_score = (profile.reputation_score + points).min(MAX_REPUTATION);
+        profile.reputation_score = profile.reputation_score.saturating_add(points).min(MAX_REPUTATION);
 
         env.storage().persistent().set(&key, &profile);
         env.storage().persistent().extend_ttl(

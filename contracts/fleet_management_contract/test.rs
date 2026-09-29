@@ -1317,6 +1317,44 @@ fn test_configure_signers_rejects_zero_threshold() {
     }
 }
 
+/// Issue #463: a signer vector larger than `MAX_SIGNERS_PER_FLEET` must be
+/// cleanly rejected so a `FleetProfile` can never be stored in a state that
+/// exceeds Soroban's deserialization budget and bricks the fleet.
+#[test]
+fn test_configure_signers_rejects_oversized_signer_vector() {
+    let (env, client, _admin) = setup_test();
+
+    let owner = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let fleet_id = client.register_fleet(&owner, &treasury);
+
+    // Exactly at the cap is accepted.
+    let mut signers = soroban_sdk::Vec::new(&env);
+    signers.push_back(owner.clone());
+    while signers.len() < MAX_SIGNERS_PER_FLEET {
+        signers.push_back(Address::generate(&env));
+    }
+    client.configure_signers(&owner, &fleet_id, &signers, &1u32);
+    assert_eq!(
+        client.get_fleet_signers(&fleet_id).0.len(),
+        MAX_SIGNERS_PER_FLEET
+    );
+
+    // One address over the cap is cleanly rejected as invalid configuration.
+    signers.push_back(Address::generate(&env));
+    let result = client.try_configure_signers(&owner, &fleet_id, &signers, &1u32);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, FleetError::InvalidConfiguration.into()),
+        _ => panic!("Expected FleetError::InvalidConfiguration"),
+    }
+
+    // The stored signer set is left untouched by the rejected call.
+    assert_eq!(
+        client.get_fleet_signers(&fleet_id).0.len(),
+        MAX_SIGNERS_PER_FLEET
+    );
+}
+
 #[test]
 fn test_add_driver_unauthorized_not_signer() {
     let (env, client, _admin) = setup_test();

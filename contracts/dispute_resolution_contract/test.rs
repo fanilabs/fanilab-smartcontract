@@ -344,6 +344,33 @@ fn test_unauthorized_add_admin_fails() {
     dispute_client.add_admin(&attacker, &target);
 }
 
+/// Issue #464: `add_admin` must reject growth past `MAX_ADMINS` so the roster
+/// can never be bloated to the point where deserializing it exceeds Soroban's
+/// budget and bricks governance.
+#[test]
+fn test_add_admin_rejected_at_max_admins() {
+    let (env, admin, _, _, _, _, _, dispute_client) = setup_test();
+
+    // init seeds one admin; add MAX_ADMINS - 1 more to reach the cap exactly.
+    for _ in 1..MAX_ADMINS {
+        let new_admin = Address::generate(&env);
+        dispute_client.add_admin(&admin, &new_admin);
+    }
+    assert_eq!(dispute_client.list_admins().len(), MAX_ADMINS);
+
+    // One more must be rejected cleanly with LimitExceeded...
+    let extra = Address::generate(&env);
+    let result = dispute_client.try_add_admin(&admin, &extra);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::LimitExceeded.into()),
+        other => panic!("expected LimitExceeded at MAX_ADMINS, got {other:?}"),
+    }
+
+    // ...and the roster must be left untouched.
+    assert_eq!(dispute_client.list_admins().len(), MAX_ADMINS);
+    assert!(!dispute_client.is_admin(&extra));
+}
+
 #[test]
 fn test_raise_dispute_active_delivery() {
     let (env, _admin, sender, recipient, driver, delivery_id, escrow_id, dispute_client) =
@@ -1398,6 +1425,192 @@ fn test_unauthorized_set_dispute_reputation_penalty_fails() {
     dispute_client.set_dispute_reputation_penalty(&sender, &25);
 }
 
+// ── CONFIGURABLE DRIVER REWARD / SPLIT PENALTY (Issue #462) ──────────────────
+
+#[test]
+fn test_dispute_reputation_reward_configurable() {
+    let (_env, admin, _, _, _, _, _, dispute_client) = setup_test();
+
+    // Default matches the previously hardcoded value
+    assert_eq!(dispute_client.get_dispute_reputation_reward(), 5);
+
+    dispute_client.set_dispute_reputation_reward(&admin, &25);
+    assert_eq!(dispute_client.get_dispute_reputation_reward(), 25);
+}
+
+#[test]
+fn test_dispute_split_penalty_configurable() {
+    let (_env, admin, _, _, _, _, _, dispute_client) = setup_test();
+
+    // Default matches the previously hardcoded value
+    assert_eq!(dispute_client.get_dispute_split_penalty(), 5);
+
+    dispute_client.set_dispute_split_penalty(&admin, &15);
+    assert_eq!(dispute_client.get_dispute_split_penalty(), 15);
+}
+
+#[test]
+fn test_reputation_config_setters_reject_out_of_bounds_values() {
+    let (_env, admin, _, _, _, _, _, dispute_client) = setup_test();
+
+    // 51 > MAX_DISPUTE_REPUTATION_PENALTY (IDENTITY_MAX_REPUTATION / 2 = 50)
+    let result = dispute_client.try_set_dispute_reputation_reward(&admin, &51);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::InvalidState.into()),
+        other => panic!("expected InvalidState for oversized reward, got {other:?}"),
+    }
+
+    let result = dispute_client.try_set_dispute_split_penalty(&admin, &51);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::InvalidState.into()),
+        other => panic!("expected InvalidState for oversized split penalty, got {other:?}"),
+    }
+
+    // Nothing was stored by the rejected calls.
+    assert_eq!(dispute_client.get_dispute_reputation_reward(), 5);
+    assert_eq!(dispute_client.get_dispute_split_penalty(), 5);
+}
+
+#[test]
+#[should_panic(expected = "HostError: Error(Contract, #1)")] // FaniLabError::Unauthorized
+fn test_unauthorized_set_dispute_reputation_reward_fails() {
+    let (_env, _admin, sender, _, _, _, _, dispute_client) = setup_test();
+
+    dispute_client.set_dispute_reputation_reward(&sender, &25);
+}
+
+#[test]
+#[should_panic(expected = "HostError: Error(Contract, #1)")] // FaniLabError::Unauthorized
+fn test_unauthorized_set_dispute_split_penalty_fails() {
+    let (_env, _admin, sender, _, _, _, _, dispute_client) = setup_test();
+
+    dispute_client.set_dispute_split_penalty(&sender, &15);
+}
+
+/// Issue #462 acceptance test: values configured through the new
+/// administrative setters must be the values actually applied by both
+/// resolution paths — the split penalty by `resolve_dispute_split_funds` and
+/// the reward by `resolve_dispute_pay_driver`. Uses the full real-contract
+/// chain, mirroring the existing end-to-end reputation integration tests.
+#[test]
+fn test_configured_values_apply_to_split_and_pay_driver_paths() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let driver = Address::generate(&env);
+
+    // Register real contracts wired end-to-end.
+    let delivery_contract_id = env.register(delivery_contract::DeliveryContract, ());
+    let escrow_contract_id = env.register(escrow_contract::EscrowContract, ());
+    let dispute_resolution_id = env.register(DisputeResolutionContract, ());
+    let identity_contract_id =
+        env.register(identity_reputation_contract::IdentityReputationContract, ());
+
+    let delivery_client =
+        delivery_contract::DeliveryContractClient::new(&env, &delivery_contract_id);
+    let escrow_client = escrow_contract::EscrowContractClient::new(&env, &escrow_contract_id);
+    let dispute_client = DisputeResolutionContractClient::new(&env, &dispute_resolution_id);
+    let identity_client = identity_reputation_contract::IdentityReputationContractClient::new(
+        &env,
+        &identity_contract_id,
+    );
+
+    let token = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+
+    escrow_client.init(&admin, &token, &0);
+    escrow_client.set_dispute_resolution_contract(&admin, &dispute_resolution_id);
+    delivery_client.init(&admin, &escrow_contract_id);
+    dispute_client.init(
+        &admin,
+        &delivery_contract_id,
+        &escrow_contract_id,
+        &86400,
+        &604800,
+    );
+    identity_client.init(&admin, &delivery_contract_id, &dispute_resolution_id);
+    dispute_client.set_identity_reputation_contract(&admin, &identity_contract_id);
+
+    identity_client.register_driver(&driver);
+    assert_eq!(
+        identity_client.get_driver_profile(&driver).reputation_score,
+        50
+    );
+
+    // Configure non-default values through the administrative setters.
+    dispute_client.set_dispute_split_penalty(&admin, &15);
+    dispute_client.set_dispute_reputation_reward(&admin, &20);
+    assert_eq!(dispute_client.get_dispute_split_penalty(), 15);
+    assert_eq!(dispute_client.get_dispute_reputation_reward(), 20);
+
+    StellarAssetClient::new(&env, &token).mint(&sender, &2000);
+
+    let metadata = shared_types::DeliveryMetadata {
+        delivery_id: 0,
+        origin: String::from_str(&env, "Origin"),
+        destination: String::from_str(&env, "Destination"),
+        cargo_description: shared_types::CargoDescriptor {
+            weight_grams: 500,
+            category: shared_types::CargoCategory::Electronics,
+            fragile: false,
+        },
+        created_at: env.ledger().timestamp(),
+        estimated_delivery: env.ledger().timestamp() + 3600,
+    };
+
+    // Path 1: split resolution applies the configured split penalty.
+    let split_delivery = delivery_client.create_delivery(&sender, &recipient, &metadata);
+    escrow_client.create_escrow(
+        &sender,
+        &recipient,
+        &driver,
+        &u64::from(split_delivery),
+        &token,
+        &1000,
+        &None,
+    );
+    delivery_client.assign_driver(&admin, &split_delivery, &driver);
+    dispute_client.raise_dispute(&sender, &split_delivery);
+    dispute_client.resolve_dispute_split_funds(&admin, &split_delivery, &5000);
+    assert_eq!(
+        dispute_client.get_dispute(&split_delivery).status,
+        DisputeStatus::Split
+    );
+    // 50 − 15 (configured split penalty), not the old hardcoded 5.
+    assert_eq!(
+        identity_client.get_driver_profile(&driver).reputation_score,
+        35
+    );
+
+    // Path 2: pay-driver resolution applies the configured reward.
+    let payout_delivery = delivery_client.create_delivery(&sender, &recipient, &metadata);
+    escrow_client.create_escrow(
+        &sender,
+        &recipient,
+        &driver,
+        &u64::from(payout_delivery),
+        &token,
+        &1000,
+        &None,
+    );
+    delivery_client.assign_driver(&admin, &payout_delivery, &driver);
+    dispute_client.raise_dispute(&sender, &payout_delivery);
+    dispute_client.resolve_dispute_pay_driver(&admin, &payout_delivery);
+    assert_eq!(
+        dispute_client.get_dispute(&payout_delivery).status,
+        DisputeStatus::ResolvedPayout
+    );
+    // 35 + 20 (configured reward), not the old hardcoded 5.
+    assert_eq!(
+        identity_client.get_driver_profile(&driver).reputation_score,
+        55
+    );
+}
+
 #[test]
 #[should_panic(expected = "HostError: Error(Contract, #1)")] // FaniLabError::Unauthorized
 fn test_unauthorized_resolve_split_funds_fails() {
@@ -1852,4 +2065,30 @@ fn test_force_resolve_dispute_non_open_dispute_fails() {
 
     // Attempt to force-resolve an already-resolved dispute (should fail)
     dispute_client.force_resolve_dispute(&recipient, &did(15));
+}
+
+// ── UNAUTHORIZED-CALLER TESTS FOR ADMIN SETTERS (Issue #383) ─────────────────
+
+/// Non-admin callers must be rejected by update_dispute_time_limit.
+/// Without this test, future refactoring could silently drop the is_admin
+/// guard on this security-relevant parameter setter.
+#[test]
+#[should_panic(expected = "HostError: Error(Contract, #1)")] // FaniLabError::Unauthorized
+fn test_unauthorized_update_dispute_time_limit_fails() {
+    let (_env, _admin, sender, _, _, _, _, dispute_client) = setup_test();
+
+    // Non-admin caller (sender) attempts to change the dispute time limit.
+    dispute_client.update_dispute_time_limit(&sender, &172800);
+}
+
+/// Non-admin callers must be rejected by set_dispute_resolution_limit.
+/// Without this test, future refactoring could silently drop the is_admin
+/// guard on this security-relevant parameter setter.
+#[test]
+#[should_panic(expected = "HostError: Error(Contract, #1)")] // FaniLabError::Unauthorized
+fn test_unauthorized_set_dispute_resolution_limit_fails() {
+    let (_env, _admin, sender, _, _, _, _, dispute_client) = setup_test();
+
+    // Non-admin caller (sender) attempts to change the dispute resolution limit.
+    dispute_client.set_dispute_resolution_limit(&sender, &172800);
 }

@@ -4,7 +4,7 @@
 
 import { ContractInvokeOptions, DriverProfile, DriverStatus, DriverTier, ReputationConfig, UserProfile } from '../types/common.types';
 import * as IdentityReputationTypes from '../types/identity_reputation.types';
-import { ContractInvoker, address, bool, u32, u64 } from './invoker';
+import { ContractInvoker, address, bool, map, u32, u64 } from './invoker';
 
 export class IdentityReputationClient {
   private readonly invoker: ContractInvoker;
@@ -113,14 +113,26 @@ export class IdentityReputationClient {
   async isEligibleForEnterprise(driver: string, options?: ContractInvokeOptions): Promise<boolean> {
     return Boolean(await this.invoker.call('is_eligible_for_enterprise', [address(driver)], options));
   }
+
+  async suspendDriver(params: IdentityReputationTypes.SuspendDriverParams, options?: ContractInvokeOptions): Promise<void> {
+    await this.invoker.call('suspend_driver', [address(params.admin), address(params.driver)], options);
+  }
+
+  async reinstateDriver(params: IdentityReputationTypes.ReinstateDriverParams, options?: ContractInvokeOptions): Promise<void> {
+    await this.invoker.call('reinstate_driver', [address(params.admin), address(params.driver)], options);
+  }
+
+  async isDriverSuspended(driver: string, options?: ContractInvokeOptions): Promise<boolean> {
+    return Boolean(await this.invoker.call('is_driver_suspended', [address(driver)], options));
+  }
 }
 
 function mapConfig(config: ReputationConfig): unknown {
-  return {
-    base_points: config.basePoints,
-    heavy_cargo_points: config.heavyCargoPoints,
-    fragile_points: config.fragilePoints,
-  };
+  return map([
+    ['base_points', u32(config.basePoints)],
+    ['heavy_cargo_points', u32(config.heavyCargoPoints)],
+    ['fragile_points', u32(config.fragilePoints)],
+  ]);
 }
 
 function decodeReputationConfig(value: unknown): ReputationConfig {

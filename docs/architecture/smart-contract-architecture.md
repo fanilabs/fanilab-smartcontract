@@ -15,8 +15,10 @@ Houses all shared Enums, Structs, and Data representations across the entire pla
 
 ## 2. `delivery_contract`
 Manages the lifecycle of a logistics package.
-- **Responsibilities**: Creation of delivery, Assignment of drivers, In-Transit updates, and Proof of Delivery (PoD) hashing.
-- **Interacts with**: `identity_reputation_contract` (to verify driver tier), `escrow_contract` (to trigger payment upon completion).
+- **Responsibilities**: Creation of delivery, Assignment of drivers, In-Transit updates, and Delivery Confirmation.
+  > **Note (Issue #306):** Proof of Delivery (PoD) hashing is **not implemented**. `confirm_delivery` takes only the recipient address and delivery ID; no proof artifact is stored. The closest existing mechanism is `dispute_resolution_contract::add_evidence_hash`, which is dispute-scoped. PoD hashing as a driver-recourse primitive is a planned feature — see the backlog for a dedicated feature issue.
+- **Interacts with**: `identity_reputation_contract` (`register_user` on delivery creation, `increase_reputation` on confirmation), `escrow_contract` (calls `get_escrow` to verify funding before marking in-transit, `refund_escrow` on cancellation, `mark_holdback_escrow` on confirmation, `raise_dispute` on dispute, `reclaim_expired_escrow` via the `reclaim_delivery_expired_escrow` entry point).
+  > **Note (Issue #307):** The delivery contract does **not** call `get_driver_tier` or perform any tier/KYC-based vetting at assignment. `assign_driver` verifies only that the caller is admin or the driver themselves, and that the driver is not the sender or recipient. Tier-gating at assignment is tracked as a separate backlog item (see closed issue #44).
 
 ## 3. `escrow_contract`
 Strictly manages the financial security of the platform.

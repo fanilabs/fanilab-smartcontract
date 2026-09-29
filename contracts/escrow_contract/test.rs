@@ -5774,3 +5774,319 @@ fn test_batch_zero_amount_rejected() {
         _ => panic!("Expected EscrowError::InvalidAmount for a zero-amount escrow"),
     }
 }
+
+// ── Issue #457 — set_holdback_window / release_expired_holdback ────────────────
+//
+// `release_expired_holdback` is the permissionless escape hatch that stops a
+// driver's funds from being stranded in `Holdback` forever when the recipient
+// never releases them and no dispute freezes the escrow. It and the admin-
+// configurable window governing it had no direct test coverage, so the
+// timelock, the bounds, the authorization, and the state guards were all
+// unpinned.
+
+/// Default window applies before any admin configuration.
+#[test]
+fn test_holdback_window_defaults_before_admin_configures_it() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+    client.init(&admin, &token, &0);
+
+    assert_eq!(
+        client.get_holdback_window(),
+        constants::DEFAULT_HOLDBACK_WINDOW_SECONDS
+    );
+}
+
+/// Admin may set any window at or above the minimum, and it is readable back.
+#[test]
+fn test_set_holdback_window_by_admin_updates_window() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+    client.init(&admin, &token, &0);
+
+    let new_window = constants::MIN_HOLDBACK_WINDOW_SECONDS + 3600;
+    client.set_holdback_window(&admin, &new_window);
+
+    assert_eq!(client.get_holdback_window(), new_window);
+}
+
+/// Exactly the minimum is accepted — the bound is inclusive.
+#[test]
+fn test_set_holdback_window_accepts_exact_minimum() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+    client.init(&admin, &token, &0);
+
+    client.set_holdback_window(&admin, &constants::MIN_HOLDBACK_WINDOW_SECONDS);
+
+    assert_eq!(
+        client.get_holdback_window(),
+        constants::MIN_HOLDBACK_WINDOW_SECONDS
+    );
+}
+
+/// One second below the minimum is rejected with `InvalidState` (code 5), and
+/// the previously configured window is left untouched.
+#[test]
+fn test_set_holdback_window_rejects_below_minimum() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+    client.init(&admin, &token, &0);
+
+    let result =
+        client.try_set_holdback_window(&admin, &(constants::MIN_HOLDBACK_WINDOW_SECONDS - 1));
+    match result {
+        Err(Ok(err)) => assert_eq!(err, EscrowError::InvalidState.into()),
+        _ => panic!("Expected EscrowError::InvalidState for a below-minimum window"),
+    }
+
+    assert_eq!(
+        client.get_holdback_window(),
+        constants::DEFAULT_HOLDBACK_WINDOW_SECONDS
+    );
+}
+
+/// A zero window must be rejected too — the sharpest edge of the bound.
+#[test]
+fn test_set_holdback_window_rejects_zero() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+    client.init(&admin, &token, &0);
+
+    let result = client.try_set_holdback_window(&admin, &0u64);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, EscrowError::InvalidState.into()),
+        _ => panic!("Expected EscrowError::InvalidState for a zero window"),
+    }
+}
+
+/// Only the admin may reconfigure the window; a stranger is rejected with
+/// `FaniLabError::Unauthorized` (code 1).
+#[test]
+fn test_set_holdback_window_rejects_non_admin() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let stranger = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+    client.init(&admin, &token, &0);
+
+    let result = client.try_set_holdback_window(&stranger, &(7 * 24 * 60 * 60));
+    match result {
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::Unauthorized.into()),
+        _ => panic!("Expected FaniLabError::Unauthorized for a non-admin caller"),
+    }
+
+    assert_eq!(
+        client.get_holdback_window(),
+        constants::DEFAULT_HOLDBACK_WINDOW_SECONDS
+    );
+}
+
+/// Before the window elapses the permissionless release is refused with
+/// `TimelockNotElapsed` (code 9) and nothing moves.
+#[test]
+fn test_release_expired_holdback_rejected_before_timelock() {
+    let (env, contract_id, token, _admin, _sender, _recipient, driver) =
+        setup_holdback_escrow(9501, 1000);
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let result = client.try_release_expired_holdback(&9501u64);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, EscrowError::TimelockNotElapsed.into()),
+        _ => panic!("Expected EscrowError::TimelockNotElapsed before the window elapsed"),
+    }
+
+    assert_eq!(
+        client.get_escrow(&9501u64).status,
+        EscrowStatus::Holdback
+    );
+    assert_eq!(balance(&env, &token, &contract_id), 1000);
+    assert_eq!(balance(&env, &token, &driver), 0);
+    assert_eq!(client.get_total_locked(&token), 1000);
+}
+
+/// One second before the deadline is still too early; at the deadline it
+/// succeeds.  This pins the comparison as inclusive of the boundary.
+#[test]
+fn test_release_expired_holdback_boundary_is_inclusive() {
+    let (env, contract_id, token, _admin, _sender, _recipient, driver) =
+        setup_holdback_escrow(9502, 1000);
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let started_at = env.ledger().timestamp();
+    let deadline = started_at + constants::DEFAULT_HOLDBACK_WINDOW_SECONDS;
+
+    // deadline - 1 → still locked.
+    env.ledger().set_timestamp(deadline - 1);
+    assert!(client.try_release_expired_holdback(&9502u64).is_err());
+
+    // deadline → released, permissionlessly (no caller required).
+    env.ledger().set_timestamp(deadline);
+    client.release_expired_holdback(&9502u64);
+
+    assert_eq!(
+        client.get_escrow(&9502u64).status,
+        EscrowStatus::Released
+    );
+    assert_eq!(balance(&env, &token, &driver), 1000);
+    assert_eq!(balance(&env, &token, &contract_id), 0);
+    assert_eq!(client.get_total_locked(&token), 0);
+}
+
+/// The release needs no authorization at all — the function takes no caller —
+/// which is exactly what makes it the escape hatch against a non-responsive
+/// recipient.
+#[test]
+fn test_release_expired_holdback_is_permissionless() {
+    let (env, contract_id, token, _admin, _sender, _recipient, driver) =
+        setup_holdback_escrow(9503, 1000);
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    env.ledger()
+        .set_timestamp(env.ledger().timestamp() + constants::DEFAULT_HOLDBACK_WINDOW_SECONDS);
+
+    client.release_expired_holdback(&9503u64);
+
+    assert_eq!(
+        client.get_escrow(&9503u64).status,
+        EscrowStatus::Released
+    );
+    assert_eq!(balance(&env, &token, &driver), 1000);
+}
+
+/// The admin-configured window — not the default — is what governs the
+/// timelock, so shortening it lets the driver reclaim sooner.
+#[test]
+fn test_release_expired_holdback_uses_admin_configured_window() {
+    let (env, contract_id, token, admin, _sender, _recipient, driver) =
+        setup_holdback_escrow(9504, 1000);
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // An admin may lengthen the window beyond the default.
+    let long_window = constants::DEFAULT_HOLDBACK_WINDOW_SECONDS * 2;
+    client.set_holdback_window(&admin, &long_window);
+
+    let started_at = env.ledger().timestamp();
+
+    // The default window has elapsed, but the configured one has not.
+    env.ledger()
+        .set_timestamp(started_at + constants::DEFAULT_HOLDBACK_WINDOW_SECONDS);
+    assert!(client.try_release_expired_holdback(&9504u64).is_err());
+
+    env.ledger().set_timestamp(started_at + long_window);
+    client.release_expired_holdback(&9504u64);
+
+    assert_eq!(balance(&env, &token, &driver), 1000);
+}
+
+/// Only a `Holdback` escrow may be reclaimed this way; a `Locked` one is
+/// rejected with `InvalidState` regardless of how long it has been open.
+#[test]
+fn test_release_expired_holdback_rejects_non_holdback_escrow() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let driver = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+
+    client.init(&admin, &token, &0);
+    mint(&env, &token, &sender, 1000);
+    client.create_escrow(&sender, &recipient, &driver, &9505u64, &token, &1000, &None);
+
+    env.ledger()
+        .set_timestamp(env.ledger().timestamp() + constants::DEFAULT_HOLDBACK_WINDOW_SECONDS * 10);
+
+    let result = client.try_release_expired_holdback(&9505u64);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, EscrowError::InvalidState.into()),
+        _ => panic!("Expected EscrowError::InvalidState for a Locked escrow"),
+    }
+
+    assert_eq!(client.get_escrow(&9505u64).status, EscrowStatus::Locked);
+    assert_eq!(balance(&env, &token, &sender), 0);
+    assert_eq!(balance(&env, &token, &contract_id), 1000);
+}
+
+/// An unknown delivery has no record to reclaim.
+#[test]
+fn test_release_expired_holdback_rejects_unknown_delivery() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+    client.init(&admin, &token, &0);
+
+    assert!(client.try_release_expired_holdback(&9506u64).is_err());
+}
+
+/// A protocol-wide pause freezes the escape hatch too, so an admin can halt
+/// the permissionless path during an incident.
+#[test]
+fn test_release_expired_holdback_rejected_while_paused() {
+    let (env, contract_id, _token, admin, _sender, _recipient, _driver) =
+        setup_holdback_escrow(9507, 1000);
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    env.ledger()
+        .set_timestamp(env.ledger().timestamp() + constants::DEFAULT_HOLDBACK_WINDOW_SECONDS);
+    client.set_paused(&admin, &true);
+
+    let result = client.try_release_expired_holdback(&9507u64);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::ProtocolPaused.into()),
+        _ => panic!("Expected FaniLabError::ProtocolPaused"),
+    }
+
+    assert_eq!(
+        client.get_escrow(&9507u64).status,
+        EscrowStatus::Holdback
+    );
+}
+
+/// An escrow disputed out of `Holdback` (i.e. `Paused`) falls back to dispute
+/// arbitration; the permissionless path must not release it.
+#[test]
+fn test_release_expired_holdback_rejects_disputed_escrow() {
+    let (env, contract_id, _token, _admin, _sender, recipient, _driver) =
+        setup_holdback_escrow(9508, 1000);
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    client.raise_dispute(&recipient, &9508u64);
+    env.ledger()
+        .set_timestamp(env.ledger().timestamp() + constants::DEFAULT_HOLDBACK_WINDOW_SECONDS);
+
+    let result = client.try_release_expired_holdback(&9508u64);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, EscrowError::InvalidState.into()),
+        _ => panic!("Expected EscrowError::InvalidState for a Paused escrow"),
+    }
+}

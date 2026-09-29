@@ -221,6 +221,37 @@ impl MockReputationContract {
     }
 }
 
+/// Issue #455 — an escrow reporting a protocol pause.  Its `raise_dispute`
+/// panics with a distinctive message so the test can prove the delivery
+/// contract rejects the call *locally* (`ProtocolPaused`) instead of letting
+/// the cross-contract call surface its own generic failure.
+#[contract]
+pub struct PausedMockEscrowContract;
+
+#[contractimpl]
+impl PausedMockEscrowContract {
+    /// Toggled by tests: the protocol must be unpaused while the delivery is
+    /// set up (every state-mutating entry point, not just `raise_dispute`,
+    /// calls `require_escrow_not_paused`), and paused for the assertion under
+    /// test.
+    pub fn set_paused(env: Env, paused: bool) {
+        env.storage()
+            .instance()
+            .set(&Symbol::new(&env, "paused"), &paused);
+    }
+
+    pub fn is_paused(env: Env) -> bool {
+        env.storage()
+            .instance()
+            .get(&Symbol::new(&env, "paused"))
+            .unwrap_or(false)
+    }
+
+    pub fn raise_dispute(_env: Env, _caller: Address, _delivery_id: u64) {
+        panic!("PausedEscrowReached");
+    }
+}
+
 // ── Setup ─────────────────────────────────────────────────────────────────────
 
 fn setup_full(
@@ -1457,6 +1488,76 @@ fn test_delivery_state_unchanged_after_raise_dispute_escrow_failure() {
         delivery_after.status,
         DeliveryStatus::InTransit,
         "Delivery status should not change to Disputed"
+    );
+}
+
+/// Issue #455: `raise_dispute` must reject a paused escrow locally, with the
+/// delivery contract's own `ProtocolPaused` precondition failure, before
+/// reaching the cross-contract call.  `FaniLabError::ProtocolPaused == 11`.
+#[test]
+#[should_panic(expected = "Error(Contract, #11)")]
+fn test_raise_dispute_rejected_when_escrow_paused() {
+    let env = Env::default();
+    env.mock_all_auths_allowing_non_root_auth();
+    let escrow_id = env.register(PausedMockEscrowContract, ());
+    let reputation_id = env.register(identity_reputation_contract::IdentityReputationContract, ());
+    let contract_id = env.register(DeliveryContract, ());
+    let client = DeliveryContractClient::new(&env, &contract_id);
+
+    let shipper = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let driver = Address::generate(&env);
+    client.init(&shipper, &escrow_id);
+    let reputation_client =
+        identity_reputation_contract::IdentityReputationContractClient::new(&env, &reputation_id);
+    reputation_client.init(&shipper, &contract_id, &Address::generate(&env));
+    client.set_identity_reputation_contract(&shipper, &reputation_id);
+    reputation_client.register_driver(&driver);
+
+    let delivery_id = client.create_delivery(&shipper, &recipient, &get_test_metadata(&env, 1));
+    client.assign_driver(&shipper, &delivery_id, &driver);
+
+    PausedMockEscrowContractClient::new(&env, &escrow_id).set_paused(&true);
+
+    client.raise_dispute(&shipper, &delivery_id);
+}
+
+/// The rejection is local: the paused escrow's `raise_dispute` (which panics
+/// with `PausedEscrowReached`) is never invoked, and delivery state is
+/// untouched.
+#[test]
+fn test_raise_dispute_paused_rejection_is_local_and_leaves_state_intact() {
+    let env = Env::default();
+    env.mock_all_auths_allowing_non_root_auth();
+    let escrow_id = env.register(PausedMockEscrowContract, ());
+    let reputation_id = env.register(identity_reputation_contract::IdentityReputationContract, ());
+    let contract_id = env.register(DeliveryContract, ());
+    let client = DeliveryContractClient::new(&env, &contract_id);
+
+    let shipper = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let driver = Address::generate(&env);
+    client.init(&shipper, &escrow_id);
+    let reputation_client =
+        identity_reputation_contract::IdentityReputationContractClient::new(&env, &reputation_id);
+    reputation_client.init(&shipper, &contract_id, &Address::generate(&env));
+    client.set_identity_reputation_contract(&shipper, &reputation_id);
+    reputation_client.register_driver(&driver);
+
+    let delivery_id = client.create_delivery(&shipper, &recipient, &get_test_metadata(&env, 1));
+    client.assign_driver(&shipper, &delivery_id, &driver);
+
+    PausedMockEscrowContractClient::new(&env, &escrow_id).set_paused(&true);
+
+    let result = client.try_raise_dispute(&shipper, &delivery_id);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, shared_types::FaniLabError::ProtocolPaused.into()),
+        other => panic!("Expected FaniLabError::ProtocolPaused, got {other:?}"),
+    }
+
+    assert_eq!(
+        client.get_delivery(&delivery_id).status,
+        DeliveryStatus::Active
     );
 }
 

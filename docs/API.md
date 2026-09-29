@@ -1088,6 +1088,7 @@ Sender or recipient raises a dispute.
 **Errors:**
 - `NotAuthorized` - Caller not sender or recipient
 - `InvalidState` - Cannot transition to Disputed
+- `ProtocolPaused` - The escrow contract reports a protocol-wide pause
 
 **Events:** `delivery_disputed`
 
@@ -1908,6 +1909,7 @@ Accept a pending fleet invite.
 
 **Errors:**
 - `FleetNotFound` - No fleet with that ID exists
+- `FleetInactive` - The fleet has been deactivated since the invite was issued
 - `InviteNotFound` - No pending invite exists for this driver
 - `DriverAlreadyActive` - Driver is already an active member
 

@@ -802,6 +802,15 @@ impl FleetManagementContract {
             .get(&DataKey::Fleet(fleet_id))
             .unwrap_or_else(|| panic_with_error!(&env, FleetError::FleetNotFound));
 
+        // A fleet deactivated after the invite was issued must keep an
+        // immutable roster: `add_driver_to_fleet` already rejects new
+        // invitations once `profile.active` is false, so honouring an
+        // outstanding invite here would inflate `total_active_drivers` on a
+        // fleet that has shut down (Issue #456).
+        if !profile.active {
+            panic_with_error!(&env, FleetError::FleetInactive);
+        }
+
         let invite_key = DataKey::DriverFleet(fleet_id, driver.clone());
 
         // Verify there is a pending invite.

@@ -222,6 +222,13 @@ Confirm that a delivery has been completed.
 ##### `getDelivery(deliveryId: bigint): Promise<DeliveryRecord>`
 Get a delivery record.
 
+##### `getDriverProfile(driver: string): Promise<DeliveryDriverProfile>`
+Get the driver's identity and reputation profile through the delivery contract.
+
+##### `getCombinedState(deliveryId: bigint): Promise<CombinedDeliveryState>`
+Get a delivery record and its optional escrow record, together with the contract's
+synchronization check.
+
 ## Types
 
 All types are exported from the main package for use in your application:

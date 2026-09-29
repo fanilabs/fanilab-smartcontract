@@ -2,7 +2,7 @@
  * Type definitions for delivery contract functions
  */
 
-import { DeliveryStatus } from './common.types';
+import { DeliveryStatus, DriverStatus, EscrowStatus } from './common.types';
 
 export interface CreateDeliveryParams {
   sender: string;
@@ -81,6 +81,37 @@ export interface DeliveryRecord {
   createdAt: number;
   deliveredAt?: number;
   transitStartedAt?: number;
+}
+
+export interface DeliveryDriverProfile {
+  address: string;
+  deliveriesCompleted: number;
+  reputationScore: number;
+  registeredAt: number;
+  kycVerified: boolean;
+  status: DriverStatus;
+}
+
+export interface DeliveryEscrowState {
+  deliveryId: bigint;
+  sender: string;
+  recipient: string;
+  driver: string;
+  token: string;
+  amount: bigint;
+  status: EscrowStatus;
+  createdAt: number;
+  expiresAt?: number;
+  disputedBy?: string;
+  disputedAt?: number;
+  holdbackStartedAt?: number;
+  fleetId?: bigint;
+}
+
+export interface CombinedDeliveryState {
+  delivery: DeliveryRecord;
+  escrow?: DeliveryEscrowState;
+  isSynchronized: boolean;
 }
 
 export interface DeliveryCreatedEvent {

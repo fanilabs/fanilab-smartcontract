@@ -64,3 +64,20 @@ assignees: ''
 
 ## Related Issues
 <!-- Link to related issues or discussions -->
+
+---
+
+## Complexity
+<!-- How complex is this feature to implement? Choose one: -->
+- [ ] **Trivial** — Isolated, well-understood change, 1–2 hours
+- [ ] **Medium** — Requires changes across multiple contracts or modules, 2–8 hours
+- [ ] **High** — Deep architectural impact or significant unknowns, 8+ hours
+
+## Estimated Effort
+<!-- How long do you estimate implementation will take? -->
+<!-- Examples: "1–2 hours", "half a day", "1–2 days", "1 week" -->
+
+## Acceptance Criteria
+<!-- What must be true for this feature to be considered done? -->
+- [ ] 
+- [ ] 

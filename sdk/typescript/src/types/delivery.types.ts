@@ -11,12 +11,19 @@ export interface CreateDeliveryParams {
   metadata: DeliveryMetadata;
 }
 
+export interface CargoDescriptor {
+  description: string;
+  weight?: number;
+  dimensions?: string;
+  fragile?: boolean;
+}
+
 export interface DeliveryMetadata {
-  pickupLocation?: string;
-  dropoffLocation?: string;
-  items?: string;
-  notes?: string;
-  estimatedDistance?: number;
+  origin: string;
+  destination: string;
+  cargo_description: string;
+  created_at: number;
+  estimated_delivery: number;
 }
 
 export interface AssignDriverParams {
@@ -38,6 +45,12 @@ export interface CancelDeliveryParams {
 export interface MarkInTransitParams {
   caller: string;
   deliveryId: bigint;
+}
+
+export interface UpdateDeliveryMetadataParams {
+  sender: string;
+  deliveryId: bigint;
+  metadata: DeliveryMetadata;
 }
 
 export interface GetDeliveryParams {

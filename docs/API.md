@@ -576,6 +576,144 @@ escrow_contract.resolve_dispute_split(
 );
 ```
 
+#### `mark_holdback_escrow`
+Transition a `Locked` escrow into `Holdback` after the recipient has confirmed delivery.
+
+This is called automatically by `delivery_contract::confirm_delivery` — the escrow is
+not released immediately; instead it enters a short holdback window so the recipient
+may still raise a dispute before the driver collects the funds.
+
+**Parameters:**
+- `caller: Address` - Recipient (must sign)
+- `delivery_id: u64` - Delivery identifier
+
+**Authorization:** Recipient only
+
+**Errors:**
+- `Unauthorized` - Caller is not the recipient
+- `InvalidState` - Escrow is not in `Locked` state
+
+**Events:** `escrow_holdback_marked`
+
+**State Changes:**
+- Sets escrow status to `Holdback`
+- Records `holdback_started_at` timestamp (used by `release_expired_holdback`)
+
+**Example:**
+```rust
+escrow_contract.mark_holdback_escrow(&recipient, &delivery_id);
+```
+
+#### `release_holdback_escrow`
+Release a `Holdback` escrow to the driver. Called by the recipient once they are
+satisfied, or by an admin as a recovery path.
+
+**Parameters:**
+- `caller: Address` - Recipient or admin
+- `delivery_id: u64` - Delivery identifier
+
+**Authorization:** Recipient or Admin
+
+**Errors:**
+- `Unauthorized` - Caller is not the recipient or admin
+- `InvalidState` - Escrow is not in `Holdback` state
+- `InsufficientFunds` - Contract balance is insufficient
+
+**Events:** `escrow_released`
+
+**State Changes:**
+- Transfers `(amount − platform_fee)` to driver (or fleet treasury if fleet-linked)
+- Transfers `platform_fee` to admin
+- Sets escrow status to `Released`
+
+**Example:**
+```rust
+escrow_contract.release_holdback_escrow(&recipient, &delivery_id);
+```
+
+#### `release_expired_holdback`
+Permissionless counterpart to `release_holdback_escrow`. Once an escrow has sat in
+`Holdback` for at least `get_holdback_window()` seconds since `mark_holdback_escrow`
+set `holdback_started_at`, **anyone** may call this to settle it to the driver.
+
+Without this escape hatch, a non-responsive recipient who never calls
+`release_holdback_escrow` (and raises no dispute) could strand the driver's funds in
+`Holdback` indefinitely, since the only other exits require recipient or admin action.
+(Issue #192)
+
+A `Paused` escrow (frozen via `freeze_funds` / `raise_dispute`) is unaffected — this
+function only accepts `Holdback`; a frozen escrow remains under admin arbitration.
+
+**Parameters:**
+- `delivery_id: u64` - Delivery identifier
+
+**Authorization:** Permissionless (any caller)
+
+**Errors:**
+- `InvalidState` - Escrow is not in `Holdback`, or `holdback_started_at` is missing
+- `TimelockNotElapsed` - The holdback window has not yet expired
+- `InsufficientFunds` - Contract balance is insufficient
+
+**Events:** `holdback_expired_released`
+
+**State Changes:**
+- Same as `release_holdback_escrow`: transfers funds to driver, fee to admin,
+  sets status to `Released`
+
+**Example:**
+```rust
+// After the holdback window has passed, anyone may call:
+escrow_contract.release_expired_holdback(&delivery_id);
+```
+
+#### `set_holdback_window`
+Admin-only configuration: set the holdback window (in seconds) that must elapse
+before `release_expired_holdback` may be called.
+
+The window must be at least `MIN_HOLDBACK_WINDOW_SECONDS` (86 400 s = 1 day) to
+guarantee the recipient has a realistic opportunity to either release the escrow or
+raise a dispute before the driver can claim it unilaterally. The default when no
+value has been set is `DEFAULT_HOLDBACK_WINDOW_SECONDS` (259 200 s = 3 days).
+
+**Parameters:**
+- `admin: Address` - Admin address (must sign)
+- `new_window_seconds: u64` - New holdback window in seconds (must be ≥ 86 400)
+
+**Authorization:** Admin only
+
+**Errors:**
+- `Unauthorized` - Caller is not the stored admin
+- `InvalidState` - `new_window_seconds` is below `MIN_HOLDBACK_WINDOW_SECONDS` (86 400 s)
+
+**Events:** `holdback_window_updated`
+
+**State Changes:**
+- Stores the new holdback window in instance storage
+- Extends instance TTL
+
+**Example:**
+```rust
+// Set a 5-day holdback window:
+escrow_contract.set_holdback_window(
+    &admin_address,
+    5 * 24 * 60 * 60  // 432_000 seconds
+);
+```
+
+#### `get_holdback_window`
+Return the currently configured holdback window in seconds, falling back to
+`DEFAULT_HOLDBACK_WINDOW_SECONDS` (259 200 s = 3 days) if no value has been set by
+`set_holdback_window`.
+
+**Parameters:** None
+
+**Returns:** `u64` — holdback window in seconds
+
+**Example:**
+```rust
+let window: u64 = escrow_contract.get_holdback_window();
+```
+
 ### Query Functions
 
 #### `get_admin`
@@ -668,6 +806,22 @@ Retrieve full escrow record.
 
 **Errors:**
 - `DeliveryNotFound` - No escrow for this delivery
+
+#### `has_escrow`
+Check whether an escrow record exists for a delivery without panicking (Issue #312).
+
+**Parameters:**
+- `delivery_id: u64` - Delivery identifier
+
+**Returns:** `bool` — `true` if a record exists, `false` otherwise
+
+**Authorization:** None required
+
+**Notes:**
+- Never panics for an unknown ID — use this to guard calls to `get_escrow` when
+  the caller is not certain the escrow was created.
+- `get_escrow` behavior is unchanged: it still panics with `DeliveryNotFound` for
+  missing records.
 
 #### `create_escrows_batch`
 Create multiple escrows in a single transaction (up to 100 per batch). Enforces
@@ -793,12 +947,23 @@ Assign a driver to a delivery.
 - `NotAuthorized` - Caller not admin or driver
 - `DeliveryNotFound` - Invalid delivery_id
 - `InvalidState` - Delivery not in Pending state
+- `ProviderNotFound` - KYC enforcement enabled, identity contract configured, and the driver has no profile
+- `Unauthorized` - KYC enforcement enabled and `driver.kyc_verified` is `false`
 
 **Events:** `driver_assigned`
 
 **State Changes:**
 - Sets delivery.driver to specified address
 - Updates status to Active
+
+**KYC Gate (Issue #314):**
+When `require_kyc` is `true` (set via `set_require_kyc`) **and** the identity
+contract is configured, `assign_driver` cross-calls
+`identity_reputation_contract::has_driver_profile` and
+`get_driver_profile` to confirm the driver exists and has `kyc_verified = true`.
+The gate is silently skipped when no identity contract is configured, so
+deployments that have not wired one up continue to work even with the flag set.
+The default is `false` (gate disabled), preserving all existing flows.
 
 **Example:**
 ```rust
@@ -808,6 +973,32 @@ delivery_contract.assign_driver(
     &driver
 );
 ```
+
+#### `set_require_kyc`
+Enable or disable the KYC gate on `assign_driver` (Issue #314).
+
+**Parameters:**
+- `admin: Address` - Admin address
+- `required: bool` - `true` to enable KYC enforcement, `false` to disable
+
+**Authorization:** Admin only
+
+**Events:** `require_kyc_updated`
+
+**Notes:**
+- Default is `false` (enforcement disabled).  Existing flows are unaffected
+  until an admin explicitly enables this.
+- The gate is silently skipped when no identity contract is configured,
+  even when `required` is `true`.
+
+#### `get_require_kyc`
+Return the current KYC-enforcement setting (Issue #314).
+
+**Parameters:** None
+
+**Returns:** `bool` — `true` if `assign_driver` enforces KYC verification
+
+**Authorization:** None required
 
 #### `mark_in_transit`
 Driver marks delivery as actively in transit.
@@ -1277,6 +1468,50 @@ Retrieve a full dispute record by delivery ID.
 
 **Errors:**
 - `DeliveryNotFound` - No dispute exists for this delivery
+
+#### `has_dispute`
+Check whether a dispute record exists for a delivery without panicking (Issue #312).
+
+**Parameters:**
+- `delivery_id: DeliveryId` - Delivery identifier
+
+**Returns:** `bool` — `true` if a record exists, `false` otherwise
+
+**Authorization:** None required
+
+**Notes:**
+- Never panics for an unknown ID — use this to guard calls to `get_dispute`.
+- `get_dispute` behavior is unchanged: it still panics with `DeliveryNotFound`
+  for missing records.
+
+#### `get_disputes_page`
+Enumerate all disputes by page offset (Issue #313).  Returns delivery IDs in
+raise-time order; resolve each to a full record via `get_dispute`.  Callers can
+filter on `DisputeCase.status` to separate `Open` from resolved disputes.
+
+**Parameters:**
+- `offset: u32` - Zero-based start position in the enumeration index
+- `limit: u32` - Maximum IDs to return (capped at 100 per call)
+
+**Returns:** `Vec<DeliveryId>`
+
+**Authorization:** None required
+
+**Notes:**
+- The index is append-only and never reordered; pages are stable across calls.
+- Status filtering is the caller's responsibility.  Load each `DisputeCase` via
+  `get_dispute` and inspect `status` to find `Open` entries.
+
+#### `get_dispute_count`
+Return the total number of disputes ever recorded (monotonically increasing).
+Use with `get_disputes_page` to page through the full index without sentinel
+calls (Issue #313).
+
+**Parameters:** None
+
+**Returns:** `u32`
+
+**Authorization:** None required
 
 ### Dispute Lifecycle
 

@@ -4,7 +4,7 @@
 
 import { ContractInvokeOptions, DisputeCase, DisputeStatus } from '../types/common.types';
 import * as DisputeResolutionTypes from '../types/dispute_resolution.types';
-import { ContractInvoker, address, u32, u64 } from './invoker';
+import { ContractInvoker, address, bytes, u32, u64 } from './invoker';
 
 export class DisputeResolutionClient {
   private readonly invoker: ContractInvoker;
@@ -100,7 +100,7 @@ export class DisputeResolutionClient {
     params: DisputeResolutionTypes.AddEvidenceHashParams,
     options?: ContractInvokeOptions
   ): Promise<void> {
-    await this.invoker.call('add_evidence_hash', [address(params.caller), u64(params.deliveryId), new Uint8Array(Buffer.from(params.evidenceHash, 'hex')) as any], options);
+    await this.invoker.call('add_evidence_hash', [address(params.caller), u64(params.deliveryId), bytes(new Uint8Array(Buffer.from(params.evidenceHash, 'hex')))], options);
   }
 
   async resolveDisputeRefundSender(

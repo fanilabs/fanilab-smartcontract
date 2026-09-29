@@ -1,5 +1,9 @@
 # Contract Upgrade Guide
 
+> **Scope:** This guide covers the **mechanical process of upgrading a contract** — building a new WASM binary, deploying it to testnet and mainnet, testing the deployed version, and rolling back if needed. It does not cover state migration logic (transforming on-chain storage); that is handled in the [Migration Guide](MIGRATION_GUIDE.md).
+>
+> **Related document:** [MIGRATION_GUIDE.md](MIGRATION_GUIDE.md) — state migration patterns for breaking-change upgrades that alter data structures. If your upgrade changes any storage keys or struct layouts, read the Migration Guide alongside this one.
+
 Guide for upgrading FaniLab smart contracts on Stellar Soroban.
 
 ## Overview
@@ -80,10 +84,16 @@ stellar contract invoke --id $NEW_CONTRACT_ID --network mainnet -- get_admin
 
 ## State Migration
 
-If state structure changes:
+If your upgrade changes data structures or storage keys, a state migration function must be run after deploying the new WASM.
+
+> **See [MIGRATION_GUIDE.md](MIGRATION_GUIDE.md) for full migration patterns**, including example `migrate_to_v2` functions, batch migration, gradual migration, testing checklists, and recovery procedures.
+>
+> **Note:** No production contract in this repository currently implements `migrate_to_v2` or calls `update_current_contract_wasm`. This tooling is aspirational, tracked in issue [#81](https://github.com/fanilabs/fanilab-smartcontract/issues/81).
+
+A minimal migration call after deploying looks like:
 
 ```rust
-// Add migration function
+// Add migration function to your new contract version
 pub fn migrate_to_v2(env: Env) {
     let admin = get_admin(&env);
     admin.require_auth();
@@ -98,6 +108,8 @@ pub fn migrate_to_v2(env: Env) {
     save_new_format(&env, new_data);
 }
 ```
+
+After deploying (Step 4), invoke the migration before routing live traffic to the new contract.
 
 ## Rollback Procedure
 

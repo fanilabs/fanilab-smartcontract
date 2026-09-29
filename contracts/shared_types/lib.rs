@@ -114,6 +114,11 @@ pub mod events {
         Symbol::new(env, "fleet_deactivated")
     }
 
+    /// Emitted when a fleet is restored from Inactive back to Active status.
+    pub fn fleet_reactivated(env: &Env) -> Symbol {
+        Symbol::new(env, "fleet_reactivated")
+    }
+
     /// Emitted when the contract admin reassigns a fleet's owner address
     /// (e.g. after the original owner key is lost or compromised).
     pub fn fleet_owner_reassigned(env: &Env) -> Symbol {
@@ -387,6 +392,17 @@ pub struct FleetDeactivatedEvent {
     /// Fleet identifier that was deactivated.
     pub fleet_id: u64,
     /// Address that authorized the deactivation (owner or admin).
+    pub caller: Address,
+}
+
+/// Emitted by `reactivate_fleet` when an inactive fleet is restored to
+/// operational status by the fleet owner or contract admin.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FleetReactivatedEvent {
+    /// Fleet identifier that was reactivated.
+    pub fleet_id: u64,
+    /// Address that authorized the reactivation (owner or admin).
     pub caller: Address,
 }
 

@@ -9,7 +9,13 @@ use shared_types::{FaniLabError, StorageKey};
 // CRITICAL: This contract is currently a stub. Phase 3 implementation is required
 // before mainnet deployment. See PRODUCTION_READINESS.md "Next Steps for Mainnet Launch."
 
-use soroban_sdk::{contract, contracterror, contractimpl, panic_with_error, Address, Env};
+use soroban_sdk::{contract, contracterror, contractimpl, contracttype, panic_with_error, Address, Env};
+
+#[contracttype]
+#[derive(Clone)]
+pub enum DataKey {
+    EscrowContract,
+}
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -24,17 +30,23 @@ pub struct SettlementContract;
 #[contractimpl]
 impl SettlementContract {
     /// Initialize the settlement contract
-    pub fn init(env: Env, admin: Address) {
+    pub fn init(env: Env, admin: Address, escrow_contract: Address) {
         if env.storage().instance().has(&StorageKey::Admin) {
             panic_with_error!(&env, FaniLabError::AlreadyInitialized);
         }
         admin.require_auth();
         env.storage().instance().set(&StorageKey::Admin, &admin);
-        // Implementation to be added in Phase 3
+        env.storage().instance().set(&DataKey::EscrowContract, &escrow_contract);
+        env.storage()
+            .instance()
+            .extend_ttl(&shared_types::ttl::LEDGER_TTL_THRESHOLD, &shared_types::ttl::LEDGER_TTL_EXTEND_TO);
     }
 
     /// Get the settlement contract administrator.
     pub fn get_admin(env: Env) -> Address {
+        env.storage()
+            .instance()
+            .extend_ttl(&shared_types::ttl::LEDGER_TTL_THRESHOLD, &shared_types::ttl::LEDGER_TTL_EXTEND_TO);
         env.storage()
             .instance()
             .get(&StorageKey::Admin)
@@ -42,7 +54,10 @@ impl SettlementContract {
     }
 
     /// Get driver's preferred asset for payment
-    pub fn get_driver_preference(_env: Env, _driver: Address) -> Option<Address> {
+    pub fn get_driver_preference(env: Env, _driver: Address) -> Option<Address> {
+        env.storage()
+            .instance()
+            .extend_ttl(&shared_types::ttl::LEDGER_TTL_THRESHOLD, &shared_types::ttl::LEDGER_TTL_EXTEND_TO);
         // Implementation to be added in Phase 3
         None
     }
@@ -53,7 +68,7 @@ impl SettlementContract {
     /// Phase 3 implementation is complete. This is intentional to prevent silent
     /// no-op swaps on mainnet with unimplemented settlement logic.
     pub fn execute_settlement_swap(
-        _env: Env,
+        env: Env,
         caller: Address,
         _from_token: Address,
         _to_token: Address,
@@ -63,9 +78,23 @@ impl SettlementContract {
     ) {
         caller.require_auth();
 
+        env.storage()
+            .instance()
+            .extend_ttl(&shared_types::ttl::LEDGER_TTL_THRESHOLD, &shared_types::ttl::LEDGER_TTL_EXTEND_TO);
+
+        let escrow_contract: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::EscrowContract)
+            .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::NotInitialized));
+
+        if caller != escrow_contract {
+            panic_with_error!(&env, FaniLabError::Unauthorized);
+        }
+
         // CRITICAL GUARD: Prevent execution of stub function on mainnet.
         // Phase 3 settlement logic must be implemented before production use.
-        panic_with_error!(&_env, SettlementError::SwapNotImplemented);
+        panic_with_error!(&env, SettlementError::SwapNotImplemented);
     }
 }
 

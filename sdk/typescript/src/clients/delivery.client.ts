@@ -39,6 +39,43 @@ export class DeliveryClient {
   }
 
   /**
+   * Set the identity reputation contract address (admin only)
+   */
+  async setIdentityReputationContract(
+    identityContractId: string,
+    options?: ContractInvokeOptions
+  ): Promise<void> {
+    const admin = options?.sourceAccount;
+    if (!admin) {
+      throw new Error('setIdentityReputationContract requires options.sourceAccount as admin');
+    }
+    this.identityInvoker = new ContractInvoker(identityContractId, options);
+    await this.invoker.call(
+      'set_identity_reputation_contract',
+      [address(admin), address(identityContractId)],
+      options
+    );
+  }
+
+  /**
+   * Set the escrow contract address (admin only)
+   */
+  async setEscrowContract(
+    escrowContractId: string,
+    options?: ContractInvokeOptions
+  ): Promise<void> {
+    const admin = options?.sourceAccount;
+    if (!admin) {
+      throw new Error('setEscrowContract requires options.sourceAccount as admin');
+    }
+    await this.invoker.call(
+      'set_escrow_contract',
+      [address(admin), address(escrowContractId)],
+      options
+    );
+  }
+
+  /**
    * Create a new delivery
    */
   async createDelivery(
@@ -58,6 +95,35 @@ export class DeliveryClient {
       ['estimated_delivery', u64(Math.floor(Date.now() / 1000) + (params.metadata.estimatedDistance ?? 0))],
     ]);
     return BigInt(String(await this.invoker.call('create_delivery', [address(params.sender), address(params.recipient), metadata], options)));
+  }
+
+  /**
+   * Create multiple deliveries in a single batch
+   */
+  async createDeliveriesBatch(
+    params: DeliveryTypes.CreateDeliveriesBatchParams,
+    options?: ContractInvokeOptions
+  ): Promise<bigint[]> {
+    const metadatas = params.deliveries.map((delivery) =>
+      map([
+        ['delivery_id', u64(delivery.deliveryId)],
+        ['origin', string(delivery.metadata.pickupLocation ?? '')],
+        ['destination', string(delivery.metadata.dropoffLocation ?? '')],
+        ['cargo_description', map([
+          ['weight_grams', u32(1)],
+          ['category', symbol('General')],
+          ['fragile', bool(false)],
+        ])],
+        ['created_at', u64(Math.floor(Date.now() / 1000))],
+        ['estimated_delivery', u64(Math.floor(Date.now() / 1000) + (delivery.metadata.estimatedDistance ?? 0))],
+      ])
+    );
+    const result = await this.invoker.call(
+      'create_deliveries_batch',
+      [address(params.sender), address(params.recipient), metadatas],
+      options
+    );
+    return decodeIds(result);
   }
 
   /**
@@ -101,6 +167,33 @@ export class DeliveryClient {
   }
 
   /**
+   * Update metadata for a Pending delivery. Only the original sender may call
+   * this, and only while the delivery is still in the Pending state.
+   */
+  async updateDeliveryMetadata(
+    params: DeliveryTypes.UpdateDeliveryMetadataParams,
+    options?: ContractInvokeOptions
+  ): Promise<void> {
+    const metadata = map([
+      ['delivery_id', u64(params.deliveryId)],
+      ['origin', string(params.metadata.pickupLocation ?? '')],
+      ['destination', string(params.metadata.dropoffLocation ?? '')],
+      ['cargo_description', map([
+        ['weight_grams', u32(1)],
+        ['category', symbol('General')],
+        ['fragile', bool(false)],
+      ])],
+      ['created_at', u64(Math.floor(Date.now() / 1000))],
+      ['estimated_delivery', u64(Math.floor(Date.now() / 1000) + (params.metadata.estimatedDistance ?? 0))],
+    ]);
+    await this.invoker.call(
+      'update_delivery_metadata',
+      [address(params.sender), u64(params.deliveryId), metadata],
+      options
+    );
+  }
+
+  /**
    * Get a delivery record
    */
   async getDelivery(deliveryId: bigint, options?: ContractInvokeOptions): Promise<DeliveryTypes.DeliveryRecord> {
@@ -119,6 +212,31 @@ export class DeliveryClient {
    */
   async getIdentityContract(options?: ContractInvokeOptions): Promise<string | null> {
     return decodeOptional(await this.invoker.call('get_identity_reputation_contract', [], options));
+  }
+
+  /**
+   * Get a driver profile from the identity contract
+   */
+  async getDriverProfile(driver: string, options?: ContractInvokeOptions): Promise<DeliveryTypes.DriverProfile> {
+    return decodeDriverProfile(await this.identity().call('get_driver_profile', [address(driver)], options));
+  }
+
+  /**
+   * Get the combined delivery state (delivery record plus escrow status)
+   */
+  async getCombinedState(deliveryId: bigint, options?: ContractInvokeOptions): Promise<DeliveryTypes.CombinedDeliveryState> {
+    return decodeCombinedState(await this.invoker.call('get_combined_state', [u64(deliveryId)], options));
+  }
+
+  /**
+   * Get a paginated list of deliveries
+   */
+  async getDeliveriesPage(
+    offset: number,
+    limit: number,
+    options?: ContractInvokeOptions
+  ): Promise<DeliveryTypes.DeliveryPage> {
+    return decodeDeliveryPage(await this.invoker.call('get_deliveries_page', [u32(offset), u32(limit)], options));
   }
 
   /**
@@ -176,6 +294,39 @@ function decodeOptional(value: unknown): string | null {
 
 function decodeIds(value: unknown): bigint[] {
   return (value as unknown[]).map((id) => BigInt(String(id)));
+}
+
+function decodeDriverProfile(value: unknown): DeliveryTypes.DriverProfile {
+  const record = value as Record<string, unknown>;
+  return {
+    driver: String(record.driver),
+    name: String(record.name),
+    vehicleType: String(record.vehicle_type),
+    licenseNumber: String(record.license_number),
+    isVerified: Boolean(record.is_verified),
+    rating: Number(record.rating),
+    completedDeliveries: Number(record.completed_deliveries),
+  };
+}
+
+function decodeCombinedState(value: unknown): DeliveryTypes.CombinedDeliveryState {
+  const record = value as Record<string, unknown>;
+  return {
+    delivery: decodeDelivery(record.delivery),
+    escrowStatus: record.escrow_status === null ? undefined : String(record.escrow_status),
+    escrowAmount: record.escrow_amount === null ? undefined : BigInt(String(record.escrow_amount)),
+  };
+}
+
+function decodeDeliveryPage(value: unknown): DeliveryTypes.DeliveryPage {
+  const record = value as Record<string, unknown>;
+  const items = (record.items as unknown[]) ?? [];
+  return {
+    items: items.map((item) => decodeDelivery(item)),
+    total: Number(record.total),
+    offset: Number(record.offset),
+    limit: Number(record.limit),
+  };
 }
 
 function decodeDelivery(value: unknown): DeliveryTypes.DeliveryRecord {

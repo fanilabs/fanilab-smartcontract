@@ -6,7 +6,8 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc --project tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
     "test": "jest",
     "prepare": "npm run build"
   },
@@ -27,7 +28,7 @@
     "@types/node": "^26.6.3",
     "jest": "^30.5.2",
     "typescript": "^5.0.0",
-    "ts-jest": "^29.0.0"
+    "ts-jest": "^29.4.14"
   },
   "engines": {
     "node": ">=18.0.0"

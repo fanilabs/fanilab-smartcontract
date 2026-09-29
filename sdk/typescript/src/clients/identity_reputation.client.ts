@@ -4,7 +4,7 @@
 
 import { ContractInvokeOptions, DriverProfile, DriverTier, ReputationConfig, UserProfile } from '../types/common.types';
 import * as IdentityReputationTypes from '../types/identity_reputation.types';
-import { ContractInvoker, address, bool, u32, u64 } from './invoker';
+import { ContractInvoker, address, bool, map, u32, u64 } from './invoker';
 
 export class IdentityReputationClient {
   private readonly invoker: ContractInvoker;
@@ -128,11 +128,11 @@ export class IdentityReputationClient {
 }
 
 function mapConfig(config: ReputationConfig): unknown {
-  return {
-    base_points: config.basePoints,
-    heavy_cargo_points: config.heavyCargoPoints,
-    fragile_points: config.fragilePoints,
-  };
+  return map([
+    ['base_points', u32(config.basePoints)],
+    ['heavy_cargo_points', u32(config.heavyCargoPoints)],
+    ['fragile_points', u32(config.fragilePoints)],
+  ]);
 }
 
 function decodeReputationConfig(value: unknown): ReputationConfig {

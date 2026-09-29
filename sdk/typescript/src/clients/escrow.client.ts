@@ -67,12 +67,16 @@ export class EscrowClient {
     params: EscrowTypes.CreateEscrowBatchParams,
     options?: ContractInvokeOptions
   ): Promise<bigint[]> {
-    const entries = params.escrowList.map((entry) => [
-      u64(entry.deliveryId),
-      address(entry.driver),
-      i128(entry.amount),
-      entry.fleetId === undefined ? xdrVoid() : u64(entry.fleetId),
-    ] as unknown[]);
+    // `create_escrows_batch` takes a `Vec<(u64, Address, i128, Option<u64>)>`,
+    // so each entry must be encoded as its own Vec ScVal, not a bare array.
+    const entries = params.escrowList.map((entry) =>
+      vec([
+        u64(entry.deliveryId),
+        address(entry.driver),
+        i128(entry.amount),
+        entry.fleetId === undefined ? xdrVoid() : u64(entry.fleetId),
+      ])
+    );
     const result = await this.invoker.call('create_escrows_batch', [address(params.sender), address(params.recipient), address(params.token), u64(params.fleetId ?? 0), vec(entries)], options);
     return decodeIds(result);
   }
@@ -138,6 +142,21 @@ export class EscrowClient {
   }
 
   /**
+   * Permissionless counterpart to `releaseHoldbackEscrow`: settle an escrow
+   * that has been in `Holdback` for at least the configured holdback window.
+   *
+   * This is the driver-protection fallback introduced in Issue #192 — without
+   * it a recipient who never calls `releaseHoldbackEscrow` could strand the
+   * driver's funds in `Holdback` indefinitely.
+   */
+  async releaseExpiredHoldback(
+    params: EscrowTypes.ReleaseExpiredHoldbackParams,
+    options?: ContractInvokeOptions
+  ): Promise<void> {
+    await this.invoker.call('release_expired_holdback', [u64(params.deliveryId)], options);
+  }
+
+  /**
    * Mark an escrow as holdback
    */
   async markHoldbackEscrow(
@@ -173,6 +192,47 @@ export class EscrowClient {
    */
   async getEscrowsByDriver(driver: string, options?: ContractInvokeOptions): Promise<bigint[]> {
     return decodeIds(await this.invoker.call('get_escrows_by_driver', [address(driver)], options));
+  }
+
+  /**
+   * Get the total amount of `token` currently locked across all escrows.
+   *
+   * This is the protocol's solvency metric: it should always be backed by an
+   * equal or greater token balance held by the contract.
+   */
+  async getTotalLocked(token: string, options?: ContractInvokeOptions): Promise<bigint> {
+    return BigInt(String(await this.invoker.call('get_total_locked', [address(token)], options)));
+  }
+
+  /**
+   * Get the amount of `token` held by the contract that is not tracked by any
+   * escrow record, without executing a sweep.
+   *
+   * Untracked balance = contract balance − total locked. Returns `0` when
+   * there is nothing to sweep. Use this to verify the amount before calling
+   * {@link EscrowClient.sweepUntrackedBalance} and to monitor the contract's
+   * solvency.
+   */
+  async getUntrackedBalance(token: string, options?: ContractInvokeOptions): Promise<bigint> {
+    return BigInt(String(await this.invoker.call('get_untracked_balance', [address(token)], options)));
+  }
+
+  /**
+   * Sweep the untracked `token` balance to a treasury wallet. Admin only.
+   *
+   * Returns the amount swept; `0` when the contract holds nothing beyond its
+   * tracked escrows. The sweep is a no-op while the protocol is paused.
+   */
+  async sweepUntrackedBalance(
+    params: EscrowTypes.SweepParams,
+    options?: ContractInvokeOptions
+  ): Promise<bigint> {
+    const result = await this.invoker.call(
+      'sweep_untracked_balance',
+      [address(params.admin), address(params.token), address(params.recipient)],
+      options
+    );
+    return BigInt(String(result));
   }
 
   /**
@@ -254,8 +314,8 @@ function decodeEscrow(value: unknown): EscrowRecord {
     createdAt: Number(record.created_at), expiresAt: record.expires_at === null ? undefined : Number(record.expires_at),
     disputedBy: record.disputed_by === null ? undefined : String(record.disputed_by),
     disputedAt: record.disputed_at === null ? undefined : Number(record.disputed_at),
-    fleetId: record.fleet_id === null ? undefined : Number(record.fleet_id),
-    deliveryId: BigInt(String(record.delivery_id ?? 0)),
+    fleetId: record.fleet_id === null || record.fleet_id === undefined ? undefined : BigInt(String(record.fleet_id)),
+    deliveryId: Number(record.delivery_id ?? 0),
     holdbackStartedAt: record.holdback_started_at === null ? undefined : Number(record.holdback_started_at),
   };
 }

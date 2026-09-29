@@ -33,7 +33,9 @@ export interface CreateEscrowBatchParams {
     deliveryId: bigint;
     driver: string;
     amount: bigint;
+    fleetId?: bigint;
   }>;
+  fleetId?: bigint;
 }
 
 export interface ReleaseEscrowParams {
@@ -68,6 +70,15 @@ export interface ReleaseHoldbackEscrowParams {
   deliveryId: bigint;
 }
 
+/**
+ * Parameters for the permissionless `release_expired_holdback` fallback
+ * (Issue #452). No `caller` is required — anyone may submit it once the
+ * holdback window has elapsed.
+ */
+export interface ReleaseExpiredHoldbackParams {
+  deliveryId: bigint;
+}
+
 export interface MarkHoldbackEscrowParams {
   caller: string;
   deliveryId: bigint;
@@ -80,6 +91,19 @@ export interface FreezeFundsParams {
 
 export interface ReclaimExpiredEscrowParams {
   deliveryId: bigint;
+}
+
+/**
+ * Parameters for the admin-only `sweep_untracked_balance` operation
+ * (Issue #450).
+ */
+export interface SweepParams {
+  /** Contract admin authorising the sweep. */
+  admin: string;
+  /** Token whose untracked balance is swept. */
+  token: string;
+  /** Treasury wallet the untracked balance is transferred to. */
+  recipient: string;
 }
 
 export interface SetSettlementContractParams {

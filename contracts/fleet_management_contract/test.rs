@@ -6,7 +6,7 @@ use escrow_contract::EscrowContract;
 use identity_reputation_contract::IdentityReputationContract;
 use shared_types::{CargoCategory, CargoDescriptor, DeliveryMetadata, DeliveryStatus, EscrowStatus};
 use soroban_sdk::{
-    testutils::{Address as _, Events, Ledger as _},
+    testutils::{storage::Persistent as _, Address as _, Events, Ledger as _},
     xdr, Address, Env, Symbol, TryFromVal, TryIntoVal, Val,
 };
 
@@ -1751,4 +1751,48 @@ fn test_get_fleet_roster_limit_beyond_active_count_is_clamped() {
         page,
         soroban_sdk::vec![&env, drivers[1].clone(), drivers[2].clone()]
     );
+}
+
+// ── Issue #436 — remove_driver_from_fleet must extend the fleet TTL ───────────
+//
+// The active-driver decrement branch inside `remove_driver_from_fleet` rewrites
+// `DataKey::Fleet` but was the only fleet-profile writer in the contract that
+// did not pair its `set` with `extend_ttl`, letting the fleet's active profile
+// drift out of sync with its mutation cycle and expire prematurely. This test
+// pins the invariant: the `fleet_key` entry's live-until ledger is extended by
+// the removal, not left to decay.
+
+/// After an active driver is removed, the fleet profile's TTL must be pushed
+/// out to the same `LEDGER_TTL_EXTEND_TO` horizon every other fleet mutation
+/// targets — i.e. the removal is indistinguishable, TTL-wise, from e.g.
+/// `deactivate_fleet`.
+#[test]
+fn test_remove_driver_from_fleet_extends_fleet_profile_ttl() {
+    let (env, client, _admin) = setup_test();
+    let (fleet_id, owner, _treasury) = register_fleet(&env, &client);
+    let driver = Address::generate(&env);
+
+    client.add_driver_to_fleet(&owner, &fleet_id, &driver, &no_co_signers(&env));
+    client.accept_fleet_invite(&fleet_id, &driver);
+
+    let contract_id = client.address.clone();
+    let fleet_key = DataKey::Fleet(fleet_id);
+    let read_fleet_ttl = |env: &Env| -> u32 {
+        env.as_contract(&contract_id, || {
+            env.storage().persistent().get_ttl(&fleet_key)
+        })
+    };
+    let ttl_after_accept = read_fleet_ttl(&env);
+
+    // Let enough ledgers elapse that an unextended entry would be measurably
+    // closer to expiry, then remove the active driver.
+    env.ledger().with_mut(|li| li.timestamp += 100_000);
+    client.remove_driver_from_fleet(&fleet_id, &driver, &driver, &no_co_signers(&env));
+
+    let ttl_after_removal = read_fleet_ttl(&env);
+
+    // The removal rewrote the profile, so the entry must have been refreshed
+    // back to the full extend-to horizon.
+    assert_eq!(ttl_after_removal, ttl_after_accept);
+    assert!(ttl_after_removal >= ttl::LEDGER_TTL_EXTEND_TO);
 }

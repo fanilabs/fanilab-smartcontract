@@ -2,7 +2,7 @@ use super::*;
 use proptest::prelude::*;
 use shared_types::FaniLabError;
 use soroban_sdk::{
-    testutils::{Address as _, Events},
+    testutils::{Address as _, Events, Ledger as _},
     xdr, Address, Env, Symbol, TryFromVal, Val,
 };
 
@@ -34,6 +34,40 @@ proptest! {
         prop_assert!(reputation_up(score.min(MAX_REPUTATION), points) <= MAX_REPUTATION);
         prop_assert!(reputation_down(score.min(MAX_REPUTATION), points) <= MAX_REPUTATION);
     }
+}
+
+/// Like `setup`, but wires the real delivery and escrow contracts so that the
+/// `require_escrow_not_paused` cross-call made by `increase_reputation` /
+/// `award_reputation` resolves. Without this the reputation entry points panic
+/// on the very first storage read.
+#[allow(clippy::type_complexity)]
+fn setup_wired() -> (
+    Env,
+    Address,
+    IdentityReputationContractClient<'static>,
+    Address,
+    Address,
+) {
+    let env = Env::default();
+    env.mock_all_auths_allowing_non_root_auth();
+
+    let escrow_id = env.register(escrow_contract::EscrowContract, ());
+    let delivery_id = env.register(delivery_contract::DeliveryContract, ());
+    let identity_id = env.register(IdentityReputationContract, ());
+
+    let admin = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = env
+        .register_stellar_asset_contract_v2(token_admin)
+        .address();
+
+    escrow_contract::EscrowContractClient::new(&env, &escrow_id).init(&admin, &token, &0);
+    delivery_contract::DeliveryContractClient::new(&env, &delivery_id).init(&admin, &escrow_id);
+
+    let client = IdentityReputationContractClient::new(&env, &identity_id);
+    let dispute_contract = Address::generate(&env);
+    client.init(&admin, &delivery_id, &dispute_contract);
+    (env, admin, client, delivery_id, dispute_contract)
 }
 
 fn setup() -> (
@@ -1063,4 +1097,84 @@ fn test_existing_flows_unaffected_for_active_drivers() {
     assert_eq!(profile.reputation_score, 57);
     assert_eq!(profile.status, shared_types::DriverStatus::Active);
     assert!(!client.is_driver_suspended(&driver));
+}
+
+// ── Issue #437 — reputation arithmetic must not overflow ──────────────────────
+//
+// `increase_reputation` derives the per-delivery point total from the
+// admin-configurable `ReputationConfig`. The accumulation used a raw `+=` on
+// `u32`, which overflows (and panics, since the release profile enables
+// `overflow-checks`) if the configured fields are large enough to wrap —
+// permanently bricking reputation credit for every subsequent delivery. The
+// total must be well-defined regardless of configuration, and the score must
+// always land on the `MAX_REPUTATION` ceiling.
+
+/// The largest point values `set_reputation_config` will accept (each field is
+/// bounded by `MAX_REPUTATION`), combined for a heavy + fragile delivery. Even
+/// at the configuration ceiling the call must succeed and clamp the score
+/// rather than overflow the `u32` accumulation.
+#[test]
+fn test_increase_reputation_large_config_does_not_overflow() {
+    let (env, admin, client, delivery_contract, _) = setup_wired();
+    let driver = Address::generate(&env);
+    client.register_driver(&driver);
+
+    // Every field at the maximum the setter permits.
+    client.set_reputation_config(
+        &admin,
+        &ReputationConfig {
+            base_points: MAX_REPUTATION,
+            heavy_cargo_points: MAX_REPUTATION,
+            fragile_points: MAX_REPUTATION,
+        },
+    );
+
+    // base + heavy + fragile: the exact accumulation that used to wrap.
+    client.increase_reputation(&delivery_contract, &driver, &1u64, &10_000u32, &true);
+
+    let profile = client.get_driver_profile(&driver);
+    assert_eq!(profile.reputation_score, MAX_REPUTATION);
+    assert_eq!(profile.deliveries_completed, 1);
+}
+
+/// Repeated maximum-size deliveries must keep crediting reputation rather than
+/// panicking partway through, and must stay pinned at the ceiling.
+#[test]
+fn test_increase_reputation_repeated_maximum_deliveries_stay_bounded() {
+    let (env, admin, client, delivery_contract, _) = setup_wired();
+    let driver = Address::generate(&env);
+    client.register_driver(&driver);
+
+    client.set_reputation_config(
+        &admin,
+        &ReputationConfig {
+            base_points: MAX_REPUTATION,
+            heavy_cargo_points: MAX_REPUTATION,
+            fragile_points: MAX_REPUTATION,
+        },
+    );
+
+    for i in 0..5u64 {
+        client.increase_reputation(&delivery_contract, &driver, &i, &10_000u32, &true);
+    }
+
+    let profile = client.get_driver_profile(&driver);
+    assert_eq!(profile.reputation_score, MAX_REPUTATION);
+    assert_eq!(profile.deliveries_completed, 5);
+}
+
+/// `award_reputation` now routes through the same `reputation_up` helper as
+/// `increase_reputation`, so a huge flat award clamps instead of overflowing.
+#[test]
+fn test_award_reputation_huge_points_clamp_instead_of_overflowing() {
+    let (env, _, client, _, dispute_contract) = setup_wired();
+    let driver = Address::generate(&env);
+    client.register_driver(&driver);
+
+    client.award_reputation(&dispute_contract, &driver, &u32::MAX);
+
+    assert_eq!(
+        client.get_driver_profile(&driver).reputation_score,
+        MAX_REPUTATION
+    );
 }

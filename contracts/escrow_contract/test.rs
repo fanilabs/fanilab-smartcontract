@@ -5774,3 +5774,261 @@ fn test_batch_zero_amount_rejected() {
         _ => panic!("Expected EscrowError::InvalidAmount for a zero-amount escrow"),
     }
 }
+
+// ── Issue #466 — confirm_delivery bypass via direct escrow calls ──────────────
+//
+// The architecture expects a recipient to finalize a delivery by calling
+// `delivery_contract::confirm_delivery`, which advances the delivery record,
+// awards the driver reputation, and *then* cross-calls the escrow. Both
+// `release_escrow` and `mark_holdback_escrow` used to authorize on
+// `caller == record.recipient` alone, so a recipient could call them straight
+// on this contract: the driver got paid, the escrow went to `Released`, and
+// the later `confirm_delivery` then panicked because the escrow was no longer
+// `Locked` — stranding the delivery in `InTransit` forever and permanently
+// denying the driver the reputation they earned.
+//
+// These tests pin the corrected authorization boundary: once a delivery
+// contract is configured, only it (or an admin) may drive those transitions.
+
+/// Wire the real delivery → escrow → identity chain, fund one in-transit
+/// delivery, and leave it in the `Locked` state that the exploit needs.
+/// Unlike `setup_confirmed_delivery_in_holdback` the delivery is *not*
+/// confirmed: the escrow is still `Locked` and the driver has no reputation
+/// yet, so the recipient still has the bypass available to attempt.
+#[allow(clippy::type_complexity)]
+fn setup_locked_delivery_with_configured_delivery(
+    amount: i128,
+) -> (
+    Env,
+    Address,
+    Address,
+    Address,
+    Address,
+    Address,
+    Address,
+    u64,
+) {
+    let env = Env::default();
+    env.mock_all_auths_allowing_non_root_auth();
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let driver = Address::generate(&env);
+
+    let delivery_contract_id = env.register(delivery_contract::DeliveryContract, ());
+    let escrow_contract_id = env.register(EscrowContract, ());
+    let identity_contract_id =
+        env.register(identity_reputation_contract::IdentityReputationContract, ());
+
+    let delivery_client =
+        delivery_contract::DeliveryContractClient::new(&env, &delivery_contract_id);
+    let escrow_client = EscrowContractClient::new(&env, &escrow_contract_id);
+    let identity_client = identity_reputation_contract::IdentityReputationContractClient::new(
+        &env,
+        &identity_contract_id,
+    );
+
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+
+    escrow_client.init(&admin, &token, &0);
+    delivery_client.init(&admin, &escrow_contract_id);
+    identity_client.init(&admin, &delivery_contract_id, &Address::generate(&env));
+    delivery_client.set_identity_reputation_contract(&admin, &identity_contract_id);
+
+    identity_client.register_driver(&driver);
+    mint(&env, &token, &sender, amount);
+
+    let metadata = make_delivery_metadata(&env, 0);
+    let delivery_id = delivery_client.create_delivery(&sender, &recipient, &metadata);
+    escrow_client.create_escrow(
+        &sender,
+        &recipient,
+        &driver,
+        &u64::from(delivery_id),
+        &token,
+        &amount,
+        &None,
+    );
+    delivery_client.assign_driver(&admin, &delivery_id, &driver);
+    delivery_client.mark_in_transit(&driver, &delivery_id);
+    // Wired only after funding: the escrow's `verify_delivery_if_configured`
+    // cross-call is a pre-existing broken path (it passes a bare `u64` to
+    // delivery's `get_delivery(DeliveryId)`), unrelated to this issue. The
+    // gate under test is read at call time, so configuring the peer here is
+    // equivalent and keeps this test focused on Issue #466.
+    escrow_client.set_delivery_contract(&admin, &delivery_contract_id);
+
+    (
+        env,
+        escrow_contract_id,
+        identity_contract_id,
+        token,
+        admin,
+        recipient,
+        driver,
+        u64::from(delivery_id),
+    )
+}
+
+/// The reported exploit: a recipient calls `release_escrow` directly on the
+/// escrow contract. This must be rejected, leaving the escrow `Locked`, the
+/// funds in custody, and the delivery confirmable.
+#[test]
+fn test_recipient_cannot_release_escrow_directly_bypassing_confirm_delivery() {
+    let (env, escrow_id, _identity_id, token, _admin, recipient, driver, delivery_id) =
+        setup_locked_delivery_with_configured_delivery(1000);
+    let escrow_client = EscrowContractClient::new(&env, &escrow_id);
+    let delivery_client = delivery_contract::DeliveryContractClient::new(
+        &env,
+        &escrow_client
+            .get_delivery_contract()
+            .expect("delivery contract configured"),
+    );
+
+    let result = escrow_client.try_release_escrow(&recipient, &delivery_id);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::Unauthorized.into()),
+        _ => panic!("Expected FaniLabError::Unauthorized for a direct recipient release"),
+    }
+
+    // Nothing moved: the escrow is untouched, the driver is unpaid, and the
+    // delivery is still confirmable — i.e. not permanently stranded.
+    assert_eq!(
+        escrow_client.get_escrow(&delivery_id).status,
+        EscrowStatus::Locked
+    );
+    assert_eq!(balance(&env, &token, &driver), 0);
+    assert_eq!(balance(&env, &token, &escrow_id), 1000);
+    assert_eq!(escrow_client.get_total_locked(&token), 1000);
+    assert_eq!(
+        delivery_client.get_delivery(&delivery_id.into()).status,
+        shared_types::DeliveryStatus::InTransit
+    );
+}
+
+/// The same bypass applied to `mark_holdback_escrow`: moving the escrow to
+/// `Holdback` without confirming the delivery is equally state-breaking,
+/// because the driver is credited reputation only inside `confirm_delivery`.
+#[test]
+fn test_recipient_cannot_mark_holdback_directly_bypassing_confirm_delivery() {
+    let (env, escrow_id, _identity_id, _token, _admin, recipient, _driver, delivery_id) =
+        setup_locked_delivery_with_configured_delivery(1000);
+    let escrow_client = EscrowContractClient::new(&env, &escrow_id);
+
+    let result = escrow_client.try_mark_holdback_escrow(&recipient, &delivery_id);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::Unauthorized.into()),
+        _ => panic!("Expected FaniLabError::Unauthorized for a direct holdback mark"),
+    }
+
+    assert_eq!(
+        escrow_client.get_escrow(&delivery_id).status,
+        EscrowStatus::Locked
+    );
+}
+
+/// An unrelated third party must not be able to drive these transitions
+/// either — the gate is "the delivery contract or an admin", not a
+/// recipient-shaped hole.
+#[test]
+fn test_stranger_cannot_drive_delivery_lifecycle_transitions() {
+    let (env, escrow_id, _identity_id, _token, _admin, _recipient, _driver, delivery_id) =
+        setup_locked_delivery_with_configured_delivery(1000);
+    let escrow_client = EscrowContractClient::new(&env, &escrow_id);
+    let stranger = Address::generate(&env);
+
+    for result in [
+        escrow_client.try_release_escrow(&stranger, &delivery_id),
+        escrow_client.try_mark_holdback_escrow(&stranger, &delivery_id),
+    ] {
+        match result {
+            Err(Ok(err)) => assert_eq!(err, FaniLabError::Unauthorized.into()),
+            _ => panic!("Expected FaniLabError::Unauthorized for a stranger caller"),
+        }
+    }
+
+    assert_eq!(
+        escrow_client.get_escrow(&delivery_id).status,
+        EscrowStatus::Locked
+    );
+}
+
+/// The legitimate path is unaffected: the configured `delivery_contract` is
+/// accepted, which is exactly what `delivery_contract::confirm_delivery` now
+/// passes (its own address instead of the recipient's). Asserted here directly
+/// rather than through a full `confirm_delivery` round-trip because that path
+/// currently trips an unrelated, pre-existing re-entrancy failure inside
+/// `identity_reputation_contract::require_escrow_not_paused`, which calls back
+/// into the delivery contract while it is mid-invocation.
+#[test]
+fn test_configured_delivery_contract_may_drive_the_transitions() {
+    let (env, escrow_id, _identity_id, token, _admin, recipient, driver, delivery_id) =
+        setup_locked_delivery_with_configured_delivery(1000);
+    let escrow_client = EscrowContractClient::new(&env, &escrow_id);
+    let delivery_contract_addr = escrow_client
+        .get_delivery_contract()
+        .expect("delivery contract configured");
+
+    // This is the address `confirm_delivery` supplies.
+    escrow_client.mark_holdback_escrow(&delivery_contract_addr, &delivery_id);
+    assert_eq!(
+        escrow_client.get_escrow(&delivery_id).status,
+        EscrowStatus::Holdback
+    );
+
+    // And the settlement out of Holdback is untouched by this fix: that
+    // transition is recipient-driven and still is.
+    escrow_client.release_holdback_escrow(&recipient, &delivery_id);
+    assert_eq!(
+        escrow_client.get_escrow(&delivery_id).status,
+        EscrowStatus::Released
+    );
+    assert_eq!(balance(&env, &token, &driver), 1000);
+}
+
+/// An admin keeps the recovery path the fix intentionally preserves: an
+/// escrow left inconsistent by the pre-fix exploit can still be settled
+/// rather than being permanently stuck.
+#[test]
+fn test_admin_can_still_release_escrow_after_the_gate_is_added() {
+    let (env, escrow_id, _identity_id, token, admin, _recipient, driver, delivery_id) =
+        setup_locked_delivery_with_configured_delivery(1000);
+    let escrow_client = EscrowContractClient::new(&env, &escrow_id);
+
+    escrow_client.release_escrow(&admin, &delivery_id);
+
+    assert_eq!(
+        escrow_client.get_escrow(&delivery_id).status,
+        EscrowStatus::Released
+    );
+    assert_eq!(balance(&env, &token, &driver), 1000);
+}
+
+/// Deployments that have not wired up a delivery contract keep the legacy
+/// recipient path, matching the optional-integration precedent established by
+/// `verify_delivery_if_configured` (Issue #295). There is no confirmation
+/// state machine to strand in that configuration.
+#[test]
+fn test_recipient_release_still_allowed_when_delivery_contract_unconfigured() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let driver = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+
+    client.init(&admin, &token, &0);
+    assert_eq!(client.get_delivery_contract(), None);
+    mint(&env, &token, &sender, 1000);
+
+    client.create_escrow(&sender, &recipient, &driver, &9500u64, &token, &1000, &None);
+    client.release_escrow(&recipient, &9500u64);
+
+    assert_eq!(client.get_escrow(&9500u64).status, EscrowStatus::Released);
+    assert_eq!(balance(&env, &token, &driver), 1000);
+}

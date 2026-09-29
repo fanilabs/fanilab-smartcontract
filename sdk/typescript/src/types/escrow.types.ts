@@ -15,6 +15,12 @@ export interface UpdatePlatformFeeParams {
   newFeeBps: number;
 }
 
+export interface SweepUntrackedBalanceParams {
+  admin: string;
+  token: string;
+  recipient: string;
+}
+
 export interface CreateEscrowParams {
   sender: string;
   recipient: string;

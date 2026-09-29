@@ -157,6 +157,16 @@ Get all escrow IDs for a recipient.
 ##### `getEscrowsByDriver(driver: string): Promise<bigint[]>`
 Get all escrow IDs for a driver.
 
+##### `getTotalLocked(token: string): Promise<bigint>`
+Get the total amount of the token currently locked by escrows.
+
+##### `getUntrackedBalance(token: string): Promise<bigint>`
+Get the contract's token balance that is not tracked as locked escrow funds.
+
+##### `sweepUntrackedBalance(params: SweepUntrackedBalanceParams): Promise<bigint>`
+Sweep the untracked balance to a recipient (admin only) and return the amount
+transferred.
+
 ### DeliveryClient
 
 #### Methods

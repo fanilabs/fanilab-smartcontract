@@ -1,13 +1,21 @@
-import { ContractInvoker } from './invoker';
+jest.mock('./invoker', () => ({
+  ContractInvoker: jest.fn().mockImplementation(() => ({ call: jest.fn() })),
+  address: (value: string) => value,
+  u64: (value: bigint | number) => BigInt(value),
+}));
+
 import { DeliveryClient } from './delivery.client';
 
-describe('DeliveryClient contract aggregations', () => {
-  afterEach(() => {
-    jest.restoreAllMocks();
-  });
+function getCall(client: DeliveryClient): jest.Mock {
+  const invoker = Reflect.get(client, 'invoker') as object;
+  return Reflect.get(invoker, 'call') as jest.Mock;
+}
 
+describe('DeliveryClient contract aggregations', () => {
   it('reads the driver profile through delivery_contract', async () => {
-    const call = jest.spyOn(ContractInvoker.prototype, 'call').mockResolvedValue({
+    const client = new DeliveryClient('CDELIVERY', { identityContractId: 'CIDENTITY' });
+    const call = getCall(client);
+    call.mockResolvedValue({
       address: 'GDRIVER',
       deliveries_completed: 7,
       reputation_score: 42,
@@ -15,7 +23,6 @@ describe('DeliveryClient contract aggregations', () => {
       kyc_verified: true,
       status: 'Active',
     });
-    const client = new DeliveryClient('CDELIVERY', { identityContractId: 'CIDENTITY' });
 
     await expect(client.getDriverProfile('GDRIVER')).resolves.toEqual({
       address: 'GDRIVER',
@@ -30,7 +37,8 @@ describe('DeliveryClient contract aggregations', () => {
   });
 
   it('decodes the aggregated delivery and optional escrow tuple', async () => {
-    jest.spyOn(ContractInvoker.prototype, 'call').mockResolvedValue([
+    const client = new DeliveryClient('CDELIVERY');
+    getCall(client).mockResolvedValue([
       {
         delivery_id: 9n,
         sender: 'GSENDER',
@@ -52,7 +60,6 @@ describe('DeliveryClient contract aggregations', () => {
       null,
       false,
     ]);
-    const client = new DeliveryClient('CDELIVERY');
 
     await expect(client.getCombinedState(9n)).resolves.toMatchObject({
       delivery: { deliveryId: 9n },

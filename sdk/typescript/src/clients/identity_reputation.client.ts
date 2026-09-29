@@ -2,7 +2,7 @@
  * Typed SDK client for IdentityReputationContract
  */
 
-import { ContractInvokeOptions, DriverProfile, DriverTier, ReputationConfig, UserProfile } from '../types/common.types';
+import { ContractInvokeOptions, DriverProfile, DriverStatus, DriverTier, ReputationConfig, UserProfile } from '../types/common.types';
 import * as IdentityReputationTypes from '../types/identity_reputation.types';
 import { ContractInvoker, address, bool, map, u32, u64 } from './invoker';
 
@@ -160,5 +160,13 @@ function decodeDriverProfile(value: unknown): DriverProfile {
     reputationScore: Number(profile.reputation_score ?? 0),
     registeredAt: Number(profile.registered_at ?? 0),
     kycVerified: Boolean(profile.kyc_verified),
+    status: decodeDriverStatus(profile.status),
   };
+}
+
+function decodeDriverStatus(value: unknown): DriverStatus {
+  const status = String(value ?? '');
+  return status === DriverStatus.Suspended
+    ? DriverStatus.Suspended
+    : DriverStatus.Active;
 }

@@ -6,6 +6,14 @@ import { ContractInvokeOptions, DriverFleetStatus, FleetProfile, PendingTreasury
 import * as FleetManagementTypes from '../types/fleet_management.types';
 import { ContractInvoker, address, u32, u64, vec } from './invoker';
 
+/**
+ * Maximum roster entries the contract returns for a single `get_fleet_roster`
+ * call, mirroring `MAX_ROSTER_PAGE_SIZE` in fleet_management_contract. The
+ * contract clamps any larger `limit`, so this is a client-side convenience
+ * default for a single full-page read.
+ */
+const DEFAULT_ROSTER_PAGE_SIZE = 100;
+
 export class FleetManagementClient {
   private readonly invoker: ContractInvoker;
 
@@ -83,8 +91,14 @@ export class FleetManagementClient {
     return result == null ? null : (result as DriverFleetStatus);
   }
 
-  async getFleetRoster(fleetId: bigint, options?: ContractInvokeOptions): Promise<string[]> {
-    const result = await this.invoker.call('get_fleet_roster', [u64(fleetId)], options);
+  async getFleetRoster(params: FleetManagementTypes.GetFleetRosterParams, options?: ContractInvokeOptions): Promise<string[]> {
+    const offset = params.offset ?? 0;
+    const limit = params.limit ?? DEFAULT_ROSTER_PAGE_SIZE;
+    const result = await this.invoker.call(
+      'get_fleet_roster',
+      [u64(params.fleetId), u32(offset), u32(limit)],
+      options
+    );
     return (result as unknown[]).map((value) => String(value));
   }
 

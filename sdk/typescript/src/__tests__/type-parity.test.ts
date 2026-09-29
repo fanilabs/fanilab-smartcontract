@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 
-import { DeliveryStatus, EscrowStatus } from '../types/common.types';
+import { DeliveryStatus, DriverStatus, EscrowStatus } from '../types/common.types';
 
 const CONTRACT_TYPES_PATH = path.resolve(
   __dirname,
@@ -81,5 +81,28 @@ describe('SDK type parity with contracts/shared_types', () => {
   test('parity test itself fails when a variant is dropped from the SDK enum', () => {
     const sdkVariants = Object.values(EscrowStatus).filter((v) => v !== 'Paused');
     expect(() => expectExactParity(sdkVariants, unitEnumVariants(src, 'EscrowState'))).toThrow();
+  });
+
+  // Issue #439 — DriverProfile.status must survive SDK decoding.
+  test('DriverStatus matches every DriverStatus variant defined by the contract', () => {
+    const contractVariants = unitEnumVariants(src, 'DriverStatus');
+    expect(contractVariants).toEqual(['Active', 'Suspended']);
+    expectExactParity(Object.values(DriverStatus), contractVariants);
+  });
+
+  test('DriverProfile carries the contract status field', () => {
+    const fields = extractBlock(src, 'struct', 'DriverProfile')
+      .split('\n')
+      .map((line) => line.trim().replace(/^pub\s+/, ''))
+      .filter((line) => /^[a-z_]+:/.test(line))
+      .map((line) => line.split(':')[0].trim());
+    expect(fields).toEqual([
+      'address',
+      'deliveries_completed',
+      'reputation_score',
+      'registered_at',
+      'kyc_verified',
+      'status',
+    ]);
   });
 });

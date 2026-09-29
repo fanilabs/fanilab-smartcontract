@@ -410,6 +410,11 @@ impl FleetManagementContract {
     ///   new owner has immediate unilateral control.  If the fleet used a
     ///   multi-sig configuration the admin (or the new owner) can restore it
     ///   via `configure_signers` after recovery.
+    /// - Any in-progress `PendingTreasury` change proposed by the evicted
+    ///   owner is discarded (Issue #441).  Otherwise, once that timelock
+    ///   expires anyone could call `confirm_fleet_treasury_update` and apply
+    ///   the evicted owner's address as the fleet treasury, hijacking payouts
+    ///   away from the new owner.
     #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
     pub fn admin_reassign_fleet_owner(env: Env, admin: Address, fleet_id: u64, new_owner: Address) {
         env.storage().instance().extend_ttl(ttl::LEDGER_TTL_THRESHOLD, ttl::LEDGER_TTL_EXTEND_TO);
@@ -443,6 +448,16 @@ impl FleetManagementContract {
             ttl::LEDGER_TTL_THRESHOLD,
             ttl::LEDGER_TTL_EXTEND_TO,
         );
+
+        // Discard any in-progress treasury change proposed by the evicted
+        // owner.  `confirm_fleet_treasury_update` is permissionless, so leaving
+        // the pending entry in place would let anyone finalize the evicted
+        // owner's proposal once its timelock expires and redirect the fleet's
+        // payouts (Issue #441).
+        let pending_key = DataKey::PendingTreasury(fleet_id);
+        if env.storage().persistent().has(&pending_key) {
+            env.storage().persistent().remove(&pending_key);
+        }
 
         env.events().publish(
             (events::fleet_owner_reassigned(&env),),
@@ -715,6 +730,13 @@ impl FleetManagementContract {
     /// Unlike `remove_driver_from_fleet` (bilateral severance of an already
     /// active relationship), this withdraws an invite the driver never
     /// accepted, clearing the slot so the driver can be re-invited immediately.
+    ///
+    /// Consistent with `remove_driver_from_fleet`, the invite record is *not*
+    /// deleted from persistent storage: it transitions to the terminal
+    /// `Removed` state and its TTL is extended, preserving the historical
+    /// record for on-chain audit (Issue #440).  `add_driver_to_fleet` treats
+    /// `Removed` as re-invitable, so the driver can still be re-invited
+    /// immediately afterward.
     /// `co_signers` supplies any additional signer authorizations needed to
     /// satisfy the fleet's `signature_threshold` beyond `owner` alone — pass
     /// an empty vec for a threshold-1 fleet (the common case).
@@ -748,7 +770,17 @@ impl FleetManagementContract {
             panic_with_error!(&env, FleetError::DriverAlreadyActive);
         }
 
-        env.storage().persistent().remove(&invite_key);
+        // Transition to the terminal Removed state instead of deleting the
+        // record, matching `remove_driver_from_fleet` so a cancelled invite
+        // still leaves an on-chain audit trail (Issue #440).
+        env.storage()
+            .persistent()
+            .set(&invite_key, &DriverFleetStatus::Removed);
+        env.storage().persistent().extend_ttl(
+            &invite_key,
+            ttl::LEDGER_TTL_THRESHOLD,
+            ttl::LEDGER_TTL_EXTEND_TO,
+        );
     }
 
     // ── Issue #69 — accept_fleet_invite ───────────────────────────────────────
@@ -993,9 +1025,25 @@ impl FleetManagementContract {
             .get(&DataKey::DriverFleet(fleet_id, driver))
     }
 
-    /// Return the roster of all active drivers for a fleet.
-    /// Returns an empty Vec if no drivers are active in the fleet.
-    pub fn get_fleet_roster(env: Env, fleet_id: u64) -> soroban_sdk::Vec<Address> {
+    /// Return one page of the active driver roster for a fleet.
+    ///
+    /// The roster is stored as individually keyed entries
+    /// (`DataKey::FleetRoster(fleet_id, index)`), so enumerating it in a single
+    /// call would issue one persistent read per driver and unconditionally
+    /// exceed Soroban's ledger read-entry limits for large fleets (Issue
+    /// #442).  Callers therefore pass an `offset` and a `limit`; the limit is
+    /// clamped to [`MAX_ROSTER_PAGE_SIZE`] so a single invocation can never
+    /// read an unbounded number of entries.
+    ///
+    /// The returned page is clamped to the fleet's actual active driver count.
+    /// Returns an empty Vec if no drivers are active in the fleet or if
+    /// `offset` is past the end of the roster.
+    pub fn get_fleet_roster(
+        env: Env,
+        fleet_id: u64,
+        offset: u32,
+        limit: u32,
+    ) -> soroban_sdk::Vec<Address> {
         let mut roster = soroban_sdk::Vec::new(&env);
         let active_count = env
             .storage()
@@ -1004,7 +1052,12 @@ impl FleetManagementContract {
             .map(|profile| profile.total_active_drivers)
             .unwrap_or(0);
 
-        for index in 0..active_count {
+        // Clamp both ends of the window so neither an offset past the end nor
+        // an oversized limit can drive unbounded reads.
+        let page_size = limit.min(MAX_ROSTER_PAGE_SIZE);
+        let end = offset.saturating_add(page_size).min(active_count);
+
+        for index in offset..end {
             if let Some(driver) = env
                 .storage()
                 .persistent()

@@ -42,7 +42,7 @@ These indexes are automatically maintained by the respective contracts and are b
 - `get_escrows_by_driver(driver: Address) -> Vec<u64>` — all escrow delivery IDs for driver
 
 **Fleet Management Contract:**
-- `get_fleet_roster(fleet_id: FleetId) -> Vec<Address>` — active drivers in a fleet
+- `get_fleet_roster(fleet_id: FleetId, offset: u32, limit: u32) -> Vec<Address>` — a page of active drivers in a fleet (limit clamped to 100)
 
 ### Interim: Event-Replay Indexing
 
@@ -1890,6 +1890,8 @@ Cancel a driver's pending invite before it has been accepted.
 
 **Authorization:** An authorized signer for the fleet
 
+**Behavior:** Transitions the invite record to the terminal `Removed` state (the record is preserved, not deleted) and extends its TTL, consistent with `remove_driver_from_fleet`. A previously cancelled driver can be re-invited.
+
 **Errors:**
 - `FleetNotFound` - No fleet with that ID exists
 - `InviteNotFound` - No pending invite exists for this driver
@@ -1947,12 +1949,16 @@ Return the fleet membership status of a driver, or `None` if no record exists.
 **Returns:** `Option<DriverFleetStatus>`
 
 #### `get_fleet_roster`
-Return the active roster of drivers for a fleet.
+Return a page of the active roster of drivers for a fleet.
 
 **Parameters:**
 - `fleet_id: FleetId` - Fleet identifier
+- `offset: u32` - Roster index to start reading from
+- `limit: u32` - Maximum entries to return, clamped to `MAX_ROSTER_PAGE_SIZE` (100)
 
-**Returns:** `Vec<Address>`
+**Returns:** `Vec<Address>` — the requested page, clamped to the fleet's actual active driver count
+
+**Notes:** The roster is stored as individually keyed entries, so unbounded enumeration would exceed Soroban's ledger read-entry limits for large fleets (Issue #442). Iterate `offset` in `limit`-sized steps to page through the full roster.
 
 #### `configure_signers`
 Configure the signer set and signature threshold for a fleet.
@@ -2535,12 +2541,14 @@ Get driver's status in a fleet.
 ### Enumeration
 
 #### `get_fleet_roster`
-Get all drivers in a fleet (both pending and active).
+Get a page of drivers in a fleet (both pending and active).
 
 **Parameters:**
 - `fleet_id: FleetId` - Fleet identifier
+- `offset: u32` - Roster index to start reading from
+- `limit: u32` - Maximum entries to return, clamped to `MAX_ROSTER_PAGE_SIZE` (100)
 
-**Returns:** `Vec<Address>` — list of driver addresses
+**Returns:** `Vec<Address>` — list of driver addresses for the requested page
 
 ---
 

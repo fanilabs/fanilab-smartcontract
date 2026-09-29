@@ -41,6 +41,12 @@ export enum DriverFleetStatus {
   Removed = 'Removed',
 }
 
+/** Mirrors the contract's `DriverStatus` enum in `shared_types`. */
+export enum DriverStatus {
+  Active = 'Active',
+  Suspended = 'Suspended',
+}
+
 export interface ProtocolConfig {
   token: string;
   platformFeeBps: number;
@@ -75,6 +81,11 @@ export interface DriverProfile {
   reputationScore: number;
   registeredAt: number;
   kycVerified: boolean;
+  /**
+   * Lifecycle status of the driver, mirroring the contract's `DriverStatus`.
+   * `Active` on registration, `Suspended` after an admin `suspend_driver`.
+   */
+  status: DriverStatus;
 }
 
 export interface UserProfile {

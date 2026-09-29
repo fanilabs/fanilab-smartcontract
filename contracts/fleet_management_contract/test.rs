@@ -199,6 +199,54 @@ fn test_admin_force_update_treasury_bypasses_timelock_and_clears_pending_change(
     assert_eq!(client.get_pending_treasury_update(&fleet_id), None);
 }
 
+// Issue #441 — evicted owner's pending treasury update must be discarded.
+#[test]
+fn test_admin_reassign_fleet_owner_clears_pending_treasury_change() {
+    let (env, client, admin) = setup_test();
+    let (fleet_id, owner, treasury) = register_fleet(&env, &client);
+    let malicious_treasury = Address::generate(&env);
+    let new_owner = Address::generate(&env);
+
+    // The soon-to-be-evicted owner proposes a treasury redirect.
+    client.update_fleet_treasury(&owner, &fleet_id, &malicious_treasury, &no_co_signers(&env));
+    assert_eq!(
+        client
+            .get_pending_treasury_update(&fleet_id)
+            .unwrap()
+            .treasury,
+        malicious_treasury
+    );
+
+    client.admin_reassign_fleet_owner(&admin, &fleet_id, &new_owner);
+
+    // The in-flight proposal is gone, so it can never be confirmed later.
+    assert_eq!(client.get_pending_treasury_update(&fleet_id), None);
+
+    // Even once the original timelock has elapsed, confirming fails and the
+    // treasury stays with the original (secure) value.
+    env.ledger()
+        .set_timestamp(env.ledger().timestamp() + TREASURY_CHANGE_TIMELOCK_SECONDS);
+    let result = client.try_confirm_fleet_treasury_update(&fleet_id);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, FleetError::NoPendingTreasuryChange.into()),
+        _ => panic!("Expected FleetError::NoPendingTreasuryChange"),
+    }
+    assert_eq!(client.get_fleet(&fleet_id).treasury, treasury);
+    assert_ne!(client.get_fleet(&fleet_id).treasury, malicious_treasury);
+}
+
+#[test]
+fn test_admin_reassign_fleet_owner_without_pending_treasury_change() {
+    let (env, client, admin) = setup_test();
+    let (fleet_id, _owner, treasury) = register_fleet(&env, &client);
+    let new_owner = Address::generate(&env);
+
+    client.admin_reassign_fleet_owner(&admin, &fleet_id, &new_owner);
+
+    assert_eq!(client.get_pending_treasury_update(&fleet_id), None);
+    assert_eq!(client.get_fleet(&fleet_id).treasury, treasury);
+}
+
 #[test]
 fn test_admin_force_update_treasury_requires_admin() {
     let (env, client, _admin) = setup_test();
@@ -379,9 +427,14 @@ fn test_cancel_invite_allows_immediate_reinvite() {
     client.add_driver_to_fleet(&owner, &fleet_id, &driver, &no_co_signers(&env));
     client.cancel_invite(&owner, &fleet_id, &driver, &no_co_signers(&env));
 
-    assert_eq!(client.get_driver_fleet_status(&fleet_id, &driver), None);
+    // Issue #440: cancellation preserves the record as a terminal `Removed`
+    // state rather than deleting it, matching remove_driver_from_fleet.
+    assert_eq!(
+        client.get_driver_fleet_status(&fleet_id, &driver),
+        Some(DriverFleetStatus::Removed)
+    );
 
-    // Re-inviting immediately afterward must succeed (no DriverAlreadyInvited panic).
+    // Re-inviting immediately afterward must succeed (Removed is re-invitable).
     client.add_driver_to_fleet(&owner, &fleet_id, &driver, &no_co_signers(&env));
     let status = client.get_driver_fleet_status(&fleet_id, &driver);
     assert_eq!(status, Some(DriverFleetStatus::Pending));
@@ -652,7 +705,10 @@ fn test_roster_full_lifecycle_add_accept_remove() {
         Some(DriverFleetStatus::Active)
     );
     assert_eq!(client.get_fleet(&fleet_id).total_active_drivers, 1);
-    assert_eq!(client.get_fleet_roster(&fleet_id), soroban_sdk::vec![&env, driver.clone()]);
+    assert_eq!(
+        client.get_fleet_roster(&fleet_id, &0u32, &100u32),
+        soroban_sdk::vec![&env, driver.clone()]
+    );
 
     // Remove: record deleted, count decrements.
     client.remove_driver_from_fleet(&fleet_id, &owner, &driver, &no_co_signers(&env));
@@ -661,7 +717,7 @@ fn test_roster_full_lifecycle_add_accept_remove() {
         Some(DriverFleetStatus::Removed)
     );
     assert_eq!(client.get_fleet(&fleet_id).total_active_drivers, 0);
-    assert!(client.get_fleet_roster(&fleet_id).is_empty());
+    assert!(client.get_fleet_roster(&fleet_id, &0u32, &100u32).is_empty());
 }
 
 #[test]
@@ -724,7 +780,9 @@ fn test_roster_empty_for_unknown_fleet() {
     let (_env, client, _admin) = setup_test();
     let unknown_fleet_id = 999;
 
-    assert!(client.get_fleet_roster(&unknown_fleet_id).is_empty());
+    assert!(client
+        .get_fleet_roster(&unknown_fleet_id, &0u32, &100u32)
+        .is_empty());
 }
 
 #[test]
@@ -736,8 +794,13 @@ fn test_cancelled_invite_is_not_in_roster() {
     client.add_driver_to_fleet(&owner, &fleet_id, &driver, &no_co_signers(&env));
     client.cancel_invite(&owner, &fleet_id, &driver, &no_co_signers(&env));
 
-    assert!(client.get_fleet_roster(&fleet_id).is_empty());
-    assert_eq!(client.get_driver_fleet_status(&fleet_id, &driver), None);
+    assert!(client.get_fleet_roster(&fleet_id, &0u32, &100u32).is_empty());
+    // Issue #440: the invite record is preserved as a terminal `Removed`
+    // state rather than being deleted, so cancelled invites remain auditable.
+    assert_eq!(
+        client.get_driver_fleet_status(&fleet_id, &driver),
+        Some(DriverFleetStatus::Removed)
+    );
 }
 
 #[test]
@@ -1078,7 +1141,7 @@ fn test_signer_threshold_is_enforced_for_fleet_actions() {
     client.cancel_invite(&owner, &fleet_id, &pending_driver, &co_signer2);
     assert_eq!(
         client.get_driver_fleet_status(&fleet_id, &pending_driver),
-        None
+        Some(DriverFleetStatus::Removed)
     );
 
     client.remove_driver_from_fleet(&fleet_id, &owner, &active_driver, &co_signer2);
@@ -1556,4 +1619,98 @@ fn test_get_payout_address_falls_back_to_driver_after_deactivation() {
     // Once the fleet is deactivated, payouts fall back to the driver's own address.
     client.deactivate_fleet(&owner, &fleet_id);
     assert_eq!(client.get_payout_address(&driver, &fleet_id), driver);
+}
+
+// ── Issue #442 — paginated roster enumeration ────────────────────────────────
+
+/// Fill a fleet's active roster with `count` generated drivers, returning them
+/// in roster index order.
+fn fill_roster(
+    env: &Env,
+    client: &FleetManagementContractClient,
+    fleet_id: &u64,
+    owner: &Address,
+    count: u32,
+) -> std::vec::Vec<Address> {
+    let mut drivers = std::vec::Vec::new();
+    for _ in 0..count {
+        let driver = Address::generate(env);
+        client.add_driver_to_fleet(owner, fleet_id, &driver, &no_co_signers(env));
+        client.accept_fleet_invite(fleet_id, &driver);
+        drivers.push(driver);
+    }
+    drivers
+}
+
+#[test]
+fn test_get_fleet_roster_respects_page_limit() {
+    let (env, client, _admin) = setup_test();
+    let (fleet_id, owner, _treasury) = register_fleet(&env, &client);
+    let drivers = fill_roster(&env, &client, &fleet_id, &owner, 5);
+
+    let page = client.get_fleet_roster(&fleet_id, &0u32, &2u32);
+    assert_eq!(page.len(), 2);
+    assert_eq!(
+        page,
+        soroban_sdk::vec![&env, drivers[0].clone(), drivers[1].clone()]
+    );
+
+    // Second page continues where the first stopped.
+    let page2 = client.get_fleet_roster(&fleet_id, &2u32, &2u32);
+    assert_eq!(page2.len(), 2);
+    assert_eq!(
+        page2,
+        soroban_sdk::vec![&env, drivers[2].clone(), drivers[3].clone()]
+    );
+}
+
+#[test]
+fn test_get_fleet_roster_limit_is_capped_at_max_page_size() {
+    let (env, client, _admin) = setup_test();
+    let (fleet_id, owner, _treasury) = register_fleet(&env, &client);
+    // More active drivers than a single page may return, but few enough to keep
+    // the test fast.
+    let roster_size = MAX_ROSTER_PAGE_SIZE + 5;
+    let drivers = fill_roster(&env, &client, &fleet_id, &owner, roster_size);
+
+    // A caller asking for everything gets at most MAX_ROSTER_PAGE_SIZE entries,
+    // which is what keeps this call within Soroban's ledger read-entry limits.
+    let oversized = client.get_fleet_roster(&fleet_id, &0u32, &u32::MAX);
+    assert_eq!(oversized.len(), MAX_ROSTER_PAGE_SIZE);
+    assert_eq!(oversized.get(0).unwrap(), drivers[0]);
+    assert_eq!(
+        oversized.get(MAX_ROSTER_PAGE_SIZE - 1).unwrap(),
+        drivers[MAX_ROSTER_PAGE_SIZE as usize - 1]
+    );
+
+    // The next page picks up exactly where the capped page stopped.
+    let next = client.get_fleet_roster(&fleet_id, &MAX_ROSTER_PAGE_SIZE, &u32::MAX);
+    assert_eq!(next.len(), roster_size - MAX_ROSTER_PAGE_SIZE);
+    assert_eq!(next.get(0).unwrap(), drivers[MAX_ROSTER_PAGE_SIZE as usize]);
+}
+
+#[test]
+fn test_get_fleet_roster_offset_past_end_returns_empty() {
+    let (env, client, _admin) = setup_test();
+    let (fleet_id, owner, _treasury) = register_fleet(&env, &client);
+    fill_roster(&env, &client, &fleet_id, &owner, 2);
+
+    assert!(client.get_fleet_roster(&fleet_id, &2u32, &10u32).is_empty());
+    assert!(client
+        .get_fleet_roster(&fleet_id, &50u32, &10u32)
+        .is_empty());
+}
+
+#[test]
+fn test_get_fleet_roster_limit_beyond_active_count_is_clamped() {
+    let (env, client, _admin) = setup_test();
+    let (fleet_id, owner, _treasury) = register_fleet(&env, &client);
+    let drivers = fill_roster(&env, &client, &fleet_id, &owner, 3);
+
+    let page = client.get_fleet_roster(&fleet_id, &1u32, &100u32);
+    assert_eq!(page.len(), 2);
+    assert_eq!(
+        page,
+        soroban_sdk::vec![&env, drivers[1].clone(), drivers[2].clone()]
+    );
 }

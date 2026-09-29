@@ -85,3 +85,15 @@ export interface ConfigureSignersParams {
 }
 
 export { DriverFleetStatus, FleetProfile, PendingTreasuryChange };
+
+export interface GetFleetRosterParams {
+  fleetId: bigint;
+  /** Roster index to start reading from. Defaults to 0. */
+  offset?: number;
+  /**
+   * Maximum number of drivers to return. Defaults to
+   * {@link DEFAULT_ROSTER_PAGE_SIZE} and is clamped by the contract to
+   * {@link MAX_ROSTER_PAGE_SIZE}.
+   */
+  limit?: number;
+}

@@ -15,6 +15,26 @@ export interface UpdatePlatformFeeParams {
   newFeeBps: number;
 }
 
+/**
+ * Contract-specific error codes raised by `escrow_contract::EscrowError`.
+ * These are distinct from the shared `FaniLabError` codes in
+ * `common.types.ts`; a panic from this contract may use either table.
+ */
+export const EscrowErrorCodes = {
+  InvalidState: 1,
+  DeliveryNotFound: 2,
+  InsufficientFunds: 3,
+  DuplicateDelivery: 4,
+  InvalidFee: 5,
+  InvalidToken: 6,
+  InvalidAmount: 7,
+  NoPendingSettlementChange: 8,
+  TimelockNotElapsed: 9,
+  InvalidDriver: 10,
+  InvalidParties: 11,
+  BatchTooLarge: 12,
+} as const;
+
 export interface CreateEscrowParams {
   sender: string;
   recipient: string;

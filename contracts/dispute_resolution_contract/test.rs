@@ -979,6 +979,9 @@ fn test_integration_resolve_dispute_split_funds() {
     escrow_client.init(&admin, &token, &0);
     escrow_client.set_dispute_resolution_contract(&admin, &dispute_resolution_id);
     delivery_client.init(&admin, &escrow_contract_id);
+    // Issue #444: delivery::raise_dispute only accepts the configured dispute
+    // contract, so the real integration flows must wire it up.
+    delivery_client.set_dispute_resolution_contract(&admin, &dispute_resolution_id);
     dispute_client.init(
         &admin,
         &delivery_contract_id,
@@ -1082,6 +1085,9 @@ fn test_integration_resolve_dispute_refund_sender_decreases_reputation() {
     escrow_client.init(&admin, &token, &0);
     escrow_client.set_dispute_resolution_contract(&admin, &dispute_resolution_id);
     delivery_client.init(&admin, &escrow_contract_id);
+    // Issue #444: delivery::raise_dispute only accepts the configured dispute
+    // contract, so the real integration flows must wire it up.
+    delivery_client.set_dispute_resolution_contract(&admin, &dispute_resolution_id);
     dispute_client.init(
         &admin,
         &delivery_contract_id,
@@ -1254,6 +1260,9 @@ fn test_integration_resolve_dispute_pay_driver_increases_reputation() {
     escrow_client.init(&admin, &token, &0);
     escrow_client.set_dispute_resolution_contract(&admin, &dispute_resolution_id);
     delivery_client.init(&admin, &escrow_contract_id);
+    // Issue #444: delivery::raise_dispute only accepts the configured dispute
+    // contract, so the real integration flows must wire it up.
+    delivery_client.set_dispute_resolution_contract(&admin, &dispute_resolution_id);
     dispute_client.init(
         &admin,
         &delivery_contract_id,
@@ -1525,6 +1534,9 @@ fn test_configured_values_apply_to_split_and_pay_driver_paths() {
     escrow_client.init(&admin, &token, &0);
     escrow_client.set_dispute_resolution_contract(&admin, &dispute_resolution_id);
     delivery_client.init(&admin, &escrow_contract_id);
+    // Issue #444: delivery::raise_dispute only accepts the configured dispute
+    // contract, so the real integration flows must wire it up.
+    delivery_client.set_dispute_resolution_contract(&admin, &dispute_resolution_id);
     dispute_client.init(
         &admin,
         &delivery_contract_id,
@@ -1827,7 +1839,6 @@ fn test_list_admins_after_multiple_additions_and_removals() {
     let admins = dispute_client.list_admins();
     assert_eq!(admins.len(), 3);
 }
-
 
 // ── FORCE RESOLVE DISPUTE (Issue #51) ──────────────────────────────────────
 

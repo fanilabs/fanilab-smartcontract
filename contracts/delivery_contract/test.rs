@@ -241,14 +241,16 @@ fn setup_full(
     let shipper = Address::generate(env);
     let driver = Address::generate(env);
     let recipient = Address::generate(env);
+    let dispute_id = Address::generate(env);
     client.init(&shipper, &escrow_id);
     client.set_identity_reputation_contract(&shipper, &reputation_id);
+    // `raise_dispute` is restricted to the configured dispute contract
+    // (Issue #444), so the fixture registers one.
+    client.set_dispute_resolution_contract(&shipper, &dispute_id);
     (client, shipper, driver, recipient, escrow_id, reputation_id)
 }
 
-fn setup_with_identity(
-    env: &Env,
-) -> (DeliveryContractClient<'static>, Address, Address, Address) {
+fn setup_with_identity(env: &Env) -> (DeliveryContractClient<'static>, Address, Address, Address) {
     env.mock_all_auths();
     let escrow_id = env.register(MockEscrowContract, ());
     let delivery_id = env.register(DeliveryContract, ());
@@ -259,14 +261,23 @@ fn setup_with_identity(
     let dispute_id = Address::generate(env);
 
     client.init(&admin, &escrow_id);
-    let identity_client = identity_reputation_contract::IdentityReputationContractClient::new(
-        env,
-        &identity_id,
-    );
+    client.set_dispute_resolution_contract(&admin, &dispute_id);
+    let identity_client =
+        identity_reputation_contract::IdentityReputationContractClient::new(env, &identity_id);
     identity_client.init(&admin, &delivery_id, &dispute_id);
     client.set_identity_reputation_contract(&admin, &identity_id);
 
     (client, admin, recipient, identity_id)
+}
+
+/// Returns the dispute contract address configured on the delivery contract.
+///
+/// `raise_dispute` is gated on it (Issue #444), so tests that drive it
+/// directly must impersonate it rather than a delivery party.
+fn dispute_of(client: &DeliveryContractClient) -> Address {
+    client
+        .get_dispute_resolution_contract()
+        .expect("fixture configures a dispute contract")
 }
 
 fn get_test_metadata(env: &Env, delivery_id: u64) -> DeliveryMetadata {
@@ -333,8 +344,10 @@ fn get_driver_profile_reads_identity_reputation_contract() {
     env.mock_all_auths();
 
     let identity_id = env.register(identity_reputation_contract::IdentityReputationContract, ());
-    let identity_client =
-        identity_reputation_contract::IdentityReputationContractClient::new(&env, &identity_id);
+    let identity_client = identity_reputation_contract::IdentityReputationContractClient::new(
+        &env,
+        &identity_id,
+    );
     let driver = Address::generate(&env);
     env.ledger().set_timestamp(100);
     identity_client.register_driver(&driver);
@@ -501,7 +514,7 @@ fn test_dispute_path() {
     client.assign_driver(&driver, &delivery_id, &driver);
     client.mark_in_transit(&driver, &delivery_id);
 
-    client.raise_dispute(&shipper, &delivery_id);
+    client.raise_dispute(&dispute_of(&client), &delivery_id);
 
     let delivery = client.get_delivery(&delivery_id);
     assert_eq!(delivery.status, DeliveryStatus::Disputed);
@@ -568,7 +581,7 @@ fn test_invalid_dispute_when_cancelled() {
     client.assign_driver(&driver, &delivery_id, &driver);
     client.cancel_delivery(&shipper, &delivery_id);
 
-    client.raise_dispute(&shipper, &delivery_id);
+    client.raise_dispute(&dispute_of(&client), &delivery_id);
 }
 
 /// Issue #93 regression test: once a delivery has reached `Disputed`, the
@@ -586,7 +599,7 @@ fn test_cancel_delivery_rejected_once_disputed() {
     client.assign_driver(&driver, &delivery_id, &driver);
     client.mark_in_transit(&driver, &delivery_id);
 
-    client.raise_dispute(&shipper, &delivery_id);
+    client.raise_dispute(&dispute_of(&client), &delivery_id);
     assert_eq!(
         client.get_delivery(&delivery_id).status,
         DeliveryStatus::Disputed
@@ -732,17 +745,39 @@ fn test_unauthorized_confirm_delivery() {
     client.confirm_delivery(&unauthorized, &delivery_id);
 }
 
+/// Issue #444 regression: a plain user — including the delivery parties — can
+/// no longer drive a delivery into `Disputed` directly.
+///
+/// Before the fix `raise_dispute` accepted the sender, recipient, or driver as
+/// long as they authorised the call. That paused the escrow without creating a
+/// `DisputeCase` in `dispute_resolution_contract`, and since every admin
+/// resolution path requires such a case, the escrow funds were locked forever
+/// with no way to release them. Disputes must go through the dispute contract.
 #[test]
-#[should_panic(expected = "1")]
-fn test_unauthorized_raise_dispute() {
+fn test_raise_dispute_direct_user_call_is_unauthorized() {
     let env = Env::default();
     let (client, shipper, driver, recipient, _, _) = setup_full(&env);
     let metadata = get_test_metadata(&env, 1);
     let delivery_id = client.create_delivery(&shipper, &recipient, &metadata);
-    client.assign_driver(&driver, &delivery_id, &driver);
 
-    let unauthorized = Address::generate(&env);
-    client.raise_dispute(&unauthorized, &delivery_id);
+    // A dispute contract IS configured, so the rejection below can only come
+    // from the caller check — not from a missing configuration.
+    assert!(client.get_dispute_resolution_contract().is_some());
+
+    let outsider = Address::generate(&env);
+    for party in [shipper.clone(), recipient.clone(), driver.clone(), outsider] {
+        let result = client.try_raise_dispute(&party, &delivery_id);
+        match result {
+            Err(Ok(err)) => assert_eq!(err, FaniLabError::Unauthorized.into()),
+            _ => panic!("Expected FaniLabError::Unauthorized for a direct user call"),
+        }
+    }
+
+    // Delivery state is untouched: still Pending, not Disputed.
+    assert_eq!(
+        client.get_delivery(&delivery_id).status,
+        DeliveryStatus::Pending
+    );
 }
 
 #[test]
@@ -770,7 +805,7 @@ fn test_dispute_then_resolve_increments_reputation() {
     client.assign_driver(&driver, &delivery_id, &driver);
     client.mark_in_transit(&driver, &delivery_id);
 
-    client.raise_dispute(&shipper, &delivery_id);
+    client.raise_dispute(&dispute_of(&client), &delivery_id);
 
     let delivery = client.get_delivery(&delivery_id);
     assert_eq!(delivery.status, DeliveryStatus::Disputed);
@@ -802,7 +837,7 @@ fn test_dispute_then_resolve_penalizes_driver() {
     client.assign_driver(&driver, &delivery_id, &driver);
     client.mark_in_transit(&driver, &delivery_id);
 
-    client.raise_dispute(&shipper, &delivery_id);
+    client.raise_dispute(&dispute_of(&client), &delivery_id);
 
     let delivery = client.get_delivery(&delivery_id);
     assert_eq!(delivery.status, DeliveryStatus::Disputed);
@@ -1287,7 +1322,7 @@ fn test_raise_dispute_on_delivered_delivery_updates_status() {
     client.assign_driver(&driver, &delivery_id, &driver);
     client.mark_in_transit(&driver, &delivery_id);
 
-    client.raise_dispute(&shipper, &delivery_id);
+    client.raise_dispute(&dispute_of(&client), &delivery_id);
 
     let delivery = client.get_delivery(&delivery_id);
     assert_eq!(delivery.status, DeliveryStatus::Disputed);
@@ -1424,7 +1459,7 @@ fn test_raise_dispute_state_rollback_on_escrow_failure() {
     client.mark_in_transit(&driver, &delivery_id);
 
     // This should panic due to escrow failure (delivery_id 9999)
-    client.raise_dispute(&shipper, &delivery_id);
+    client.raise_dispute(&dispute_of(&client), &delivery_id);
 }
 
 #[test]
@@ -1447,7 +1482,7 @@ fn test_delivery_state_unchanged_after_raise_dispute_escrow_failure() {
     assert_eq!(delivery_before.status, DeliveryStatus::InTransit);
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        client.raise_dispute(&shipper, &delivery_id);
+        client.raise_dispute(&dispute_of(&client), &delivery_id);
     }));
 
     assert!(result.is_err(), "Expected raise_dispute to panic");
@@ -1696,7 +1731,7 @@ fn test_on_time_delivery_confirmation() {
     let delivery = client.get_delivery(&delivery_id);
     assert_eq!(delivery.status, DeliveryStatus::Delivered);
 
-    client.raise_dispute(&recipient, &delivery_id);
+    client.raise_dispute(&dispute_of(&client), &delivery_id);
 
     let delivery = client.get_delivery(&delivery_id);
     assert_eq!(
@@ -1879,7 +1914,7 @@ fn test_early_delivery_confirmation() {
     client.assign_driver(&driver, &delivery_id, &driver);
     client.mark_in_transit(&driver, &delivery_id);
 
-    client.raise_dispute(&recipient, &delivery_id);
+    client.raise_dispute(&dispute_of(&client), &delivery_id);
 
     let result = client.try_cancel_delivery(&shipper, &delivery_id);
     match result {
@@ -1901,7 +1936,6 @@ fn test_early_delivery_confirmation() {
         "Delivery should be early"
     );
 }
-
 
 /// Test that create_delivery and create_deliveries_batch emit compatible
 /// DeliveryCreatedEvent payloads with the same shape and topic.
@@ -2199,4 +2233,144 @@ fn test_reclaim_delivery_expired_escrow_rollback_on_escrow_failure() {
         DeliveryStatus::InTransit,
         "delivery status must be unchanged when reclaim fails"
     );
+}
+
+// ── Issue #443: admin setter for the escrow contract address ─────────────────
+
+/// The escrow contract address was fixed at `init` with no way to change it, so
+/// any escrow upgrade forced a redeployment of this contract and every delivery
+/// record with it. `set_escrow_contract` lets the admin repoint it in place.
+#[test]
+fn test_set_escrow_contract_updates_peer_address() {
+    let env = Env::default();
+    let (client, shipper, _driver, _recipient, escrow_id, _) = setup_full(&env);
+
+    let new_escrow = env.register(MockEscrowContract, ());
+    assert_ne!(escrow_id, new_escrow);
+    assert_eq!(client.get_escrow_contract(), escrow_id);
+
+    client.set_escrow_contract(&shipper, &new_escrow);
+
+    assert_eq!(client.get_escrow_contract(), new_escrow);
+}
+
+/// Only the admin may repoint the escrow contract; a non-admin is rejected and
+/// the existing address is preserved.
+#[test]
+fn test_set_escrow_contract_rejects_non_admin() {
+    let env = Env::default();
+    let (client, _shipper, _driver, _recipient, escrow_id, _) = setup_full(&env);
+
+    let attacker = Address::generate(&env);
+    let new_escrow = env.register(MockEscrowContract, ());
+
+    let result = client.try_set_escrow_contract(&attacker, &new_escrow);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::Unauthorized.into()),
+        _ => panic!("Expected FaniLabError::Unauthorized"),
+    }
+
+    assert_eq!(client.get_escrow_contract(), escrow_id);
+}
+
+/// The setter must re-authenticate the admin: `require_auth` runs before the
+/// admin check, so an unauthenticated caller cannot repoint the address.
+#[test]
+#[should_panic]
+fn test_set_escrow_contract_requires_admin_auth() {
+    let env = Env::default();
+    // No auth mocking: the admin's `require_auth` cannot be satisfied.
+    let escrow_id = env.register(MockEscrowContract, ());
+    let contract_id = env.register(DeliveryContract, ());
+    let client = DeliveryContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.init(&admin, &escrow_id);
+
+    let new_escrow = env.register(MockEscrowContract, ());
+    client.set_escrow_contract(&admin, &new_escrow);
+}
+
+/// A delivery created after the repoint uses the new escrow contract for its
+/// escrow cross-calls, proving the address is not merely stored but consumed.
+#[test]
+fn test_set_escrow_contract_affects_later_deliveries() {
+    let env = Env::default();
+    let (client, shipper, _driver, recipient, escrow_id, _) = setup_full(&env);
+
+    let new_escrow_id = env.register(MockEscrowContract, ());
+    client.set_escrow_contract(&shipper, &new_escrow_id);
+
+    let metadata = get_test_metadata(&env, 1);
+    let delivery_id = client.create_delivery(&shipper, &recipient, &metadata);
+    client.cancel_delivery(&shipper, &delivery_id);
+
+    let refunded_at_new: u64 = env.as_contract(&new_escrow_id, || {
+        env.storage()
+            .temporary()
+            .get(&Symbol::new(&env, "refunded"))
+            .unwrap_or(0u64)
+    });
+    let refunded_at_old: u64 = env.as_contract(&escrow_id, || {
+        env.storage()
+            .temporary()
+            .get(&Symbol::new(&env, "refunded"))
+            .unwrap_or(0u64)
+    });
+    assert_eq!(refunded_at_new, u64::from(delivery_id));
+    assert_eq!(refunded_at_old, 0, "old escrow contract must not be called");
+}
+
+// ── Issue #444: dispute contract configuration ───────────────────────────────
+
+#[test]
+fn test_set_dispute_resolution_contract_updates_peer_address() {
+    let env = Env::default();
+    let (client, shipper, _driver, _recipient, _, _) = setup_full(&env);
+
+    let new_dispute = Address::generate(&env);
+    client.set_dispute_resolution_contract(&shipper, &new_dispute);
+
+    assert_eq!(client.get_dispute_resolution_contract(), Some(new_dispute));
+}
+
+#[test]
+fn test_set_dispute_resolution_contract_rejects_non_admin() {
+    let env = Env::default();
+    let (client, _shipper, _driver, _recipient, _, _) = setup_full(&env);
+
+    let configured = client.get_dispute_resolution_contract();
+    let attacker = Address::generate(&env);
+    let new_dispute = Address::generate(&env);
+
+    let result = client.try_set_dispute_resolution_contract(&attacker, &new_dispute);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::Unauthorized.into()),
+        _ => panic!("Expected FaniLabError::Unauthorized"),
+    }
+
+    assert_eq!(client.get_dispute_resolution_contract(), configured);
+}
+
+/// Before any dispute contract is configured, `raise_dispute` cannot proceed —
+/// there is no address that is allowed to call it.
+#[test]
+fn test_raise_dispute_without_dispute_contract_is_not_initialized() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let escrow_id = env.register(MockEscrowContract, ());
+    let contract_id = env.register(DeliveryContract, ());
+    let client = DeliveryContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    client.init(&admin, &escrow_id);
+    assert_eq!(client.get_dispute_resolution_contract(), None);
+
+    let metadata = get_test_metadata(&env, 1);
+    let delivery_id = client.create_delivery(&admin, &recipient, &metadata);
+
+    let result = client.try_raise_dispute(&admin, &delivery_id);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::NotInitialized.into()),
+        _ => panic!("Expected FaniLabError::NotInitialized"),
+    }
 }

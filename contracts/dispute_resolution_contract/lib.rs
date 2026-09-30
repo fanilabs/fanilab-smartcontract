@@ -139,6 +139,8 @@ pub enum DataKey {
     DisputeResolutionLimit,
     Dispute(DeliveryId),
     DisputeReputationPenalty,
+    DisputeReputationReward,
+    DisputeSplitPenalty,
     /// Paged index page: (page_number) → Vec<DeliveryId>
     /// Page size is `DISPUTE_INDEX_PAGE` entries.
     DisputeIndex(u32),
@@ -569,11 +571,18 @@ impl DisputeResolutionContract {
                 if current_time > delivered_at.saturating_add(dispute_limit) {
                     panic_with_error!(&env, FaniLabError::InvalidState);
                 }
-                // Call delivery contract to transition to Disputed
+                // Call delivery contract to transition to Disputed. The
+                // delivery contract now pins its dispute caller to this
+                // contract's own address (Issue #444), so we must identify
+                // ourselves rather than forwarding the human caller.
                 let _: () = env.invoke_contract(
                     &delivery_contract_addr,
                     &Symbol::new(&env, "raise_dispute"),
-                    soroban_sdk::vec![&env, caller.into_val(&env), delivery_id.into_val(&env)],
+                    soroban_sdk::vec![
+                        &env,
+                        env.current_contract_address().into_val(&env),
+                        delivery_id.into_val(&env),
+                    ],
                 );
             }
             DeliveryStatus::Active | DeliveryStatus::InTransit => {
@@ -581,7 +590,11 @@ impl DisputeResolutionContract {
                 let _: () = env.invoke_contract(
                     &delivery_contract_addr,
                     &Symbol::new(&env, "raise_dispute"),
-                    soroban_sdk::vec![&env, caller.into_val(&env), delivery_id.into_val(&env)],
+                    soroban_sdk::vec![
+                        &env,
+                        env.current_contract_address().into_val(&env),
+                        delivery_id.into_val(&env),
+                    ],
                 );
             }
             _ => {
@@ -1073,7 +1086,7 @@ impl DisputeResolutionContract {
                         &env,
                         env.current_contract_address().into_val(&env),
                         driver.clone().into_val(&env),
-                        DISPUTE_REPUTATION_SPLIT_PENALTY.into_val(&env),
+                        DEFAULT_DISPUTE_REPUTATION_SPLIT_PENALTY.into_val(&env),
                     ],
                 );
             }

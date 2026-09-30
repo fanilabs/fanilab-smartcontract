@@ -208,6 +208,35 @@ export class DeliveryClient {
   }
 
   /**
+   * Set the dispute resolution contract address (admin only).
+   *
+   * This contract is the only caller permitted to drive a delivery into
+   * `Disputed`: `raise_dispute` is deliberately not a user entry point, so a
+   * delivery party cannot pause the escrow without a recorded dispute case.
+   */
+  async setDisputeResolutionContract(
+    disputeContractId: string,
+    options?: ContractInvokeOptions
+  ): Promise<void> {
+    const admin = options?.sourceAccount;
+    if (!admin) {
+      throw new Error('setDisputeResolutionContract requires options.sourceAccount as admin');
+    }
+    await this.invoker.call(
+      'set_dispute_resolution_contract',
+      [address(admin), address(disputeContractId)],
+      options
+    );
+  }
+
+  /**
+   * Get the dispute resolution contract address
+   */
+  async getDisputeResolutionContract(options?: ContractInvokeOptions): Promise<string | null> {
+    return decodeOptional(await this.invoker.call('get_dispute_resolution_contract', [], options));
+  }
+
+  /**
    * Get the identity contract address
    */
   async getIdentityContract(options?: ContractInvokeOptions): Promise<string | null> {

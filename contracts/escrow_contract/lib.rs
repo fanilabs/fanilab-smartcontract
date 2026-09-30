@@ -1523,14 +1523,31 @@ impl EscrowContract {
         );
     }
 
+    /// Moves an escrow into `EscrowStatus::Paused` on behalf of the dispute
+    /// state machine.
+    ///
+    /// **Authorization:** the configured `dispute_resolution_contract` only
+    /// (Issue #445) — the same gate `freeze_funds` already uses. Previously the
+    /// sender, recipient, or driver could call this directly, which paused the
+    /// escrow without ever creating a `DisputeCase`. The funds were then
+    /// unrecoverable: `resolve_dispute` / `resolve_dispute_split` require
+    /// `Paused` state but are only reachable through a dispute case, so nothing
+    /// could move the funds again. Disputes must therefore be raised through
+    /// `dispute_resolution_contract::raise_dispute`, which records the case
+    /// before freezing funds.
     #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
     pub fn raise_dispute(env: Env, caller: Address, delivery_id: u64) {
         caller.require_auth();
         require_not_paused(&env);
-        let mut record = load_escrow(&env, delivery_id);
-        if caller != record.sender && caller != record.recipient && caller != record.driver {
+        let dispute_contract: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::DisputeResolutionContract)
+            .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::NotInitialized));
+        if caller != dispute_contract {
             panic_with_error!(&env, FaniLabError::Unauthorized);
         }
+        let mut record = load_escrow(&env, delivery_id);
         // Accept both Locked (pre-delivery dispute) and Holdback (post-delivery
         // dispute, after recipient has confirmed but before escrow is released).
         // This unblocks the Delivered → Disputed transition described in issue
@@ -1871,15 +1888,6 @@ impl EscrowContract {
             .unwrap_or_else(|| panic_with_error!(env, EscrowError::DeliveryNotFound))
     }
 
-    /// Returns `true` if an escrow record exists for the given delivery ID,
-    /// `false` otherwise.  Never panics for an unknown ID.  No authorization
-    /// is required.  Use this to check presence before calling `get_escrow`
-    /// if you want to avoid the panic that accessor raises for missing records
-    /// (Issue #312).
-    pub fn has_escrow(env: Env, delivery_id: u64) -> bool {
-        env.storage().persistent().has(&escrow_key(delivery_id))
-    }
-
     #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
     pub fn freeze_funds(env: Env, caller: Address, delivery_id: u64) {
         caller.require_auth();
@@ -2015,7 +2023,7 @@ impl EscrowContract {
 
     /// Returns the amount of untracked balance for a given token without executing
     /// a sweep. This is a read-only view function used for visibility and monitoring.
-    /// 
+    ///
     /// Untracked balance = contract_balance - total_locked. If the contract balance
     /// is less than or equal to total_locked, returns 0 (indicating nothing to sweep).
     ///
@@ -2031,7 +2039,12 @@ impl EscrowContract {
     }
 
     #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
-    pub fn sweep_untracked_balance(env: Env, admin: Address, token: Address, recipient: Address) -> i128 {
+    pub fn sweep_untracked_balance(
+        env: Env,
+        admin: Address,
+        token: Address,
+        recipient: Address,
+    ) -> i128 {
         admin.require_auth();
         require_admin(&env, &admin);
         require_not_paused(&env);

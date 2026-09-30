@@ -67,6 +67,12 @@ export interface EscrowRecord {
   disputedBy?: string;
   disputedAt?: number;
   fleetId?: bigint;
+  /**
+   * Timestamp at which the escrow entered the `Holdback` state, used together
+   * with the configured holdback window to decide when
+   * `release_expired_holdback` becomes available.
+   */
+  holdbackStartedAt?: number;
 }
 
 export interface PartyAddresses {

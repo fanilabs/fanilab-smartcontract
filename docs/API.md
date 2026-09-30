@@ -525,6 +525,41 @@ Pause escrow for dispute resolution.
 - Sets escrow status to Paused
 - Records dispute initiator and timestamp
 
+#### `freeze_funds`
+Move a `Locked` or `Holdback` escrow into the disputed `Paused` state without
+moving any funds. This is the escrow-side counterpart of `raise_dispute`,
+restricted to the configured dispute-resolution contract so only the dispute
+machinery can trigger it.
+
+**Parameters:**
+- `caller: Address` - Must equal the configured dispute-resolution contract
+- `delivery_id: u64` - Delivery identifier
+
+**Authorization:** The configured dispute-resolution contract only
+
+**Returns:** None
+
+**Errors:**
+- `Unauthorized` - `caller` is not the configured dispute-resolution contract
+- `NotInitialized` - No dispute-resolution contract has been configured
+- `InvalidState` - Escrow is `Released`, `Refunded` or `Split`; funds are
+  already gone so freezing them would leave the dispute contract with an
+  unresolvable `DisputeCase`
+- `DeliveryNotFound` - No escrow exists for `delivery_id`
+
+**Events:** `funds_frozen` — `(caller, timestamp)`
+
+**Notes:**
+- Freezing an already-`Paused` escrow is a documented, safe no-op. The dispute
+  path can legitimately reach `Paused` twice (`Delivered → Disputed` after a
+  direct `raise_dispute` already froze the escrow), and a second freeze must
+  not revert the surrounding dispute transaction.
+- Deliberately **not** gated on the protocol pause: it never transfers funds, so
+  a suspicious escrow can still be frozen while the protocol is halted for an
+  unrelated incident.
+- A frozen escrow falls back to admin arbitration — it is excluded from
+  `release_expired_holdback`, which only accepts `Holdback`.
+
 #### `resolve_dispute`
 Admin resolution: release to driver or refund to sender.
 
@@ -714,6 +749,47 @@ Return the currently configured holdback window in seconds, falling back to
 let window: u64 = escrow_contract.get_holdback_window();
 ```
 
+#### `reclaim_expired_escrow`
+Permissionless reclaim of an escrow whose expiry has passed, refunding the
+original sender. This is the safety valve for a `Locked` escrow whose driver
+never completed the delivery and whose recipient never raised a dispute.
+
+**Parameters:**
+- `delivery_id: u64` - Delivery identifier
+
+**Authorization:** None required — anyone may call this
+
+**Returns:** None
+
+**Errors:**
+- `ProtocolPaused` - The protocol is paused
+- `DeliveryNotFound` - No escrow exists for `delivery_id`
+- `InvalidState` - Escrow is not in `Locked` state, or the expiry has not yet
+  passed, or the escrow has no `expires_at` set
+- `InsufficientFunds` - The contract's token balance cannot cover the refund,
+  or the recorded total locked exceeds the contract balance
+
+**Events:** `escrow_refunded`
+
+**State Changes:**
+- Sets escrow status to `Refunded`
+- Decrements the token's total locked amount
+- Transfers the full escrowed amount back to the sender
+
+**Notes:**
+- Only `Locked` escrows are reclaimable. A `Holdback` escrow exits through
+  [`release_holdback_escrow`](#release_holdback_escrow) or
+  [`release_expired_holdback`](#release_expired_holdback); `Paused` escrows
+  wait for admin dispute arbitration.
+- To reclaim an escrow and cancel the matching delivery in one call, use
+  `delivery_contract::reclaim_delivery_expired_escrow` instead.
+
+**Example:**
+```rust
+// Anyone can reclaim once the escrow has expired.
+escrow_contract.reclaim_expired_escrow(&delivery_id);
+```
+
 ### Query Functions
 
 #### `get_admin`
@@ -760,6 +836,15 @@ set or it has been cleared with `clear_fleet_management_contract`.
 #### `get_dispute_resolution_contract`
 Returns the configured dispute-resolution contract address, or `None` if none
 is set.
+
+**Returns:** `Option<Address>`
+
+#### `get_identity_contract`
+Returns the configured identity/reputation contract address, or `None` if none
+is set. The escrow contract uses it to resolve the identity of escrow
+participants during dispute and settlement flows.
+
+**Parameters:** None
 
 **Returns:** `Option<Address>`
 
@@ -870,6 +955,96 @@ Get all escrow delivery IDs assigned to a driver.
 - `driver: Address` - Driver address
 
 **Returns:** `Vec<u64>` — list of delivery IDs
+#### `get_escrows_page`
+Paginated enumeration across all three escrow indexes. This is the general form
+behind `get_escrows_by_sender` / `get_escrows_by_recipient` /
+`get_escrows_by_driver`; those three are equivalent to calling this with
+`offset = 0` and `limit = 100`.
+
+**Parameters:**
+- `owner: Address` - The sender, recipient or driver whose index is read
+- `kind: u32` - Index selector: `0` = sender, `1` = recipient, `2` = driver
+- `offset: u32` - Zero-based index of the first record to return
+- `limit: u32` - Maximum records to return; silently clamped to `100`
+
+**Authorization:** None required
+
+**Returns:** `Vec<u64>` — list of delivery IDs, empty when `offset` is past the
+end of the index
+
+**Errors:** None — an unknown owner or out-of-range `offset` yields an empty
+vector rather than panicking
+
+**Example:**
+```rust
+// Second page of 25 escrows for a recipient.
+let page: Vec<u64> = escrow_contract.get_escrows_page(&recipient, &1, &25, &25);
+```
+
+#### `get_untracked_balance`
+Read-only view of the amount of `token` held by the contract that is **not**
+backed by any escrow record, without performing a sweep.
+
+Untracked balance = contract token balance − `get_total_locked`. Returns `0`
+when the balance is less than or equal to `total_locked`, meaning there is
+nothing to sweep.
+
+**Parameters:**
+- `token: Address` - The token to inspect
+
+**Authorization:** None required
+
+**Returns:** `i128` — the untracked amount, `0` when nothing is untracked
+
+**Notes:**
+- Use this to verify the amount before calling
+  [`sweep_untracked_balance`](#sweep_untracked_balance), and to monitor
+  contract solvency — a persistently non-zero value indicates funds
+  misclassified by an earlier migration or upgrade (Issue #188).
+- This is a monitoring primitive only; it moves no funds.
+
+**Example:**
+```rust
+let untracked: i128 = escrow_contract.get_untracked_balance(&token_address);
+```
+
+#### `sweep_untracked_balance`
+Admin-only sweep of the untracked `token` balance to a treasury wallet. The
+amount transferred is `contract balance − get_total_locked`; escrows still
+tracked by the contract are untouched.
+
+**Parameters:**
+- `admin: Address` - Contract admin; must authorise the transaction
+- `token: Address` - Token whose untracked balance is swept
+- `recipient: Address` - Treasury wallet receiving the swept funds
+
+**Authorization:** Admin only
+
+**Returns:** `i128` — the amount swept, or `0` when the contract holds nothing
+beyond its tracked escrows (in which case no transfer occurs)
+
+**Errors:**
+- `Unauthorized` - `admin` is not the contract admin
+- `ProtocolPaused` - The protocol is paused; sweeping is unavailable
+
+**Events:** `untracked_balance_swept` — `(token, amount_swept, recipient)`
+
+**Notes:**
+- Always confirm the amount with
+  [`get_untracked_balance`](#get_untracked_balance) first; the sweep is
+  irreversible.
+- A `0` return is a successful no-op, not an error.
+
+**Example:**
+```rust
+let swept: i128 = escrow_contract.sweep_untracked_balance(
+    &admin_address,
+    &token_address,
+    &treasury_address
+);
+```
+
+
 
 ---
 
@@ -1101,6 +1276,106 @@ Sender or recipient raises a dispute.
 delivery_contract.raise_dispute(&sender, &delivery_id);
 ```
 
+#### `reclaim_delivery_expired_escrow`
+Permissionless entry point that reclaims an expired escrow **and** transitions
+the delivery to `Cancelled` in a single transaction, keeping both records
+synchronised.
+
+**Parameters:**
+- `delivery_id: DeliveryId` - Delivery identifier
+
+**Authorization:** None required — anyone may call this
+
+**Returns:** None
+
+**Errors:**
+- `DeliveryNotFound` - No delivery exists for `delivery_id`
+- `InvalidState` - Delivery is not in a state from which `Cancelled` is a legal
+  transition (`Pending`, `Active` or `InTransit`)
+- `NotInitialized` - No escrow contract has been configured
+- Plus every error raised by `escrow_contract::reclaim_expired_escrow`, which
+  is called first: `InvalidState` (escrow not `Locked` or not yet expired) and
+  `ProtocolPaused`
+
+**Events:** `delivery_cancelled`
+
+**State Changes:**
+- Calls `escrow_contract::reclaim_expired_escrow`, refunding the sender
+- Updates delivery status to `Cancelled`
+
+**Notes:**
+- The escrow call runs **before** the local status write. If it reverts, the
+  delivery record is left untouched, so a failed reclaim never desynchronises
+  the two contracts.
+- `InTransit → Cancelled` is a legal transition specifically so an in-transit
+  delivery whose escrow expired can be cleaned up (Issue #300).
+- After a successful call, `get_combined_state` reports `Cancelled` +
+  `Refunded`.
+
+**Example:**
+```rust
+// Anyone can clean up after an expired, in-transit delivery.
+delivery_contract.reclaim_delivery_expired_escrow(&delivery_id);
+```
+
+#### `set_escrow_contract`
+Point the delivery contract at the escrow contract it should call. Unlike the
+escrow address supplied to `init`, this may be re-pointed later, which is how
+a redeployed escrow contract is adopted without redeploying deliveries.
+
+**Parameters:**
+- `admin: Address` - Admin address
+- `escrow_contract: Address` - Address of the escrow contract to use
+
+**Authorization:** Admin only
+
+**Errors:**
+- `Unauthorized` - Caller is not an admin
+
+**Notes:**
+- Existing escrows are unaffected; only the address used for future
+  cross-contract calls changes.
+- Read the current value back with
+  [`get_escrow_contract`](#get_escrow_contract).
+
+**Example:**
+```rust
+delivery_contract.set_escrow_contract(&admin, &escrow_address);
+```
+
+#### `validate_transition`
+Pure helper that reports whether a delivery status transition is permitted by
+the protocol state machine. It moves no state and is not an on-chain entry
+point — it is exported for off-chain simulation and for internal use by the
+state-mutating functions.
+
+**Parameters:**
+- `from: DeliveryStatus` - Current status
+- `to: DeliveryStatus` - Requested next status
+
+**Returns:** `Result<(), FaniLabError>` — `Ok(())` when the transition is legal,
+`Err(FaniLabError::InvalidState)` otherwise
+
+**Allowed transitions:**
+
+| From | To |
+|------|----|
+| `Pending` | `Active`, `Cancelled` |
+| `Active` | `InTransit`, `Disputed`, `Cancelled` |
+| `InTransit` | `Delivered`, `Disputed`, `Cancelled` |
+| `Delivered` | `Disputed` |
+| `Disputed` | `Delivered` (only via dispute resolution) |
+| `Cancelled` | none (terminal) |
+
+**Example:**
+```rust
+use delivery_contract::validate_transition;
+use shared_types::DeliveryStatus;
+
+// Ok(()) — the transition is permitted.
+let permitted = validate_transition(DeliveryStatus::Active, DeliveryStatus::InTransit);
+```
+
 ### Query Functions
 
 #### `get_delivery`
@@ -1196,6 +1471,33 @@ Get all delivery IDs with a specific recipient.
 - `recipient: Address` - Recipient address
 
 **Returns:** `Vec<DeliveryId>` — list of delivery IDs
+
+#### `get_deliveries_page`
+Paginated enumeration across all three delivery indexes. This is the general
+form behind `get_deliveries_by_sender` / `get_deliveries_by_recipient` /
+`get_deliveries_by_driver`; those three are equivalent to calling this with
+`offset = 0` and `limit = 100`.
+
+**Parameters:**
+- `owner: Address` - The sender, recipient or driver whose index is read
+- `kind: u32` - Index selector: `0` = sender, `1` = recipient, `2` = driver
+- `offset: u32` - Zero-based index of the first record to return
+- `limit: u32` - Maximum records to return; silently clamped to `100`
+
+**Authorization:** None required
+
+**Returns:** `Vec<DeliveryId>` — list of delivery IDs, empty when `offset` is
+past the end of the index
+
+**Errors:** None — an unknown owner or out-of-range `offset` yields an empty
+vector rather than panicking
+
+**Example:**
+```rust
+// Second page of 50 deliveries assigned to a driver.
+let page: Vec<DeliveryId> =
+    delivery_contract.get_deliveries_page(&driver, &2, &50, &50);
+```
 
 #### `get_driver_profile`
 Get driver statistics and reputation.
@@ -1783,6 +2085,31 @@ Deactivate an active fleet. This is a terminal lifecycle step: new invitations a
 
 **Events:** `fleet_deactivated`
 
+#### `reactivate_fleet`
+Reactivate a fleet previously stopped with `deactivate_fleet`, restoring normal
+driver invitations and treasury-routed payouts. Mirrors the
+`suspend_driver` / `reinstate_driver` lifecycle used by the
+identity_reputation_contract.
+
+**Parameters:**
+- `caller: Address` - Fleet owner or protocol admin
+- `fleet_id: FleetId` - Fleet identifier
+
+**Authorization:** Fleet owner or contract admin
+
+**Errors:**
+- `FleetNotFound` - No fleet with that ID exists
+- `Unauthorized` - Caller is neither the fleet owner nor the admin
+- `InvalidConfiguration` - The fleet is already active
+
+**Events:** `fleet_reactivated`
+
+**Notes:**
+- The driver roster and `total_active_drivers` count are preserved across
+  deactivation; reactivating does not restore removed drivers.
+- Payout destinations for escrows created while the fleet was deactivated are
+  unaffected — those were fixed at escrow creation time.
+
 #### `admin_reassign_fleet_owner`
 Emergency recovery path for a compromised fleet-owner key. Only the protocol admin may call this.
 
@@ -1912,12 +2239,18 @@ Accept a pending fleet invite.
 - `FleetInactive` - The fleet has been deactivated since the invite was issued
 - `InviteNotFound` - No pending invite exists for this driver
 - `DriverAlreadyActive` - Driver is already an active member
+- `RosterFull` - The fleet already holds `MAX_ROSTER_SIZE` active drivers
+- `DriverNotRegistered` - The accepting address has no `DriverProfile` in the
+  configured identity/reputation contract, so it could never legally complete a
+  delivery (Issue #451). **The check is skipped entirely when no identity
+  contract is configured.**
 
 **Events:** `invite_accepted`
 
 **State Changes:**
 - Sets `DriverFleetStatus::Active` for `(fleet_id, driver)`
 - Increments `FleetProfile.total_active_drivers`
+- Appends the driver as an indexed roster entry
 
 #### `remove_driver_from_fleet`
 Remove a driver from a fleet. Either a signer on the fleet or the driver themselves may initiate the removal.

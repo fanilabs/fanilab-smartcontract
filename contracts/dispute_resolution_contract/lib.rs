@@ -139,6 +139,8 @@ pub enum DataKey {
     DisputeResolutionLimit,
     Dispute(DeliveryId),
     DisputeReputationPenalty,
+    DisputeReputationReward,
+    DisputeSplitPenalty,
     /// Paged index page: (page_number) → Vec<DeliveryId>
     /// Page size is `DISPUTE_INDEX_PAGE` entries.
     DisputeIndex(u32),
@@ -363,6 +365,48 @@ impl DisputeResolutionContract {
             .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::NotInitialized))
     }
 
+    /// Repoint the delivery contract this contract escalates to (Issue #438).
+    ///
+    /// Without this setter the address supplied to `init` was frozen for the
+    /// lifetime of the deployment: any upgrade of the delivery contract forced
+    /// a redeployment of the dispute contract too, losing all open dispute
+    /// state. This mirrors `set_identity_reputation_contract` and the peer
+    /// setters in every other contract in the system.
+    #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
+    pub fn set_delivery_contract(env: Env, caller: Address, delivery_contract: Address) {
+        caller.require_auth();
+        if !Self::is_admin(env.clone(), caller.clone()) {
+            panic_with_error!(&env, FaniLabError::Unauthorized);
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::DeliveryContract, &delivery_contract);
+        // #382 precedent: emit an event so off-chain indexers can track when
+        // this contract pointer is updated by an admin.
+        env.events().publish(
+            (Symbol::new(&env, "delivery_contract_set"),),
+            (caller, delivery_contract),
+        );
+    }
+
+    /// Repoint the escrow contract this contract freezes funds in and resolves
+    /// disputes against. Admin-only, for the same reasons and with the same
+    /// rationale as `set_delivery_contract` (Issue #438).
+    #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
+    pub fn set_escrow_contract(env: Env, caller: Address, escrow_contract: Address) {
+        caller.require_auth();
+        if !Self::is_admin(env.clone(), caller.clone()) {
+            panic_with_error!(&env, FaniLabError::Unauthorized);
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::EscrowContract, &escrow_contract);
+        env.events().publish(
+            (Symbol::new(&env, "escrow_contract_set"),),
+            (caller, escrow_contract),
+        );
+    }
+
     #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
     pub fn set_identity_reputation_contract(
         env: Env,
@@ -569,11 +613,18 @@ impl DisputeResolutionContract {
                 if current_time > delivered_at.saturating_add(dispute_limit) {
                     panic_with_error!(&env, FaniLabError::InvalidState);
                 }
-                // Call delivery contract to transition to Disputed
+                // Call delivery contract to transition to Disputed. The
+                // delivery contract now pins its dispute caller to this
+                // contract's own address (Issue #444), so we must identify
+                // ourselves rather than forwarding the human caller.
                 let _: () = env.invoke_contract(
                     &delivery_contract_addr,
                     &Symbol::new(&env, "raise_dispute"),
-                    soroban_sdk::vec![&env, caller.into_val(&env), delivery_id.into_val(&env)],
+                    soroban_sdk::vec![
+                        &env,
+                        env.current_contract_address().into_val(&env),
+                        delivery_id.into_val(&env),
+                    ],
                 );
             }
             DeliveryStatus::Active | DeliveryStatus::InTransit => {
@@ -581,7 +632,11 @@ impl DisputeResolutionContract {
                 let _: () = env.invoke_contract(
                     &delivery_contract_addr,
                     &Symbol::new(&env, "raise_dispute"),
-                    soroban_sdk::vec![&env, caller.into_val(&env), delivery_id.into_val(&env)],
+                    soroban_sdk::vec![
+                        &env,
+                        env.current_contract_address().into_val(&env),
+                        delivery_id.into_val(&env),
+                    ],
                 );
             }
             _ => {
@@ -1073,7 +1128,7 @@ impl DisputeResolutionContract {
                         &env,
                         env.current_contract_address().into_val(&env),
                         driver.clone().into_val(&env),
-                        DISPUTE_REPUTATION_SPLIT_PENALTY.into_val(&env),
+                        DEFAULT_DISPUTE_REPUTATION_SPLIT_PENALTY.into_val(&env),
                     ],
                 );
             }

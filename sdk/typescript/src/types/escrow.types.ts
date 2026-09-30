@@ -15,25 +15,21 @@ export interface UpdatePlatformFeeParams {
   newFeeBps: number;
 }
 
-/**
- * Contract-specific error codes raised by `escrow_contract::EscrowError`.
- * These are distinct from the shared `FaniLabError` codes in
- * `common.types.ts`; a panic from this contract may use either table.
- */
-export const EscrowErrorCodes = {
-  InvalidState: 1,
-  DeliveryNotFound: 2,
-  InsufficientFunds: 3,
-  DuplicateDelivery: 4,
-  InvalidFee: 5,
-  InvalidToken: 6,
-  InvalidAmount: 7,
-  NoPendingSettlementChange: 8,
-  TimelockNotElapsed: 9,
-  InvalidDriver: 10,
-  InvalidParties: 11,
-  BatchTooLarge: 12,
-} as const;
+export interface VolumeTier {
+  volumeThreshold: number;
+  discountBps: number;
+}
+
+export interface SetVolumeTiersParams {
+  admin: string;
+  tiers: VolumeTier[];
+}
+
+export interface SweepUntrackedBalanceParams {
+  admin: string;
+  token: string;
+  recipient: string;
+}
 
 export interface CreateEscrowParams {
   sender: string;
@@ -53,7 +49,9 @@ export interface CreateEscrowBatchParams {
     deliveryId: bigint;
     driver: string;
     amount: bigint;
+    fleetId?: bigint;
   }>;
+  fleetId?: bigint;
 }
 
 export interface ReleaseEscrowParams {
@@ -88,6 +86,15 @@ export interface ReleaseHoldbackEscrowParams {
   deliveryId: bigint;
 }
 
+/**
+ * Parameters for the permissionless `release_expired_holdback` fallback
+ * (Issue #452). No `caller` is required — anyone may submit it once the
+ * holdback window has elapsed.
+ */
+export interface ReleaseExpiredHoldbackParams {
+  deliveryId: bigint;
+}
+
 export interface MarkHoldbackEscrowParams {
   caller: string;
   deliveryId: bigint;
@@ -102,9 +109,38 @@ export interface ReclaimExpiredEscrowParams {
   deliveryId: bigint;
 }
 
+/**
+ * Parameters for the admin-only `sweep_untracked_balance` operation
+ * (Issue #450).
+ */
+export interface SweepParams {
+  /** Contract admin authorising the sweep. */
+  admin: string;
+  /** Token whose untracked balance is swept. */
+  token: string;
+  /** Treasury wallet the untracked balance is transferred to. */
+  recipient: string;
+}
+
 export interface SetSettlementContractParams {
   admin: string;
   settlementContract: string;
+}
+
+/**
+ * Mirrors the Rust `PendingSettlementContract` struct returned by
+ * `get_pending_settlement_contract`. Present only when a timelock proposal
+ * is in-flight; `null` means no change is pending.
+ */
+export interface PendingSettlementContractInfo {
+  /** The proposed new settlement contract address. */
+  settlementContract: string;
+  /** Unix timestamp (seconds) after which the change may be confirmed. */
+  activatesAt: bigint;
+}
+
+export interface ConfirmSettlementContractParams {
+  admin: string;
 }
 
 export interface SetFleetManagementContractParams {

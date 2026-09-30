@@ -49,6 +49,37 @@ fn require_escrow_not_paused(env: &Env) {
     }
 }
 
+/// Require that `driver` has a `DriverProfile` in the configured
+/// identity_reputation_contract (Issue #451).
+///
+/// Without this check any address holding a `Pending` invite — including a
+/// typo'd or throwaway one — could promote itself to `Active` and permanently
+/// consume one of the fleet's O(n)-constrained roster slots
+/// (`MAX_ROSTER_SIZE`). Because an unregistered address can never legally
+/// complete a delivery (the reputation cross-contract call panics), the fleet
+/// owner would have to pay gas to evict it later.
+///
+/// The check is skipped when no identity contract is configured, preserving
+/// the pre-#451 behaviour for standalone deployments that do not run the
+/// identity/reputation contract at all.
+fn require_registered_driver(env: &Env, driver: &Address) {
+    let Some(identity_addr) = env
+        .storage()
+        .instance()
+        .get::<DataKey, Address>(&DataKey::IdentityContract)
+    else {
+        return;
+    };
+    let has_profile: bool = env.invoke_contract(
+        &identity_addr,
+        &Symbol::new(env, "has_driver_profile"),
+        soroban_sdk::vec![env, driver.clone().into_val(env)],
+    );
+    if !has_profile {
+        panic_with_error!(env, FleetError::DriverNotRegistered);
+    }
+}
+
 /// Require that `caller` plus `co_signers` together include at least
 /// `profile.signature_threshold` distinct addresses from the fleet's
 /// configured signer list, with every counted co-signer having
@@ -113,6 +144,10 @@ pub enum FleetError {
     /// Roster compaction read a slot that was expected to exist but was absent
     /// from persistent storage — indicates corrupted or out-of-sync state.
     InternalStorageError = 12,
+    /// The accepting address has no `DriverProfile` in the configured
+    /// identity_reputation_contract, so it cannot legally complete a
+    /// delivery (Issue #451).
+    DriverNotRegistered = 13,
 }
 
 #[contracttype]
@@ -196,6 +231,7 @@ impl FleetManagementContract {
     /// Configure the address of the identity_reputation_contract.  Admin only.
     /// Once set, `register_fleet` will automatically create an identity profile
     /// for the fleet owner via a cross-contract call.
+    #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
     pub fn set_identity_contract(env: Env, admin: Address, identity_contract: Address) {
         admin.require_auth();
         if !is_admin(&env, &admin) {
@@ -204,8 +240,23 @@ impl FleetManagementContract {
         env.storage()
             .instance()
             .set(&DataKey::IdentityContract, &identity_contract);
+        env.storage()
+            .instance()
+            .extend_ttl(ttl::LEDGER_TTL_THRESHOLD, ttl::LEDGER_TTL_EXTEND_TO);
+        env.events().publish(
+            (Symbol::new(&env, "identity_contract_updated"),),
+            (admin, identity_contract),
+        );
     }
 
+    /// Return the configured identity_reputation_contract address, if any.
+    pub fn get_identity_contract(env: Env) -> Option<Address> {
+        env.storage()
+            .instance()
+            .get(&DataKey::IdentityContract)
+    }
+
+    #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
     pub fn set_escrow_contract(env: Env, admin: Address, escrow_contract: Address) {
         admin.require_auth();
         if !is_admin(&env, &admin) {
@@ -214,6 +265,20 @@ impl FleetManagementContract {
         env.storage()
             .instance()
             .set(&DataKey::EscrowContract, &escrow_contract);
+        env.storage()
+            .instance()
+            .extend_ttl(ttl::LEDGER_TTL_THRESHOLD, ttl::LEDGER_TTL_EXTEND_TO);
+        env.events().publish(
+            (Symbol::new(&env, "escrow_contract_updated"),),
+            (admin, escrow_contract),
+        );
+    }
+
+    /// Return the configured escrow_contract address, if any.
+    pub fn get_escrow_contract(env: Env) -> Option<Address> {
+        env.storage()
+            .instance()
+            .get(&DataKey::EscrowContract)
     }
 
     // ── Issue #67 — register_fleet ────────────────────────────────────────────
@@ -788,12 +853,21 @@ impl FleetManagementContract {
     /// Accept a pending fleet invite.  The driver themselves must sign this
     /// transaction.  Transitions status from `Pending` → `Active` and
     /// increments `total_active_drivers` on the fleet profile.
+    ///
+    /// The accepting address must already have a `DriverProfile` in the
+    /// configured identity_reputation_contract, otherwise the transition is
+    /// rejected with `FleetError::DriverNotRegistered` (Issue #451). Only
+    /// registered drivers can legally complete deliveries, so letting an
+    /// unregistered address into the roster would permanently waste one of
+    /// the `MAX_ROSTER_SIZE`-bounded roster slots. The check is skipped when
+    /// no identity contract is configured.
     #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
     pub fn accept_fleet_invite(env: Env, fleet_id: u64, driver: Address) {
         env.storage().instance().extend_ttl(ttl::LEDGER_TTL_THRESHOLD, ttl::LEDGER_TTL_EXTEND_TO);
         // Driver must authorise.
         driver.require_auth();
         require_escrow_not_paused(&env);
+        require_registered_driver(&env, &driver);
 
         // Verify the fleet exists.
         let mut profile: FleetProfile = env
@@ -801,6 +875,15 @@ impl FleetManagementContract {
             .persistent()
             .get(&DataKey::Fleet(fleet_id))
             .unwrap_or_else(|| panic_with_error!(&env, FleetError::FleetNotFound));
+
+        // A fleet deactivated after the invite was issued must keep an
+        // immutable roster: `add_driver_to_fleet` already rejects new
+        // invitations once `profile.active` is false, so honouring an
+        // outstanding invite here would inflate `total_active_drivers` on a
+        // fleet that has shut down (Issue #456).
+        if !profile.active {
+            panic_with_error!(&env, FleetError::FleetInactive);
+        }
 
         let invite_key = DataKey::DriverFleet(fleet_id, driver.clone());
 
@@ -909,6 +992,17 @@ impl FleetManagementContract {
             profile.total_active_drivers -= 1;
             let fleet_key = DataKey::Fleet(fleet_id);
             env.storage().persistent().set(&fleet_key, &profile);
+            // Issue #436: this branch rewrites the fleet profile but was the
+            // only `DataKey::Fleet` mutation in the contract that skipped the
+            // `extend_ttl` call, leaving the fleet's active profile TTL
+            // drifting out of sync with its mutation cycle and risking
+            // premature expiration. Every other `fleet_key` writer pairs its
+            // `set` with this extension; do the same here.
+            env.storage().persistent().extend_ttl(
+                &fleet_key,
+                ttl::LEDGER_TTL_THRESHOLD,
+                ttl::LEDGER_TTL_EXTEND_TO,
+            );
         }
 
         // Transition to Removed terminal state instead of deleting, preserving historical record.

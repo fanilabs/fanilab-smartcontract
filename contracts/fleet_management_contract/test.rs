@@ -6,7 +6,7 @@ use escrow_contract::EscrowContract;
 use identity_reputation_contract::IdentityReputationContract;
 use shared_types::{CargoCategory, CargoDescriptor, DeliveryMetadata, DeliveryStatus, EscrowStatus};
 use soroban_sdk::{
-    testutils::{Address as _, Events, Ledger as _},
+    testutils::{storage::Persistent as _, Address as _, Events, Ledger as _},
     xdr, Address, Env, Symbol, TryFromVal, TryIntoVal, Val,
 };
 
@@ -1642,6 +1642,54 @@ fn test_add_driver_to_fleet_rejects_invite_on_deactivated_fleet() {
     client.add_driver_to_fleet(&owner, &fleet_id, &driver, &no_co_signers(&env));
 }
 
+/// Issue #456: an invite issued before deactivation must not remain
+/// acceptable afterwards — accepting it would transition the driver to
+/// `Active` and inflate `total_active_drivers` on a shut-down fleet.
+#[test]
+#[should_panic(expected = "Error(Contract, #10)")]
+fn test_accept_fleet_invite_rejects_deactivated_fleet() {
+    let (env, client, _admin) = setup_test();
+    let (fleet_id, owner, _treasury) = register_fleet(&env, &client);
+    let driver = Address::generate(&env);
+
+    client.add_driver_to_fleet(&owner, &fleet_id, &driver, &no_co_signers(&env));
+    client.deactivate_fleet(&owner, &fleet_id);
+    client.accept_fleet_invite(&fleet_id, &driver);
+}
+
+#[test]
+fn test_accept_fleet_invite_after_deactivation_leaves_roster_unchanged() {
+    let (env, client, _admin) = setup_test();
+    let (fleet_id, owner, _treasury) = register_fleet(&env, &client);
+    let driver = Address::generate(&env);
+
+    client.add_driver_to_fleet(&owner, &fleet_id, &driver, &no_co_signers(&env));
+    client.deactivate_fleet(&owner, &fleet_id);
+
+    assert!(client
+        .try_accept_fleet_invite(&fleet_id, &driver)
+        .is_err());
+
+    assert_eq!(client.get_fleet(&fleet_id).total_active_drivers, 0);
+    assert!(client.get_fleet_roster(&fleet_id, &0u32, &10u32).is_empty());
+}
+
+/// A reactivated fleet accepts its outstanding invite again.
+#[test]
+fn test_accept_fleet_invite_works_after_reactivation() {
+    let (env, client, _admin) = setup_test();
+    let (fleet_id, owner, _treasury) = register_fleet(&env, &client);
+    let driver = Address::generate(&env);
+
+    client.add_driver_to_fleet(&owner, &fleet_id, &driver, &no_co_signers(&env));
+    client.deactivate_fleet(&owner, &fleet_id);
+    client.reactivate_fleet(&owner, &fleet_id);
+
+    client.accept_fleet_invite(&fleet_id, &driver);
+
+    assert_eq!(client.get_fleet(&fleet_id).total_active_drivers, 1);
+}
+
 #[test]
 fn test_get_payout_address_falls_back_to_driver_after_deactivation() {
     let (env, client, _admin) = setup_test();
@@ -1750,5 +1798,107 @@ fn test_get_fleet_roster_limit_beyond_active_count_is_clamped() {
     assert_eq!(
         page,
         soroban_sdk::vec![&env, drivers[1].clone(), drivers[2].clone()]
+    );
+}
+
+// ── Issue #451 tests — accept_fleet_invite requires a registered driver ──────
+
+/// Helper: fleet contract wired to a real IdentityReputationContract, plus the
+/// identity client so tests can register drivers. The identity contract is
+/// `init`-ed because `has_driver_profile` is a pure storage read, but the
+/// generated client requires a deployed instance either way.
+fn setup_with_identity(
+    env: &Env,
+    client: &FleetManagementContractClient,
+    admin: &Address,
+) -> identity_reputation_contract::IdentityReputationContractClient<'static> {
+    let identity_id = env.register(IdentityReputationContract, ());
+    client.set_identity_contract(admin, &identity_id);
+    identity_reputation_contract::IdentityReputationContractClient::new(env, &identity_id)
+}
+
+/// The core regression test for #451: an address that was invited but never
+/// registered in the identity/reputation contract must NOT be able to promote
+/// itself to `Active`. Such an address can never legally complete a delivery,
+/// so allowing it in permanently wastes one of the `MAX_ROSTER_SIZE`-bounded
+/// roster slots and costs the fleet owner gas to evict later.
+#[test]
+#[should_panic(expected = "Error(Contract, #13)")] // FleetError::DriverNotRegistered
+fn test_accept_invite_rejected_for_unregistered_driver() {
+    let (env, client, admin) = setup_test();
+    let identity = setup_with_identity(&env, &client, &admin);
+
+    let (fleet_id, owner, _treasury) = register_fleet(&env, &client);
+    let unregistered = Address::generate(&env);
+    assert!(!identity.has_driver_profile(&unregistered));
+
+    client.add_driver_to_fleet(&owner, &fleet_id, &unregistered, &no_co_signers(&env));
+    // The invite is genuinely Pending, so the only thing that can reject this
+    // is the registration check.
+    assert_eq!(
+        client.get_driver_fleet_status(&fleet_id, &unregistered),
+        Some(DriverFleetStatus::Pending)
+    );
+
+    client.accept_fleet_invite(&fleet_id, &unregistered);
+}
+
+/// The same unregistered address must still be able to accept after registering
+/// — the check gates on profile existence, not on a permanent blacklist.
+#[test]
+fn test_accept_invite_succeeds_once_driver_registers() {
+    let (env, client, admin) = setup_test();
+    let identity = setup_with_identity(&env, &client, &admin);
+
+    let (fleet_id, owner, _treasury) = register_fleet(&env, &client);
+    let driver = Address::generate(&env);
+
+    client.add_driver_to_fleet(&owner, &fleet_id, &driver, &no_co_signers(&env));
+    identity.register_driver(&driver);
+    client.accept_fleet_invite(&fleet_id, &driver);
+
+    assert_eq!(
+        client.get_driver_fleet_status(&fleet_id, &driver),
+        Some(DriverFleetStatus::Active)
+    );
+    assert_eq!(client.get_fleet(&fleet_id).total_active_drivers, 1);
+}
+
+/// A rejected acceptance must leave no trace: the invite stays `Pending` and no
+/// roster slot is consumed, so the fleet owner is never billed to evict the
+/// address.
+#[test]
+fn test_rejected_acceptance_does_not_consume_roster_slot() {
+    let (env, client, admin) = setup_test();
+    let _identity = setup_with_identity(&env, &client, &admin);
+
+    let (fleet_id, owner, _treasury) = register_fleet(&env, &client);
+    let unregistered = Address::generate(&env);
+    client.add_driver_to_fleet(&owner, &fleet_id, &unregistered, &no_co_signers(&env));
+
+    let result = client.try_accept_fleet_invite(&fleet_id, &unregistered);
+    assert!(result.is_err());
+
+    assert_eq!(
+        client.get_driver_fleet_status(&fleet_id, &unregistered),
+        Some(DriverFleetStatus::Pending)
+    );
+    assert_eq!(client.get_fleet(&fleet_id).total_active_drivers, 0);
+}
+
+/// Deployments that never configure an identity contract keep the pre-#451
+/// behaviour: accepting an invite is not gated on registration at all.
+#[test]
+fn test_accept_invite_unrestricted_without_identity_contract() {
+    let (env, client, _admin) = setup_test();
+    let (fleet_id, owner, _treasury) = register_fleet(&env, &client);
+
+    let driver = Address::generate(&env);
+    client.add_driver_to_fleet(&owner, &fleet_id, &driver, &no_co_signers(&env));
+    client.accept_fleet_invite(&fleet_id, &driver);
+
+    assert_eq!(
+        client.get_driver_fleet_status(&fleet_id, &driver),
+        Some(DriverFleetStatus::Active)
     );
 }

@@ -979,6 +979,9 @@ fn test_integration_resolve_dispute_split_funds() {
     escrow_client.init(&admin, &token, &0);
     escrow_client.set_dispute_resolution_contract(&admin, &dispute_resolution_id);
     delivery_client.init(&admin, &escrow_contract_id);
+    // Issue #444: delivery::raise_dispute only accepts the configured dispute
+    // contract, so the real integration flows must wire it up.
+    delivery_client.set_dispute_resolution_contract(&admin, &dispute_resolution_id);
     dispute_client.init(
         &admin,
         &delivery_contract_id,
@@ -1082,6 +1085,9 @@ fn test_integration_resolve_dispute_refund_sender_decreases_reputation() {
     escrow_client.init(&admin, &token, &0);
     escrow_client.set_dispute_resolution_contract(&admin, &dispute_resolution_id);
     delivery_client.init(&admin, &escrow_contract_id);
+    // Issue #444: delivery::raise_dispute only accepts the configured dispute
+    // contract, so the real integration flows must wire it up.
+    delivery_client.set_dispute_resolution_contract(&admin, &dispute_resolution_id);
     dispute_client.init(
         &admin,
         &delivery_contract_id,
@@ -1254,6 +1260,9 @@ fn test_integration_resolve_dispute_pay_driver_increases_reputation() {
     escrow_client.init(&admin, &token, &0);
     escrow_client.set_dispute_resolution_contract(&admin, &dispute_resolution_id);
     delivery_client.init(&admin, &escrow_contract_id);
+    // Issue #444: delivery::raise_dispute only accepts the configured dispute
+    // contract, so the real integration flows must wire it up.
+    delivery_client.set_dispute_resolution_contract(&admin, &dispute_resolution_id);
     dispute_client.init(
         &admin,
         &delivery_contract_id,
@@ -1525,6 +1534,9 @@ fn test_configured_values_apply_to_split_and_pay_driver_paths() {
     escrow_client.init(&admin, &token, &0);
     escrow_client.set_dispute_resolution_contract(&admin, &dispute_resolution_id);
     delivery_client.init(&admin, &escrow_contract_id);
+    // Issue #444: delivery::raise_dispute only accepts the configured dispute
+    // contract, so the real integration flows must wire it up.
+    delivery_client.set_dispute_resolution_contract(&admin, &dispute_resolution_id);
     dispute_client.init(
         &admin,
         &delivery_contract_id,
@@ -1828,7 +1840,6 @@ fn test_list_admins_after_multiple_additions_and_removals() {
     assert_eq!(admins.len(), 3);
 }
 
-
 // ── FORCE RESOLVE DISPUTE (Issue #51) ──────────────────────────────────────
 
 /// Test that any party can call force_resolve_dispute once the resolution
@@ -2091,4 +2102,110 @@ fn test_unauthorized_set_dispute_resolution_limit_fails() {
 
     // Non-admin caller (sender) attempts to change the dispute resolution limit.
     dispute_client.set_dispute_resolution_limit(&sender, &172800);
+}
+
+// ── Issue #438 — admin setters for the peer contract addresses ────────────────
+//
+// `init` stored the delivery and escrow addresses and, unlike every other peer
+// pointer in the system, offered no way to update them. The peers were frozen
+// for the lifetime of the deployment: upgrading the escrow or delivery
+// contract forced a redeployment of the dispute contract too. These tests
+// cover both the authorized and unauthorized paths for the new setters.
+
+/// An admin may repoint the delivery contract, and the change is observable
+/// through the existing getter.
+#[test]
+fn test_set_delivery_contract_by_admin() {
+    let (env, admin, _, _, _, _, _, dispute_client) = setup_test();
+
+    let new_delivery = Address::generate(&env);
+    dispute_client.set_delivery_contract(&admin, &new_delivery);
+
+    assert_eq!(dispute_client.get_delivery_contract(), new_delivery);
+}
+
+/// A non-admin caller must be rejected and must not mutate storage.
+#[test]
+fn test_set_delivery_contract_rejects_non_admin() {
+    let (env, _, _, _, _, original_delivery, _, dispute_client) = setup_test();
+
+    let attacker = Address::generate(&env);
+    let result = dispute_client.try_set_delivery_contract(&attacker, &Address::generate(&env));
+    match result {
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::Unauthorized.into()),
+        _ => panic!("Expected FaniLabError::Unauthorized from non-admin delivery setter"),
+    }
+
+    assert_eq!(dispute_client.get_delivery_contract(), original_delivery);
+}
+
+/// An admin may repoint the escrow contract, and the change is observable
+/// through the existing getter.
+#[test]
+fn test_set_escrow_contract_by_admin() {
+    let (env, admin, _, _, _, _, _, dispute_client) = setup_test();
+
+    let new_escrow = Address::generate(&env);
+    dispute_client.set_escrow_contract(&admin, &new_escrow);
+
+    assert_eq!(dispute_client.get_escrow_contract(), new_escrow);
+}
+
+/// A non-admin caller must be rejected and must not mutate storage.
+#[test]
+fn test_set_escrow_contract_rejects_non_admin() {
+    let (env, _, _, _, _, _, original_escrow, dispute_client) = setup_test();
+
+    let attacker = Address::generate(&env);
+    let result = dispute_client.try_set_escrow_contract(&attacker, &Address::generate(&env));
+    match result {
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::Unauthorized.into()),
+        _ => panic!("Expected FaniLabError::Unauthorized from non-admin escrow setter"),
+    }
+
+    assert_eq!(dispute_client.get_escrow_contract(), original_escrow);
+}
+
+/// The setters follow the multi-admin roster, not just the `init` admin.
+#[test]
+fn test_peer_setters_accept_added_admin() {
+    let (env, admin, _, _, _, _, _, dispute_client) = setup_test();
+
+    let second_admin = Address::generate(&env);
+    dispute_client.add_admin(&admin, &second_admin);
+
+    let new_delivery = Address::generate(&env);
+    dispute_client.set_delivery_contract(&second_admin, &new_delivery);
+    assert_eq!(dispute_client.get_delivery_contract(), new_delivery);
+
+    let new_escrow = Address::generate(&env);
+    dispute_client.set_escrow_contract(&second_admin, &new_escrow);
+    assert_eq!(dispute_client.get_escrow_contract(), new_escrow);
+}
+
+/// Both setters publish an event so off-chain indexers can observe a repoint,
+/// matching the `set_identity_reputation_contract` precedent (#382). Uses
+/// `mock_all_auths_allowing_non_root_auth` because `mock_all_auths` discards
+/// the contract-emitted event stream.
+#[test]
+fn test_peer_setters_publish_events() {
+    let env = Env::default();
+    env.mock_all_auths_allowing_non_root_auth();
+
+    let admin = Address::generate(&env);
+    let delivery_id = env.register(MockDeliveryContract, ());
+    let escrow_id = env.register(MockEscrowContract, ());
+    let dispute_id = env.register(DisputeResolutionContract, ());
+    let dispute_client = DisputeResolutionContractClient::new(&env, &dispute_id);
+    dispute_client.init(&admin, &delivery_id, &escrow_id, &86400, &604800);
+
+    dispute_client.set_delivery_contract(&admin, &Address::generate(&env));
+    let (topics, _) = last_event(&env);
+    let topic0: Symbol = Symbol::try_from_val(&env, &topics.get(0).unwrap()).unwrap();
+    assert_eq!(topic0, Symbol::new(&env, "delivery_contract_set"));
+
+    dispute_client.set_escrow_contract(&admin, &Address::generate(&env));
+    let (topics, _) = last_event(&env);
+    let topic0: Symbol = Symbol::try_from_val(&env, &topics.get(0).unwrap()).unwrap();
+    assert_eq!(topic0, Symbol::new(&env, "escrow_contract_set"));
 }

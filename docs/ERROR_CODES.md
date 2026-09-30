@@ -83,7 +83,9 @@ tables when debugging an error from this contract.
 | 8 | `NoPendingTreasuryChange` | `confirm_fleet_treasury_update` called with no proposal pending. |
 | 9 | `TimelockNotElapsed` | `confirm_fleet_treasury_update` called before the proposal's timelock elapsed. |
 | 10 | `FleetInactive` | Requested operation is invalid because the fleet has been deactivated. |
-| 11 | `InvalidConfiguration` | Signer configuration contains an invalid threshold. |
+| 11 | `InvalidConfiguration` | Signer configuration contains an invalid threshold, or a fleet was reactivated while already active. |
+| 12 | `InternalStorageError` | Roster compaction read a storage slot that should have existed but was absent. |
+| 13 | `DriverNotRegistered` | `accept_fleet_invite` was called by an address with no `DriverProfile` in the configured identity/reputation contract (Issue #451). |
 
 ## `SettlementError` — `settlement_contract`
 

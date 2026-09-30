@@ -227,6 +227,52 @@ fn get_identity_reputation_contract(env: &Env) -> Option<Address> {
         .get(&DataKey::IdentityReputationContract)
 }
 
+/// Authorize the delivery-lifecycle transitions `mark_holdback_escrow` and
+/// `release_escrow` (Issue #466).
+///
+/// These two functions are the escrow-side half of a delivery confirmation:
+/// `delivery_contract::confirm_delivery` is the only caller that can also
+/// advance the `DeliveryRecord` to `Delivered` and award the driver their
+/// reputation points. When they were reachable by `caller == record.recipient`
+/// alone, a recipient could invoke them straight on the escrow contract and
+/// take the funds owed for a delivery without ever confirming it. The escrow
+/// then sits in `Released`, so the later `confirm_delivery` call panics inside
+/// `mark_holdback_escrow` (which requires `Locked`), permanently stranding the
+/// delivery in `InTransit` and permanently denying the driver the reputation
+/// they earned for the job.
+///
+/// The fix mirrors how `identity_reputation_contract` restricts score updates
+/// (`is_authorized_contract`, Issue #465) and how `freeze_funds` pins its
+/// caller to the configured dispute contract: the caller must be the
+/// configured `delivery_contract`, or a protocol admin, who keeps a recovery
+/// path for escrows that would otherwise be stuck.
+///
+/// Following the optional-integration pattern already used by
+/// `verify_delivery_if_configured` (Issue #295), an unconfigured deployment
+/// falls back to the legacy `record.recipient` rule. Without a delivery
+/// contract there is no confirmation state machine for a recipient to strand,
+/// so the bypass has nothing to strand; deployments that do run the delivery
+/// lifecycle are protected as soon as they call `set_delivery_contract`.
+fn require_delivery_lifecycle_caller(env: &Env, caller: &Address, record: &EscrowRecord) {
+    if is_admin(env, caller) {
+        return;
+    }
+    match get_delivery_contract(env) {
+        // Configured: only the delivery contract may drive this transition.
+        Some(delivery_contract) => {
+            if *caller != delivery_contract {
+                panic_with_error!(env, FaniLabError::Unauthorized);
+            }
+        }
+        // Not configured: preserve the pre-existing recipient path.
+        None => {
+            if *caller != record.recipient {
+                panic_with_error!(env, FaniLabError::Unauthorized);
+            }
+        }
+    }
+}
+
 #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
 fn payout_driver(
     env: &Env,
@@ -1302,10 +1348,11 @@ impl EscrowContract {
         caller.require_auth();
         require_not_paused(&env);
         let mut record = load_escrow(&env, delivery_id);
-        let recipient_authorized = caller == record.recipient;
-        if !recipient_authorized {
-            panic_with_error!(&env, FaniLabError::Unauthorized);
-        }
+        // Issue #466: only the configured delivery_contract (via
+        // `confirm_delivery`) or an admin may drive this transition; a
+        // recipient calling in directly would strand the delivery record and
+        // deny the driver their reputation.
+        require_delivery_lifecycle_caller(&env, &caller, &record);
         if record.status != EscrowStatus::Locked {
             panic_with_error!(&env, EscrowError::InvalidState);
         }
@@ -1324,11 +1371,12 @@ impl EscrowContract {
         caller.require_auth();
         require_not_paused(&env);
         let mut record = load_escrow(&env, delivery_id);
-        let admin_authorized = is_admin(&env, &caller);
-        let recipient_authorized = caller == record.recipient;
-        if !admin_authorized && !recipient_authorized {
-            panic_with_error!(&env, FaniLabError::Unauthorized);
-        }
+        // Issue #466: only the configured delivery_contract (via
+        // `confirm_delivery`) or an admin may drive this transition. Allowing
+        // the recipient through here let them take the funds without ever
+        // confirming the delivery, permanently stranding the delivery record
+        // and denying the driver their reputation.
+        require_delivery_lifecycle_caller(&env, &caller, &record);
         if record.status != EscrowStatus::Locked {
             panic_with_error!(&env, EscrowError::InvalidState);
         }
@@ -1544,14 +1592,31 @@ impl EscrowContract {
         );
     }
 
+    /// Moves an escrow into `EscrowStatus::Paused` on behalf of the dispute
+    /// state machine.
+    ///
+    /// **Authorization:** the configured `dispute_resolution_contract` only
+    /// (Issue #445) — the same gate `freeze_funds` already uses. Previously the
+    /// sender, recipient, or driver could call this directly, which paused the
+    /// escrow without ever creating a `DisputeCase`. The funds were then
+    /// unrecoverable: `resolve_dispute` / `resolve_dispute_split` require
+    /// `Paused` state but are only reachable through a dispute case, so nothing
+    /// could move the funds again. Disputes must therefore be raised through
+    /// `dispute_resolution_contract::raise_dispute`, which records the case
+    /// before freezing funds.
     #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
     pub fn raise_dispute(env: Env, caller: Address, delivery_id: u64) {
         caller.require_auth();
         require_not_paused(&env);
-        let mut record = load_escrow(&env, delivery_id);
-        if caller != record.sender && caller != record.recipient && caller != record.driver {
+        let dispute_contract: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::DisputeResolutionContract)
+            .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::NotInitialized));
+        if caller != dispute_contract {
             panic_with_error!(&env, FaniLabError::Unauthorized);
         }
+        let mut record = load_escrow(&env, delivery_id);
         // Accept both Locked (pre-delivery dispute) and Holdback (post-delivery
         // dispute, after recipient has confirmed but before escrow is released).
         // This unblocks the Delivered → Disputed transition described in issue
@@ -1892,15 +1957,6 @@ impl EscrowContract {
             .unwrap_or_else(|| panic_with_error!(env, EscrowError::DeliveryNotFound))
     }
 
-    /// Returns `true` if an escrow record exists for the given delivery ID,
-    /// `false` otherwise.  Never panics for an unknown ID.  No authorization
-    /// is required.  Use this to check presence before calling `get_escrow`
-    /// if you want to avoid the panic that accessor raises for missing records
-    /// (Issue #312).
-    pub fn has_escrow(env: Env, delivery_id: u64) -> bool {
-        env.storage().persistent().has(&escrow_key(delivery_id))
-    }
-
     #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
     pub fn freeze_funds(env: Env, caller: Address, delivery_id: u64) {
         caller.require_auth();
@@ -2036,7 +2092,7 @@ impl EscrowContract {
 
     /// Returns the amount of untracked balance for a given token without executing
     /// a sweep. This is a read-only view function used for visibility and monitoring.
-    /// 
+    ///
     /// Untracked balance = contract_balance - total_locked. If the contract balance
     /// is less than or equal to total_locked, returns 0 (indicating nothing to sweep).
     ///
@@ -2052,7 +2108,12 @@ impl EscrowContract {
     }
 
     #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
-    pub fn sweep_untracked_balance(env: Env, admin: Address, token: Address, recipient: Address) -> i128 {
+    pub fn sweep_untracked_balance(
+        env: Env,
+        admin: Address,
+        token: Address,
+        recipient: Address,
+    ) -> i128 {
         admin.require_auth();
         require_admin(&env, &admin);
         require_not_paused(&env);

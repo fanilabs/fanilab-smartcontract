@@ -196,6 +196,7 @@ impl FleetManagementContract {
     /// Configure the address of the identity_reputation_contract.  Admin only.
     /// Once set, `register_fleet` will automatically create an identity profile
     /// for the fleet owner via a cross-contract call.
+    #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
     pub fn set_identity_contract(env: Env, admin: Address, identity_contract: Address) {
         admin.require_auth();
         if !is_admin(&env, &admin) {
@@ -204,8 +205,23 @@ impl FleetManagementContract {
         env.storage()
             .instance()
             .set(&DataKey::IdentityContract, &identity_contract);
+        env.storage()
+            .instance()
+            .extend_ttl(ttl::LEDGER_TTL_THRESHOLD, ttl::LEDGER_TTL_EXTEND_TO);
+        env.events().publish(
+            (Symbol::new(&env, "identity_contract_updated"),),
+            (admin, identity_contract),
+        );
     }
 
+    /// Return the configured identity_reputation_contract address, if any.
+    pub fn get_identity_contract(env: Env) -> Option<Address> {
+        env.storage()
+            .instance()
+            .get(&DataKey::IdentityContract)
+    }
+
+    #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
     pub fn set_escrow_contract(env: Env, admin: Address, escrow_contract: Address) {
         admin.require_auth();
         if !is_admin(&env, &admin) {
@@ -214,6 +230,20 @@ impl FleetManagementContract {
         env.storage()
             .instance()
             .set(&DataKey::EscrowContract, &escrow_contract);
+        env.storage()
+            .instance()
+            .extend_ttl(ttl::LEDGER_TTL_THRESHOLD, ttl::LEDGER_TTL_EXTEND_TO);
+        env.events().publish(
+            (Symbol::new(&env, "escrow_contract_updated"),),
+            (admin, escrow_contract),
+        );
+    }
+
+    /// Return the configured escrow_contract address, if any.
+    pub fn get_escrow_contract(env: Env) -> Option<Address> {
+        env.storage()
+            .instance()
+            .get(&DataKey::EscrowContract)
     }
 
     // ── Issue #67 — register_fleet ────────────────────────────────────────────

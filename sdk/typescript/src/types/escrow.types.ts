@@ -87,6 +87,22 @@ export interface SetSettlementContractParams {
   settlementContract: string;
 }
 
+/**
+ * Mirrors the Rust `PendingSettlementContract` struct returned by
+ * `get_pending_settlement_contract`. Present only when a timelock proposal
+ * is in-flight; `null` means no change is pending.
+ */
+export interface PendingSettlementContractInfo {
+  /** The proposed new settlement contract address. */
+  settlementContract: string;
+  /** Unix timestamp (seconds) after which the change may be confirmed. */
+  activatesAt: bigint;
+}
+
+export interface ConfirmSettlementContractParams {
+  admin: string;
+}
+
 export interface SetFleetManagementContractParams {
   admin: string;
   fleetContract: string;

@@ -4,6 +4,41 @@
 
 import { DeliveryStatus } from './common.types';
 
+/**
+ * Error codes emitted by the Rust `delivery_contract` as contract panics.
+ * Maps directly to the `DeliveryError` `#[contracterror]` enum (repr u32).
+ * Use these constants to programmatically identify specific protocol errors
+ * rather than hard-coding raw integer values.
+ *
+ * @example
+ * ```ts
+ * try {
+ *   await deliveryClient.assignDriver(params);
+ * } catch (err) {
+ *   if (extractErrorCode(err) === DeliveryErrorCode.InvalidDriver) {
+ *     // handle invalid driver
+ *   }
+ * }
+ * ```
+ */
+export enum DeliveryErrorCode {
+  /** The requested state transition is not permitted by the delivery state machine. */
+  InvalidState = 1,
+  /** Delivery metadata failed validation (empty origin/destination, invalid weight, etc.). */
+  InvalidMetadata = 2,
+  /** A batch operation exceeded the maximum allowed batch size. */
+  BatchTooLarge = 3,
+  /** The driver address is the same as the sender or recipient, which is never valid. */
+  InvalidDriver = 4,
+  /** Sender and recipient must be different parties. */
+  InvalidParties = 5,
+  /**
+   * The escrow securing this delivery is absent or not in the `Locked` state
+   * at a point where a funded escrow is a precondition (e.g. `mark_in_transit`).
+   */
+  EscrowNotLocked = 6,
+}
+
 export interface CreateDeliveryParams {
   sender: string;
   recipient: string;

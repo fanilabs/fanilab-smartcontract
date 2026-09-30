@@ -193,13 +193,37 @@ export class EscrowClient {
   }
 
   /**
-   * Set the settlement contract address
+   * Get the pending settlement contract change, if any timelock proposal is in-flight.
+   * Returns null when no change is pending.
+   */
+  async getPendingSettlementContract(options?: ContractInvokeOptions): Promise<EscrowTypes.PendingSettlementContractInfo | null> {
+    const raw = await this.invoker.call('get_pending_settlement_contract', [], options);
+    if (raw === null || raw === undefined) return null;
+    const record = raw as Record<string, unknown>;
+    return {
+      settlementContract: String(record.settlement_contract),
+      activatesAt: BigInt(String(record.activates_at)),
+    };
+  }
+
+  /**
+   * Set the settlement contract address (proposes a timelocked change)
    */
   async setSettlementContract(
     params: EscrowTypes.SetSettlementContractParams,
     options?: ContractInvokeOptions
   ): Promise<void> {
     await this.invoker.call('set_settlement_contract', [address(params.admin), address(params.settlementContract)], options);
+  }
+
+  /**
+   * Confirm a previously proposed settlement contract change once its timelock has elapsed.
+   */
+  async confirmSettlementContract(
+    params: EscrowTypes.ConfirmSettlementContractParams,
+    options?: ContractInvokeOptions
+  ): Promise<void> {
+    await this.invoker.call('confirm_settlement_contract', [address(params.admin)], options);
   }
 
   /**

@@ -1637,6 +1637,39 @@ fn test_update_delivery_metadata_while_pending() {
     assert!(updated_delivery.metadata.cargo_description.fragile);
 }
 
+#[test]
+fn test_update_delivery_metadata_while_active() {
+    let env = Env::default();
+    let (client, shipper, driver, recipient, escrow_id, _) = setup_full(&env);
+    let metadata = get_test_metadata(&env, 1);
+    let delivery_id = client.create_delivery(&shipper, &recipient, &metadata);
+
+    // Make it Active
+    client.assign_driver(&delivery_id, &driver, &escrow_id);
+
+    use shared_types::{CargoCategory, CargoDescriptor};
+    let updated_metadata = DeliveryMetadata {
+        delivery_id: 1,
+        origin: String::from_str(&env, "New Origin"),
+        destination: String::from_str(&env, "New Destination"),
+        cargo_description: CargoDescriptor {
+            weight_grams: 500,
+            category: CargoCategory::Electronics,
+            fragile: true,
+        },
+        created_at: env.ledger().timestamp(),
+        estimated_delivery: env.ledger().timestamp() + 172800,
+    };
+
+    client.update_delivery_metadata(&shipper, &delivery_id, &updated_metadata);
+
+    let updated_delivery = client.get_delivery(&delivery_id);
+    assert_eq!(
+        updated_delivery.metadata.origin,
+        String::from_str(&env, "New Origin")
+    );
+}
+
 // ── DeliveryMetadata.delivery_id cross-check (Issue #45) ───────────────────
 
 #[test]

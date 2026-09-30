@@ -1173,6 +1173,7 @@ impl FleetManagementContract {
         fleet_id: u64,
         signers: soroban_sdk::Vec<Address>,
         threshold: u32,
+        co_signers: soroban_sdk::Vec<Address>,
     ) {
         env.storage().instance().extend_ttl(ttl::LEDGER_TTL_THRESHOLD, ttl::LEDGER_TTL_EXTEND_TO);
         owner.require_auth();
@@ -1187,6 +1188,8 @@ impl FleetManagementContract {
         if profile.owner != owner {
             panic_with_error!(&env, FleetError::Unauthorized);
         }
+
+        require_signer_threshold(&env, &profile, &owner, &co_signers);
 
         // Issue #463: reject an oversized signer vector before it can be
         // persisted, so the profile never grows past the point where loading

@@ -155,7 +155,7 @@ fn test_admin_reassign_fleet_owner_resets_signers() {
     let mut signers = soroban_sdk::Vec::new(&env);
     signers.push_back(owner.clone());
     signers.push_back(signer2);
-    client.configure_signers(&owner, &fleet_id, &signers, &2u32);
+    client.configure_signers(&owner, &fleet_id, &signers, &2u32, &soroban_sdk::Vec::new(&env));
 
     client.admin_reassign_fleet_owner(&admin, &fleet_id, &new_owner);
 
@@ -1066,7 +1066,7 @@ fn test_configure_signers_adds_multiple_signers() {
     new_signers.push_back(signer2.clone());
     new_signers.push_back(signer3.clone());
 
-    client.configure_signers(&owner, &fleet_id, &new_signers, &2u32);
+    client.configure_signers(&owner, &fleet_id, &new_signers, &2u32, &soroban_sdk::Vec::new(&env));
 
     let profile = client.get_fleet(&fleet_id);
     assert_eq!(profile.signers.len(), 3u32);
@@ -1098,7 +1098,7 @@ fn test_signer_threshold_is_enforced_for_fleet_actions() {
     let mut signers = soroban_sdk::Vec::new(&env);
     signers.push_back(owner.clone());
     signers.push_back(signer2.clone());
-    client.configure_signers(&owner, &fleet_id, &signers, &2u32);
+    client.configure_signers(&owner, &fleet_id, &signers, &2u32, &soroban_sdk::Vec::new(&env));
 
     let mut co_signer2 = soroban_sdk::Vec::new(&env);
     co_signer2.push_back(signer2.clone());
@@ -1169,7 +1169,7 @@ fn test_signer_threshold_ignores_unconfigured_and_duplicate_signers() {
     let mut signers = soroban_sdk::Vec::new(&env);
     signers.push_back(owner.clone());
     signers.push_back(signer2.clone());
-    client.configure_signers(&owner, &fleet_id, &signers, &2u32);
+    client.configure_signers(&owner, &fleet_id, &signers, &2u32, &soroban_sdk::Vec::new(&env));
 
     // Duplicating `owner` in co_signers must not double-count them.
     let mut duplicate_owner = soroban_sdk::Vec::new(&env);
@@ -1201,6 +1201,42 @@ fn test_signer_threshold_ignores_unconfigured_and_duplicate_signers() {
 }
 
 #[test]
+fn test_configure_signers_requires_threshold() {
+    let (env, client, _admin) = setup_test();
+
+    let owner = Address::generate(&env);
+    let signer2 = Address::generate(&env);
+    let signer3 = Address::generate(&env);
+
+    let fleet_id = client.register_fleet(&owner);
+
+    let mut signers = soroban_sdk::Vec::new(&env);
+    signers.push_back(owner.clone());
+    signers.push_back(signer2.clone());
+    signers.push_back(signer3.clone());
+
+    // Initially threshold is 1 (default for owner). Set it to 2.
+    client.configure_signers(&owner, &fleet_id, &signers, &2u32, &soroban_sdk::Vec::new(&env));
+
+    let mut new_signers = soroban_sdk::Vec::new(&env);
+    new_signers.push_back(owner.clone());
+
+    // Fails without co-signers
+    let result = client.try_configure_signers(&owner, &fleet_id, &new_signers, &1u32, &soroban_sdk::Vec::new(&env));
+    match result {
+        Err(Ok(err)) => assert_eq!(err, FleetError::ThresholdNotMet.into()),
+        _ => panic!("Expected threshold error"),
+    }
+
+    // Succeeds with co-signers
+    let mut co_signers = soroban_sdk::Vec::new(&env);
+    co_signers.push_back(signer2.clone());
+    client.configure_signers(&owner, &fleet_id, &new_signers, &1u32, &co_signers);
+    
+    assert_eq!(client.get_fleet_signers(&fleet_id).0.len(), 1);
+}
+
+#[test]
 fn test_configure_signers_unauthorized_not_owner() {
     let (env, client, _admin) = setup_test();
 
@@ -1215,7 +1251,7 @@ fn test_configure_signers_unauthorized_not_owner() {
     new_signers.push_back(owner.clone());
     new_signers.push_back(signer2.clone());
 
-    let result = client.try_configure_signers(&attacker, &fleet_id, &new_signers, &2u32);
+    let result = client.try_configure_signers(&attacker, &fleet_id, &new_signers, &2u32, &soroban_sdk::Vec::new(&env));
     match result {
         Err(Ok(err)) => assert_eq!(err, FleetError::Unauthorized.into()),
         _ => panic!("Expected FleetError::Unauthorized"),
@@ -1275,7 +1311,7 @@ fn test_add_driver_authorized_signer_allowed() {
     new_signers.push_back(owner.clone());
     new_signers.push_back(signer2.clone());
 
-    client.configure_signers(&owner, &fleet_id, &new_signers, &1u32);
+    client.configure_signers(&owner, &fleet_id, &new_signers, &1u32, &soroban_sdk::Vec::new(&env));
 
     let driver = Address::generate(&env);
     client.add_driver_to_fleet(&signer2, &fleet_id, &driver, &no_co_signers(&env));
@@ -1294,7 +1330,7 @@ fn test_configure_signers_rejects_invalid_threshold() {
     let mut signers = soroban_sdk::Vec::new(&env);
     signers.push_back(owner.clone());
 
-    let result = client.try_configure_signers(&owner, &fleet_id, &signers, &2u32);
+    let result = client.try_configure_signers(&owner, &fleet_id, &signers, &2u32, &soroban_sdk::Vec::new(&env));
     match result {
         Err(Ok(err)) => assert_eq!(err, FleetError::InvalidConfiguration.into()),
         _ => panic!("Expected FleetError::InvalidConfiguration"),
@@ -1310,7 +1346,7 @@ fn test_configure_signers_rejects_zero_threshold() {
     let fleet_id = client.register_fleet(&owner, &treasury);
     let signers = soroban_sdk::Vec::new(&env);
 
-    let result = client.try_configure_signers(&owner, &fleet_id, &signers, &0u32);
+    let result = client.try_configure_signers(&owner, &fleet_id, &signers, &0u32, &soroban_sdk::Vec::new(&env));
     match result {
         Err(Ok(err)) => assert_eq!(err, FleetError::InvalidConfiguration.into()),
         _ => panic!("Expected FleetError::InvalidConfiguration"),
@@ -1334,7 +1370,7 @@ fn test_configure_signers_rejects_oversized_signer_vector() {
     while signers.len() < MAX_SIGNERS_PER_FLEET {
         signers.push_back(Address::generate(&env));
     }
-    client.configure_signers(&owner, &fleet_id, &signers, &1u32);
+    client.configure_signers(&owner, &fleet_id, &signers, &1u32, &soroban_sdk::Vec::new(&env));
     assert_eq!(
         client.get_fleet_signers(&fleet_id).0.len(),
         MAX_SIGNERS_PER_FLEET
@@ -1342,7 +1378,7 @@ fn test_configure_signers_rejects_oversized_signer_vector() {
 
     // One address over the cap is cleanly rejected as invalid configuration.
     signers.push_back(Address::generate(&env));
-    let result = client.try_configure_signers(&owner, &fleet_id, &signers, &1u32);
+    let result = client.try_configure_signers(&owner, &fleet_id, &signers, &1u32, &soroban_sdk::Vec::new(&env));
     match result {
         Err(Ok(err)) => assert_eq!(err, FleetError::InvalidConfiguration.into()),
         _ => panic!("Expected FleetError::InvalidConfiguration"),
@@ -1387,7 +1423,7 @@ fn test_remove_driver_by_authorized_signer() {
     new_signers.push_back(owner.clone());
     new_signers.push_back(signer2.clone());
 
-    client.configure_signers(&owner, &fleet_id, &new_signers, &1u32);
+    client.configure_signers(&owner, &fleet_id, &new_signers, &1u32, &soroban_sdk::Vec::new(&env));
 
     let driver = Address::generate(&env);
     client.add_driver_to_fleet(&owner, &fleet_id, &driver, &no_co_signers(&env));

@@ -123,7 +123,8 @@ export class FleetManagementClient {
   }
 
   async configureSigners(params: FleetManagementTypes.ConfigureSignersParams, options?: ContractInvokeOptions): Promise<void> {
-    await this.invoker.call('configure_signers', [address(params.owner), u64(params.fleetId), vec(params.signers.map(address)), u32(params.threshold)], options);
+    const coSigners = params.coSigners || [];
+    await this.invoker.call('configure_signers', [address(params.owner), u64(params.fleetId), vec(params.signers.map(address)), u32(params.threshold), vec(coSigners.map(address))], options);
   }
 
   async getFleetSigners(fleetId: bigint, options?: ContractInvokeOptions): Promise<{ signers: string[]; threshold: number }> {

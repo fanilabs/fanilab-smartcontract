@@ -53,6 +53,18 @@ fn setup_token(env: &Env, admin: &Address) -> Address {
         .address()
 }
 
+/// Registers and configures a fresh `dispute_resolution_contract` stand-in,
+/// returning its address.
+///
+/// `raise_dispute` is restricted to that address (Issue #445) so that pausing
+/// an escrow can only ever happen as part of a recorded dispute. Tests that
+/// drive `raise_dispute` directly therefore have to configure one first.
+fn new_dispute_contract(env: &Env, client: &EscrowContractClient, admin: &Address) -> Address {
+    let dispute = Address::generate(env);
+    client.set_dispute_resolution_contract(admin, &dispute);
+    dispute
+}
+
 fn mint(env: &Env, token: &Address, to: &Address, amount: i128) {
     StellarAssetClient::new(env, token).mint(to, &amount);
 }
@@ -504,11 +516,12 @@ fn test_raise_dispute_pauses_escrow_and_records_metadata() {
     mint(&env, &token, &sender, 700);
     client.create_escrow(&sender, &recipient, &driver, &6u64, &token, &700, &None);
 
-    client.raise_dispute(&recipient, &6u64);
+    let dispute = new_dispute_contract(&env, &client, &admin);
+    client.raise_dispute(&dispute, &6u64);
 
     let record = client.get_escrow(&6u64);
     assert_eq!(record.status, EscrowStatus::Paused);
-    assert_eq!(record.disputed_by, Some(recipient));
+    assert_eq!(record.disputed_by, Some(dispute));
     assert_eq!(record.disputed_at, Some(env.ledger().timestamp()));
 }
 
@@ -528,7 +541,7 @@ fn test_refund_from_paused_state_by_admin_allowed() {
     mint(&env, &token, &sender, 300);
 
     client.create_escrow(&sender, &recipient, &driver, &7u64, &token, &300, &None);
-    client.raise_dispute(&sender, &7u64);
+    client.raise_dispute(&new_dispute_contract(&env, &client, &admin), &7u64);
     client.refund_escrow(&admin, &7u64);
 
     assert_eq!(balance(&env, &token, &sender), 300);
@@ -555,7 +568,7 @@ fn test_sender_cannot_self_refund_disputed_escrow() {
     mint(&env, &token, &sender, 300);
 
     client.create_escrow(&sender, &recipient, &driver, &910u64, &token, &300, &None);
-    client.raise_dispute(&sender, &910u64);
+    client.raise_dispute(&new_dispute_contract(&env, &client, &admin), &910u64);
 
     let result = client.try_refund_escrow(&sender, &910u64);
     match result {
@@ -584,7 +597,7 @@ fn test_release_from_paused_state_rejected_with_invalid_state() {
     mint(&env, &token, &sender, 300);
 
     client.create_escrow(&sender, &recipient, &driver, &8u64, &token, &300, &None);
-    client.raise_dispute(&recipient, &8u64);
+    client.raise_dispute(&new_dispute_contract(&env, &client, &admin), &8u64);
 
     let result = client.try_release_escrow(&admin, &8u64);
     match result {
@@ -701,7 +714,7 @@ fn test_resolve_dispute_refund_with_insufficient_funds() {
     mint(&env, &token, &sender, 200);
     client.create_escrow(&sender, &recipient, &driver, &11u64, &token, &200, &None);
 
-    client.raise_dispute(&sender, &11u64);
+    client.raise_dispute(&new_dispute_contract(&env, &client, &admin), &11u64);
 
     env.as_contract(&contract_id, || {
         let mut record: EscrowRecord = env
@@ -1206,7 +1219,7 @@ fn test_total_locked_decreases_on_dispute_resolve() {
     client.create_escrow(&sender, &recipient, &driver, &304u64, &token, &1000, &None);
     assert_eq!(client.get_total_locked(&token), 1000);
 
-    client.raise_dispute(&recipient, &304u64);
+    client.raise_dispute(&new_dispute_contract(&env, &client, &admin), &304u64);
     assert_eq!(client.get_total_locked(&token), 1000);
 
     client.resolve_dispute(&admin, &304u64, &false);
@@ -1231,7 +1244,7 @@ fn test_total_locked_decreases_on_dispute_split() {
     client.create_escrow(&sender, &recipient, &driver, &305u64, &token, &1000, &None);
     assert_eq!(client.get_total_locked(&token), 1000);
 
-    client.raise_dispute(&recipient, &305u64);
+    client.raise_dispute(&new_dispute_contract(&env, &client, &admin), &305u64);
     client.resolve_dispute_split(&admin, &305u64, &5000);
     assert_eq!(client.get_total_locked(&token), 0);
 }
@@ -1593,7 +1606,7 @@ fn test_resolve_dispute_split_50_50() {
     mint(&env, &token, &sender, 1000);
 
     client.create_escrow(&sender, &recipient, &driver, &400u64, &token, &1000, &None);
-    client.raise_dispute(&sender, &400u64);
+    client.raise_dispute(&new_dispute_contract(&env, &client, &admin), &400u64);
 
     client.resolve_dispute(&admin, &400u64, &true);
 
@@ -1619,7 +1632,7 @@ fn test_resolve_dispute_refund_emits_escrow_refunded_event() {
     mint(&env, &token, &sender, 1000);
 
     client.create_escrow(&sender, &recipient, &driver, &401u64, &token, &1000, &None);
-    client.raise_dispute(&sender, &401u64);
+    client.raise_dispute(&new_dispute_contract(&env, &client, &admin), &401u64);
 
     client.resolve_dispute(&admin, &401u64, &false);
 
@@ -1671,7 +1684,7 @@ fn test_resolve_dispute_split_0_100() {
     mint(&env, &token, &sender, 1000);
 
     client.create_escrow(&sender, &recipient, &driver, &402u64, &token, &1000, &None);
-    client.raise_dispute(&sender, &402u64);
+    client.raise_dispute(&new_dispute_contract(&env, &client, &admin), &402u64);
 
     client.resolve_dispute_split(&admin, &402u64, &5000);
 
@@ -1725,7 +1738,7 @@ fn test_resolve_dispute_split_100_0() {
     mint(&env, &token, &sender, 1000);
 
     client.create_escrow(&sender, &recipient, &driver, &403u64, &token, &1000, &None);
-    client.raise_dispute(&sender, &403u64);
+    client.raise_dispute(&new_dispute_contract(&env, &client, &admin), &403u64);
 
     client.resolve_dispute(&admin, &403u64, &true);
 
@@ -2242,7 +2255,7 @@ fn test_resolve_dispute_release_to_driver_applies_volume_discount() {
     assert_eq!(balance(&env, &token, &admin), 10);
 
     client.create_escrow(&sender, &recipient, &driver, &516u64, &token, &1000, &None);
-    client.raise_dispute(&sender, &516u64);
+    client.raise_dispute(&new_dispute_contract(&env, &client, &admin), &516u64);
     client.resolve_dispute(&admin, &516u64, &true);
 
     assert_eq!(balance(&env, &token, &driver), 990 + 994); // 1000 - 6 discounted fee
@@ -2617,7 +2630,7 @@ fn test_resolve_dispute_updates_state_before_release_transfer() {
     mint(&env, &token, &sender, 2000);
 
     client.create_escrow(&sender, &recipient, &driver, &502u64, &token, &2000, &None);
-    client.raise_dispute(&sender, &502u64);
+    client.raise_dispute(&new_dispute_contract(&env, &client, &admin), &502u64);
     client.resolve_dispute(&admin, &502u64, &true);
 
     let record = client.get_escrow(&502u64);
@@ -2691,7 +2704,7 @@ fn test_resolve_dispute_refund_sets_refunded_status() {
     mint(&env, &token, &sender, 2000);
 
     client.create_escrow(&sender, &recipient, &driver, &503u64, &token, &2000, &None);
-    client.raise_dispute(&sender, &503u64);
+    client.raise_dispute(&new_dispute_contract(&env, &client, &admin), &503u64);
     client.resolve_dispute(&admin, &503u64, &false);
 
     let record = client.get_escrow(&503u64);
@@ -2715,7 +2728,7 @@ fn test_resolve_dispute_split_updates_state_before_transfer() {
     mint(&env, &token, &sender, 2000);
 
     client.create_escrow(&sender, &recipient, &driver, &504u64, &token, &2000, &None);
-    client.raise_dispute(&sender, &504u64);
+    client.raise_dispute(&new_dispute_contract(&env, &client, &admin), &504u64);
     client.resolve_dispute_split(&admin, &504u64, &3000);
 
     let record = client.get_escrow(&504u64);
@@ -3919,7 +3932,7 @@ fn test_resolve_dispute_release_with_insufficient_funds() {
     mint(&env, &token, &sender, 200);
     client.create_escrow(&sender, &recipient, &driver, &194u64, &token, &200, &None);
 
-    client.raise_dispute(&sender, &194u64);
+    client.raise_dispute(&new_dispute_contract(&env, &client, &admin), &194u64);
 
     // Inflate record.amount to exceed the real contract balance so the guard fires.
     env.as_contract(&contract_id, || {
@@ -3962,7 +3975,7 @@ fn test_resolve_dispute_release_fully_funded_succeeds() {
     mint(&env, &token, &sender, 1000);
     client.create_escrow(&sender, &recipient, &driver, &195u64, &token, &1000, &None);
 
-    client.raise_dispute(&sender, &195u64);
+    client.raise_dispute(&new_dispute_contract(&env, &client, &admin), &195u64);
     client.resolve_dispute(&admin, &195u64, &true);
 
     assert_eq!(client.get_escrow(&195u64).status, EscrowStatus::Released);
@@ -3979,41 +3992,103 @@ fn test_resolve_dispute_release_fully_funded_succeeds() {
 /// post-delivery disputes completely unreachable on-chain.
 #[test]
 fn test_raise_dispute_from_holdback_moves_to_paused() {
-    let (env, contract_id, _token, _admin, _sender, recipient, _driver) =
+    let (env, contract_id, _token, admin, _sender, _recipient, _driver) =
         setup_holdback_escrow(930, 500);
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    client.raise_dispute(&recipient, &930u64);
+    let dispute = new_dispute_contract(&env, &client, &admin);
+    client.raise_dispute(&dispute, &930u64);
 
     let record = client.get_escrow(&930u64);
     assert_eq!(record.status, EscrowStatus::Paused);
-    assert_eq!(record.disputed_by, Some(recipient));
+    assert_eq!(record.disputed_by, Some(dispute));
     assert!(record.disputed_at.is_some());
 }
 
-/// All three parties (sender, recipient, driver) may raise a dispute from
-/// Holdback, not just the recipient who confirmed.
+/// Issue #445 regression: a plain user cannot pause an escrow by calling
+/// `raise_dispute` directly, even after a dispute contract has been
+/// configured.
+///
+/// This is the exact exploit from the issue: before the fix any delivery party
+/// could move the escrow to `Paused` outside the dispute state machine. The
+/// escrow resolution entry points all require an open `DisputeCase` in
+/// `dispute_resolution_contract`, which such a call never creates — so the
+/// locked funds were permanently unrecoverable.
 #[test]
-fn test_raise_dispute_from_holdback_all_parties_allowed() {
-    // Three separate escrows each in Holdback; one dispute raised per party.
+fn test_raise_dispute_direct_user_call_is_unauthorized() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let driver = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+
+    client.init(&admin, &token, &0);
+    // A dispute contract IS configured: the rejection must come from the
+    // caller check, not from a missing configuration.
+    new_dispute_contract(&env, &client, &admin);
+    mint(&env, &token, &sender, 1000);
+    client.create_escrow(&sender, &recipient, &driver, &445u64, &token, &1000, &None);
+
+    for party in [sender.clone(), recipient.clone(), driver.clone()] {
+        let result = client.try_raise_dispute(&party, &445u64);
+        match result {
+            Err(Ok(err)) => assert_eq!(err, FaniLabError::Unauthorized.into()),
+            _ => panic!("Expected FaniLabError::Unauthorized"),
+        }
+    }
+
+    // Funds untouched and no dispute recorded: the escrow is still Locked and
+    // the contract still holds the full amount.
+    let record = client.get_escrow(&445u64);
+    assert_eq!(record.status, EscrowStatus::Locked);
+    assert_eq!(record.disputed_by, None);
+    assert_eq!(balance(&env, &token, &contract_id), 1000);
+}
+
+/// Issue #445 regression: the delivery parties themselves can no longer raise
+/// a dispute directly on the escrow contract.
+///
+/// Before the fix each of the sender, recipient, and driver could pause the
+/// escrow on their own. No `DisputeCase` was ever created, so the funds stayed
+/// `Paused` forever: `resolve_dispute` / `resolve_dispute_split` are reachable
+/// only through the dispute contract and both require an open case. Disputes
+/// must now be raised via `dispute_resolution_contract::raise_dispute`, which
+/// records the case before freezing funds.
+#[test]
+fn test_raise_dispute_from_holdback_rejected_for_all_parties() {
+    // Three separate escrows each in Holdback; one direct call per party.
     for (delivery_id, setup_fn) in [
         (931u64, "sender"),
         (932u64, "recipient"),
         (933u64, "driver"),
     ] {
-        let (env, contract_id, _token, _admin, sender, recipient, driver) =
+        let (env, contract_id, _token, admin, sender, recipient, driver) =
             setup_holdback_escrow(delivery_id, 500);
         let client = EscrowContractClient::new(&env, &contract_id);
+        // Configure a dispute contract: the rejection must come from the caller
+        // check, not from a missing configuration.
+        new_dispute_contract(&env, &client, &admin);
 
         let caller = match setup_fn {
-            "sender" => sender.clone(),
-            "recipient" => recipient.clone(),
-            "driver" => driver.clone(),
-            _ => unreachable!(),
+            "sender" => sender,
+            "recipient" => recipient,
+            _ => driver,
         };
 
-        client.raise_dispute(&caller, &delivery_id);
-        assert_eq!(client.get_escrow(&delivery_id).status, EscrowStatus::Paused);
+        let result = client.try_raise_dispute(&caller, &delivery_id);
+        match result {
+            Err(Ok(err)) => assert_eq!(err, FaniLabError::Unauthorized.into()),
+            _ => panic!("Expected FaniLabError::Unauthorized for a direct party call"),
+        }
+
+        // The escrow must be untouched: still in Holdback, still holding funds.
+        let record = client.get_escrow(&delivery_id);
+        assert_eq!(record.status, EscrowStatus::Holdback);
+        assert_eq!(record.disputed_by, None);
     }
 }
 
@@ -4034,11 +4109,12 @@ fn test_raise_dispute_from_locked_still_works() {
     mint(&env, &token, &sender, 500);
     client.create_escrow(&sender, &recipient, &driver, &934u64, &token, &500, &None);
 
-    client.raise_dispute(&sender, &934u64);
+    let dispute = new_dispute_contract(&env, &client, &admin);
+    client.raise_dispute(&dispute, &934u64);
 
     let record = client.get_escrow(&934u64);
     assert_eq!(record.status, EscrowStatus::Paused);
-    assert_eq!(record.disputed_by, Some(sender));
+    assert_eq!(record.disputed_by, Some(dispute));
 }
 
 /// Terminal states (Released, Refunded, Split) are still rejected by
@@ -4061,7 +4137,8 @@ fn test_raise_dispute_rejects_terminal_states() {
     mint(&env, &token, &sender, 500);
     client.create_escrow(&sender, &recipient, &driver, &935u64, &token, &500, &None);
     client.release_escrow(&recipient, &935u64);
-    let result = client.try_raise_dispute(&sender, &935u64);
+    let dispute = new_dispute_contract(&env, &client, &admin);
+    let result = client.try_raise_dispute(&dispute, &935u64);
     match result {
         Err(Ok(err)) => assert_eq!(err, EscrowError::InvalidState.into()),
         _ => panic!("Expected EscrowError::InvalidState for Released"),
@@ -4071,7 +4148,7 @@ fn test_raise_dispute_rejects_terminal_states() {
     mint(&env, &token, &sender, 500);
     client.create_escrow(&sender, &recipient, &driver, &936u64, &token, &500, &None);
     client.refund_escrow(&sender, &936u64);
-    let result = client.try_raise_dispute(&sender, &936u64);
+    let result = client.try_raise_dispute(&dispute, &936u64);
     match result {
         Err(Ok(err)) => assert_eq!(err, EscrowError::InvalidState.into()),
         _ => panic!("Expected EscrowError::InvalidState for Refunded"),
@@ -4080,9 +4157,9 @@ fn test_raise_dispute_rejects_terminal_states() {
     // Split state
     mint(&env, &token, &sender, 500);
     client.create_escrow(&sender, &recipient, &driver, &937u64, &token, &500, &None);
-    client.raise_dispute(&sender, &937u64);
+    client.raise_dispute(&dispute, &937u64);
     client.resolve_dispute_split(&admin, &937u64, &5000);
-    let result = client.try_raise_dispute(&sender, &937u64);
+    let result = client.try_raise_dispute(&dispute, &937u64);
     match result {
         Err(Ok(err)) => assert_eq!(err, EscrowError::InvalidState.into()),
         _ => panic!("Expected EscrowError::InvalidState for Split"),
@@ -4093,9 +4170,10 @@ fn test_raise_dispute_rejects_terminal_states() {
 /// Holdback.
 #[test]
 fn test_raise_dispute_from_holdback_unauthorized_rejected() {
-    let (env, contract_id, _token, _admin, _sender, _recipient, _driver) =
+    let (env, contract_id, _token, admin, _sender, _recipient, _driver) =
         setup_holdback_escrow(938, 500);
     let client = EscrowContractClient::new(&env, &contract_id);
+    new_dispute_contract(&env, &client, &admin);
     let attacker = Address::generate(&env);
 
     let result = client.try_raise_dispute(&attacker, &938u64);
@@ -4112,18 +4190,19 @@ fn test_raise_dispute_from_holdback_unauthorized_rejected() {
 /// which pinned the broken behaviour.
 #[test]
 fn test_raise_dispute_on_holdback_escrow_now_succeeds() {
-    let (env, contract_id, _token, _admin, sender, recipient, driver) =
+    let (env, contract_id, _token, admin, _sender, _recipient, _driver) =
         setup_holdback_escrow(939, 500);
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    // sender can dispute
-    client.raise_dispute(&sender, &939u64);
+    // The dispute contract can dispute
+    let dispute = new_dispute_contract(&env, &client, &admin);
+    client.raise_dispute(&dispute, &939u64);
     assert_eq!(client.get_escrow(&939u64).status, EscrowStatus::Paused);
 
-    // Once paused, the other parties may no longer raise again (already Paused,
-    // not Locked/Holdback), but the initial dispute is recorded.
+    // Once paused, a repeat raise is rejected (already Paused, not
+    // Locked/Holdback), but the initial dispute is recorded.
     let record = client.get_escrow(&939u64);
-    assert_eq!(record.disputed_by, Some(sender));
+    assert_eq!(record.disputed_by, Some(dispute));
 }
 
 /// End-to-end: freeze_funds from dispute_resolution_contract is a safe no-op
@@ -4132,22 +4211,21 @@ fn test_raise_dispute_on_holdback_escrow_now_succeeds() {
 /// harmless.  See issue #193, "Confirm the ordering" note.
 #[test]
 fn test_freeze_funds_is_noop_on_already_paused_escrow() {
-    let (env, contract_id, _token, admin, sender, _recipient, _driver) =
+    let (env, contract_id, _token, admin, _sender, _recipient, _driver) =
         setup_holdback_escrow(940, 500);
     let client = EscrowContractClient::new(&env, &contract_id);
     let dispute_contract = Address::generate(&env);
     client.set_dispute_resolution_contract(&admin, &dispute_contract);
 
     // raise_dispute transitions Holdback → Paused and sets disputed_by.
-    client.raise_dispute(&sender, &940u64);
+    client.raise_dispute(&dispute_contract, &940u64);
     let after_raise = client.get_escrow(&940u64);
     assert_eq!(after_raise.status, EscrowStatus::Paused);
     let disputed_at_after_raise = after_raise.disputed_at;
 
     // Advance ledger time so a subsequent freeze_funds would produce a
     // different disputed_at if it were not a no-op.
-    env.ledger()
-        .set_timestamp(env.ledger().timestamp() + 60);
+    env.ledger().set_timestamp(env.ledger().timestamp() + 60);
 
     // freeze_funds must be a no-op: status stays Paused, disputed_at unchanged.
     client.freeze_funds(&dispute_contract, &940u64);
@@ -4155,7 +4233,7 @@ fn test_freeze_funds_is_noop_on_already_paused_escrow() {
     assert_eq!(after_freeze.status, EscrowStatus::Paused);
     assert_eq!(after_freeze.disputed_at, disputed_at_after_raise);
     // disputed_by is set by raise_dispute and must not be cleared by freeze_funds.
-    assert_eq!(after_freeze.disputed_by, Some(sender));
+    assert_eq!(after_freeze.disputed_by, Some(dispute_contract));
 }
 
 /// Integration: full confirm_delivery → dispute_resolution_contract::raise_dispute
@@ -4173,18 +4251,18 @@ fn test_post_delivery_dispute_end_to_end() {
 
     let delivery_contract_id = env.register(delivery_contract::DeliveryContract, ());
     let escrow_contract_id = env.register(EscrowContract, ());
-    let dispute_resolution_id = env.register(
-        dispute_resolution_contract::DisputeResolutionContract,
-        (),
-    );
+    let dispute_resolution_id =
+        env.register(dispute_resolution_contract::DisputeResolutionContract, ());
     let identity_contract_id =
         env.register(identity_reputation_contract::IdentityReputationContract, ());
 
     let delivery_client =
         delivery_contract::DeliveryContractClient::new(&env, &delivery_contract_id);
     let escrow_client = EscrowContractClient::new(&env, &escrow_contract_id);
-    let dispute_client =
-        dispute_resolution_contract::DisputeResolutionContractClient::new(&env, &dispute_resolution_id);
+    let dispute_client = dispute_resolution_contract::DisputeResolutionContractClient::new(
+        &env,
+        &dispute_resolution_id,
+    );
     let identity_client = identity_reputation_contract::IdentityReputationContractClient::new(
         &env,
         &identity_contract_id,
@@ -4196,6 +4274,8 @@ fn test_post_delivery_dispute_end_to_end() {
     escrow_client.init(&admin, &token, &0);
     escrow_client.set_dispute_resolution_contract(&admin, &dispute_resolution_id);
     delivery_client.init(&admin, &escrow_contract_id);
+    // Issue #444: delivery::raise_dispute only accepts the dispute contract.
+    delivery_client.set_dispute_resolution_contract(&admin, &dispute_resolution_id);
     identity_client.init(&admin, &delivery_contract_id, &dispute_resolution_id);
     delivery_client.set_identity_reputation_contract(&admin, &identity_contract_id);
     dispute_client.init(
@@ -4252,7 +4332,10 @@ fn test_post_delivery_dispute_end_to_end() {
         EscrowStatus::Paused
     );
     let delivery_record = delivery_client.get_delivery(&delivery_id);
-    assert_eq!(delivery_record.status, delivery_contract::DeliveryStatus::Disputed);
+    assert_eq!(
+        delivery_record.status,
+        delivery_contract::DeliveryStatus::Disputed
+    );
 
     // The dispute can be resolved through the existing admin path.
     dispute_client.resolve_dispute_refund_sender(&admin, &delivery_id);
@@ -4271,7 +4354,6 @@ fn test_post_delivery_dispute_end_to_end() {
     );
 }
 
-
 /// Test that resolve_dispute_split succeeds when called from the dispute
 /// resolution contract (after it has been set via set_dispute_resolution_contract).
 /// This validates the fix for the authorization issue where force_resolve_dispute
@@ -4282,7 +4364,7 @@ fn test_resolve_dispute_split_accepts_dispute_resolution_contract_caller() {
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
-    let dispute_contract = Address::generate(&env);
+    let dispute = Address::generate(&env);
     let sender = Address::generate(&env);
     let recipient = Address::generate(&env);
     let driver = Address::generate(&env);
@@ -4290,11 +4372,11 @@ fn test_resolve_dispute_split_accepts_dispute_resolution_contract_caller() {
     let token = setup_token(&env, &token_admin);
 
     client.init(&admin, &token, &0);
-    client.set_dispute_resolution_contract(&admin, &dispute_contract);
+    client.set_dispute_resolution_contract(&admin, &dispute);
     mint(&env, &token, &sender, 1000);
 
     client.create_escrow(&sender, &recipient, &driver, &500u64, &token, &1000, &None);
-    client.raise_dispute(&sender, &500u64);
+    client.raise_dispute(&dispute, &500u64);
 
     // Verify escrow is Paused after dispute
     let record = client.get_escrow(&500u64);
@@ -4302,7 +4384,7 @@ fn test_resolve_dispute_split_accepts_dispute_resolution_contract_caller() {
 
     // Call resolve_dispute_split as the dispute resolution contract
     // (simulating what force_resolve_dispute does)
-    client.resolve_dispute_split(&dispute_contract, &500u64, &5000);
+    client.resolve_dispute_split(&dispute, &500u64, &5000);
 
     // Verify the split was successful: 50% to sender, 50% to driver
     let record = client.get_escrow(&500u64);
@@ -4331,7 +4413,7 @@ fn test_resolve_dispute_split_requires_admin_when_no_dispute_contract() {
     mint(&env, &token, &sender, 1000);
 
     client.create_escrow(&sender, &recipient, &driver, &501u64, &token, &1000, &None);
-    client.raise_dispute(&sender, &501u64);
+    client.raise_dispute(&new_dispute_contract(&env, &client, &admin), &501u64);
 
     // Try to call resolve_dispute_split as a non-admin
     let attacker = Address::generate(&env);
@@ -4356,7 +4438,10 @@ fn test_clear_fleet_management_contract_reverts_to_none() {
 
     client.init(&admin, &token, &0);
     client.set_fleet_management_contract(&admin, &fleet_contract);
-    assert_eq!(client.get_fleet_management_contract(), Some(fleet_contract));
+    assert_eq!(
+        client.get_fleet_management_contract(),
+        Some(fleet_contract)
+    );
 
     client.clear_fleet_management_contract(&admin);
     assert_eq!(client.get_fleet_management_contract(), None);
@@ -4401,7 +4486,10 @@ fn test_clear_fleet_management_contract_non_admin_rejected() {
     }
 
     // The configured address is untouched by the rejected call.
-    assert_eq!(client.get_fleet_management_contract(), Some(fleet_contract));
+    assert_eq!(
+        client.get_fleet_management_contract(),
+        Some(fleet_contract)
+    );
 }
 
 #[test]
@@ -4483,7 +4571,15 @@ fn test_escrow_refunded_event_shape_matches_across_emitters() {
 
     client_a.init(&admin_a, &token_a, &0);
     mint(&env_a, &token_a, &sender_a, 1000);
-    client_a.create_escrow(&sender_a, &recipient_a, &driver_a, &700u64, &token_a, &1000, &None);
+    client_a.create_escrow(
+        &sender_a,
+        &recipient_a,
+        &driver_a,
+        &700u64,
+        &token_a,
+        &1000,
+        &None,
+    );
     client_a.refund_escrow(&sender_a, &700u64);
 
     // Verify refund_escrow leaves the correct on-chain state.
@@ -4504,10 +4600,20 @@ fn test_escrow_refunded_event_shape_matches_across_emitters() {
 
     client_b.init(&admin_b, &token_b, &0);
     mint(&env_b, &token_b, &sender_b, 1000);
-    client_b.create_escrow(&sender_b, &recipient_b, &driver_b, &701u64, &token_b, &1000, &None);
+    client_b.create_escrow(
+        &sender_b,
+        &recipient_b,
+        &driver_b,
+        &701u64,
+        &token_b,
+        &1000,
+        &None,
+    );
 
     // Advance time past the 30-day expiry.
-    env_b.ledger().set_timestamp(env_b.ledger().timestamp() + 31 * 24 * 60 * 60);
+    env_b
+        .ledger()
+        .set_timestamp(env_b.ledger().timestamp() + 31 * 24 * 60 * 60);
     client_b.reclaim_expired_escrow(&701u64);
 
     // Verify reclaim_expired_escrow leaves the same on-chain state as refund_escrow.
@@ -4539,15 +4645,27 @@ fn test_reclaim_expired_escrow_event_carries_correct_fields() {
 
     client.init(&admin, &token, &0);
     mint(&env, &token, &sender, AMOUNT);
-    client.create_escrow(&sender, &recipient, &driver, &DELIVERY_ID, &token, &AMOUNT, &None);
+    client.create_escrow(
+        &sender,
+        &recipient,
+        &driver,
+        &DELIVERY_ID,
+        &token,
+        &AMOUNT,
+        &None,
+    );
 
-    env.ledger().set_timestamp(env.ledger().timestamp() + 31 * 24 * 60 * 60);
+    env.ledger()
+        .set_timestamp(env.ledger().timestamp() + 31 * 24 * 60 * 60);
     client.reclaim_expired_escrow(&DELIVERY_ID);
 
     // Confirm funds returned to sender and escrow marked Refunded.
     assert_eq!(balance(&env, &token, &sender), AMOUNT);
     assert_eq!(balance(&env, &token, &contract_id), 0);
-    assert_eq!(client.get_escrow(&DELIVERY_ID).status, EscrowStatus::Refunded);
+    assert_eq!(
+        client.get_escrow(&DELIVERY_ID).status,
+        EscrowStatus::Refunded
+    );
 }
 
 /// `refund_escrow` emits the typed `EscrowRefundedEvent` with correct field
@@ -4568,12 +4686,23 @@ fn test_refund_escrow_event_carries_correct_fields() {
 
     client.init(&admin, &token, &0);
     mint(&env, &token, &sender, AMOUNT);
-    client.create_escrow(&sender, &recipient, &driver, &DELIVERY_ID, &token, &AMOUNT, &None);
+    client.create_escrow(
+        &sender,
+        &recipient,
+        &driver,
+        &DELIVERY_ID,
+        &token,
+        &AMOUNT,
+        &None,
+    );
     client.refund_escrow(&sender, &DELIVERY_ID);
 
     assert_eq!(balance(&env, &token, &sender), AMOUNT);
     assert_eq!(balance(&env, &token, &contract_id), 0);
-    assert_eq!(client.get_escrow(&DELIVERY_ID).status, EscrowStatus::Refunded);
+    assert_eq!(
+        client.get_escrow(&DELIVERY_ID).status,
+        EscrowStatus::Refunded
+    );
 }
 
 /// `release_escrow` and `release_holdback_escrow` must produce the same
@@ -4596,12 +4725,20 @@ fn test_escrow_released_event_shape_matches_across_emitters() {
 
     client_a.init(&admin_a, &token_a, &FEE_BPS);
     mint(&env_a, &token_a, &sender_a, AMOUNT);
-    client_a.create_escrow(&sender_a, &recipient_a, &driver_a, &800u64, &token_a, &AMOUNT, &None);
+    client_a.create_escrow(
+        &sender_a,
+        &recipient_a,
+        &driver_a,
+        &800u64,
+        &token_a,
+        &AMOUNT,
+        &None,
+    );
     client_a.release_escrow(&recipient_a, &800u64);
 
     let record_a = client_a.get_escrow(&800u64);
     assert_eq!(record_a.status, EscrowStatus::Released);
-    assert_eq!(balance(&env_a, &token_a, &driver_a), 950);  // AMOUNT - 5% fee
+    assert_eq!(balance(&env_a, &token_a, &driver_a), 950); // AMOUNT - 5% fee
     assert_eq!(balance(&env_a, &token_a, &admin_a), 50);
 
     // --- release_holdback_escrow path (Holdback → Released) ---
@@ -4617,7 +4754,15 @@ fn test_escrow_released_event_shape_matches_across_emitters() {
 
     client_b.init(&admin_b, &token_b, &FEE_BPS);
     mint(&env_b, &token_b, &sender_b, AMOUNT);
-    client_b.create_escrow(&sender_b, &recipient_b, &driver_b, &801u64, &token_b, &AMOUNT, &None);
+    client_b.create_escrow(
+        &sender_b,
+        &recipient_b,
+        &driver_b,
+        &801u64,
+        &token_b,
+        &AMOUNT,
+        &None,
+    );
     client_b.mark_holdback_escrow(&recipient_b, &801u64);
     client_b.release_holdback_escrow(&recipient_b, &801u64);
 
@@ -4650,13 +4795,24 @@ fn test_release_holdback_escrow_event_carries_correct_fields() {
 
     client.init(&admin, &token, &500); // 5% fee
     mint(&env, &token, &sender, AMOUNT);
-    client.create_escrow(&sender, &recipient, &driver, &DELIVERY_ID, &token, &AMOUNT, &None);
+    client.create_escrow(
+        &sender,
+        &recipient,
+        &driver,
+        &DELIVERY_ID,
+        &token,
+        &AMOUNT,
+        &None,
+    );
     client.mark_holdback_escrow(&recipient, &DELIVERY_ID);
     client.release_holdback_escrow(&recipient, &DELIVERY_ID);
 
-    assert_eq!(client.get_escrow(&DELIVERY_ID).status, EscrowStatus::Released);
+    assert_eq!(
+        client.get_escrow(&DELIVERY_ID).status,
+        EscrowStatus::Released
+    );
     assert_eq!(balance(&env, &token, &driver), 1140); // 1200 - 5% = 1140
-    assert_eq!(balance(&env, &token, &admin), 60);    // 5% of 1200
+    assert_eq!(balance(&env, &token, &admin), 60); // 5% of 1200
     assert_eq!(balance(&env, &token, &contract_id), 0);
 }
 
@@ -4678,12 +4834,23 @@ fn test_release_escrow_event_carries_correct_fields() {
 
     client.init(&admin, &token, &500); // 5% fee
     mint(&env, &token, &sender, AMOUNT);
-    client.create_escrow(&sender, &recipient, &driver, &DELIVERY_ID, &token, &AMOUNT, &None);
+    client.create_escrow(
+        &sender,
+        &recipient,
+        &driver,
+        &DELIVERY_ID,
+        &token,
+        &AMOUNT,
+        &None,
+    );
     client.release_escrow(&recipient, &DELIVERY_ID);
 
-    assert_eq!(client.get_escrow(&DELIVERY_ID).status, EscrowStatus::Released);
+    assert_eq!(
+        client.get_escrow(&DELIVERY_ID).status,
+        EscrowStatus::Released
+    );
     assert_eq!(balance(&env, &token, &driver), 1140); // 1200 - 5% = 1140
-    assert_eq!(balance(&env, &token, &admin), 60);    // 5% of 1200
+    assert_eq!(balance(&env, &token, &admin), 60); // 5% of 1200
     assert_eq!(balance(&env, &token, &contract_id), 0);
 }
 
@@ -5067,14 +5234,12 @@ fn test_create_escrow_rejects_nonexistent_delivery_when_configured() {
     // Point escrow → delivery contract: verification is now active
     client.set_delivery_contract(&admin, &delivery_id_raw);
     // DO NOT create a delivery record: delivery_id 9990 does not exist
-    delivery_contract::DeliveryContractClient::new(&env, &delivery_id_raw)
-        .init(&admin, &escrow_id);
+    delivery_contract::DeliveryContractClient::new(&env, &delivery_id_raw).init(&admin, &escrow_id);
     mint(&env, &token, &sender, 1000);
 
     // Expect a panic from the delivery contract's DeliveryNotFound
-    let result = client.try_create_escrow(
-        &sender, &recipient, &driver, &9990u64, &token, &1000, &None,
-    );
+    let result =
+        client.try_create_escrow(&sender, &recipient, &driver, &9990u64, &token, &1000, &None);
     assert!(result.is_err(), "Expected error for nonexistent delivery");
 }
 
@@ -5089,8 +5254,7 @@ fn test_create_escrow_rejects_mismatched_recipient() {
     let escrow_id = env.register(EscrowContract, ());
     let delivery_id_raw = env.register(delivery_contract::DeliveryContract, ());
     let client = EscrowContractClient::new(&env, &escrow_id);
-    let delivery_client =
-        delivery_contract::DeliveryContractClient::new(&env, &delivery_id_raw);
+    let delivery_client = delivery_contract::DeliveryContractClient::new(&env, &delivery_id_raw);
 
     let admin = Address::generate(&env);
     let sender = Address::generate(&env);
@@ -5105,11 +5269,8 @@ fn test_create_escrow_rejects_mismatched_recipient() {
     client.set_delivery_contract(&admin, &delivery_id_raw);
 
     // Create a delivery with real_recipient
-    let did = delivery_client.create_delivery(
-        &sender,
-        &real_recipient,
-        &make_delivery_metadata(&env, 0),
-    );
+    let did =
+        delivery_client.create_delivery(&sender, &real_recipient, &make_delivery_metadata(&env, 0));
     mint(&env, &token, &sender, 1000);
 
     // Try to fund with wrong_recipient — must be rejected
@@ -5138,11 +5299,9 @@ fn test_create_escrow_rejects_mismatched_driver_when_assigned() {
 
     let escrow_id = env.register(EscrowContract, ());
     let delivery_id_raw = env.register(delivery_contract::DeliveryContract, ());
-    let identity_id =
-        env.register(identity_reputation_contract::IdentityReputationContract, ());
+    let identity_id = env.register(identity_reputation_contract::IdentityReputationContract, ());
     let client = EscrowContractClient::new(&env, &escrow_id);
-    let delivery_client =
-        delivery_contract::DeliveryContractClient::new(&env, &delivery_id_raw);
+    let delivery_client = delivery_contract::DeliveryContractClient::new(&env, &delivery_id_raw);
     let identity_client =
         identity_reputation_contract::IdentityReputationContractClient::new(&env, &identity_id);
 
@@ -5161,11 +5320,8 @@ fn test_create_escrow_rejects_mismatched_driver_when_assigned() {
     client.set_delivery_contract(&admin, &delivery_id_raw);
 
     identity_client.register_driver(&real_driver);
-    let did = delivery_client.create_delivery(
-        &sender,
-        &recipient,
-        &make_delivery_metadata(&env, 0),
-    );
+    let did =
+        delivery_client.create_delivery(&sender, &recipient, &make_delivery_metadata(&env, 0));
     delivery_client.assign_driver(&admin, &did, &real_driver);
     mint(&env, &token, &sender, 1000);
 
@@ -5196,8 +5352,7 @@ fn test_create_escrow_allows_unassigned_driver() {
     let escrow_id = env.register(EscrowContract, ());
     let delivery_id_raw = env.register(delivery_contract::DeliveryContract, ());
     let client = EscrowContractClient::new(&env, &escrow_id);
-    let delivery_client =
-        delivery_contract::DeliveryContractClient::new(&env, &delivery_id_raw);
+    let delivery_client = delivery_contract::DeliveryContractClient::new(&env, &delivery_id_raw);
 
     let admin = Address::generate(&env);
     let sender = Address::generate(&env);
@@ -5211,11 +5366,8 @@ fn test_create_escrow_allows_unassigned_driver() {
     client.set_delivery_contract(&admin, &delivery_id_raw);
 
     // Create delivery with no driver assigned yet
-    let did = delivery_client.create_delivery(
-        &sender,
-        &recipient,
-        &make_delivery_metadata(&env, 0),
-    );
+    let did =
+        delivery_client.create_delivery(&sender, &recipient, &make_delivery_metadata(&env, 0));
     mint(&env, &token, &sender, 1000);
 
     // Must succeed even though the driver supplied may differ from what's on the delivery
@@ -5292,11 +5444,9 @@ fn test_create_escrow_happy_path_with_delivery_contract_configured() {
 
     let escrow_id = env.register(EscrowContract, ());
     let delivery_id_raw = env.register(delivery_contract::DeliveryContract, ());
-    let identity_id =
-        env.register(identity_reputation_contract::IdentityReputationContract, ());
+    let identity_id = env.register(identity_reputation_contract::IdentityReputationContract, ());
     let client = EscrowContractClient::new(&env, &escrow_id);
-    let delivery_client =
-        delivery_contract::DeliveryContractClient::new(&env, &delivery_id_raw);
+    let delivery_client = delivery_contract::DeliveryContractClient::new(&env, &delivery_id_raw);
     let identity_client =
         identity_reputation_contract::IdentityReputationContractClient::new(&env, &identity_id);
 
@@ -5314,11 +5464,8 @@ fn test_create_escrow_happy_path_with_delivery_contract_configured() {
     client.set_delivery_contract(&admin, &delivery_id_raw);
 
     identity_client.register_driver(&driver);
-    let did = delivery_client.create_delivery(
-        &sender,
-        &recipient,
-        &make_delivery_metadata(&env, 0),
-    );
+    let did =
+        delivery_client.create_delivery(&sender, &recipient, &make_delivery_metadata(&env, 0));
     // Assign driver before creating the escrow so the driver check is exercised
     delivery_client.assign_driver(&admin, &did, &driver);
     mint(&env, &token, &sender, 5000);
@@ -5536,8 +5683,7 @@ fn test_batch_max_size_accepted_and_over_limit_rejected() {
     for i in 0u64..101 {
         escrow_list_101.push_back((6000u64 + i, driver.clone(), 10i128, None));
     }
-    let result =
-        client.try_create_escrows_batch(&sender2, &recipient2, &token, &escrow_list_101);
+    let result = client.try_create_escrows_batch(&sender2, &recipient2, &token, &escrow_list_101);
     match result {
         Err(Ok(err)) => assert_eq!(err, EscrowError::BatchTooLarge.into()),
         _ => panic!("Expected EscrowError::BatchTooLarge for a batch of 101"),
@@ -5666,7 +5812,10 @@ fn test_batch_timestamps_set_correctly() {
 
     for id in [9101u64, 9102u64] {
         let r = client.get_escrow(&id);
-        assert_eq!(r.created_at, 1_000_000, "created_at must equal ledger timestamp");
+        assert_eq!(
+            r.created_at, 1_000_000,
+            "created_at must equal ledger timestamp"
+        );
         assert_eq!(
             r.expires_at,
             Some(1_000_000 + 30 * 24 * 60 * 60),
@@ -5689,11 +5838,14 @@ fn test_batch_empty_list_returns_zero() {
 
     client.init(&admin, &token, &0);
 
-    let empty: soroban_sdk::Vec<(u64, Address, i128, Option<u64>)> =
-        soroban_sdk::Vec::new(&env);
+    let empty: soroban_sdk::Vec<(u64, Address, i128, Option<u64>)> = soroban_sdk::Vec::new(&env);
     let count = client.create_escrows_batch(&sender, &recipient, &token, &empty);
     assert_eq!(count, 0, "empty batch must return 0");
-    assert_eq!(client.get_total_locked(&token), 0, "TotalLocked must remain 0 after empty batch");
+    assert_eq!(
+        client.get_total_locked(&token),
+        0,
+        "TotalLocked must remain 0 after empty batch"
+    );
 }
 
 /// A foreign (non-protocol) token must be rejected before any transfer occurs.

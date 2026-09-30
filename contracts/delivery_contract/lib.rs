@@ -66,6 +66,11 @@ pub enum DataKey {
     DeliveryIndex(Address, u32, u32),
     DeliveryIndexLen(Address, u32),
     IdentityReputationContract,
+    /// Address of the `dispute_resolution_contract` that is the *only*
+    /// contract permitted to drive this contract into `DeliveryStatus::Disputed`.
+    /// Added in Issue #444 so `raise_dispute` can be gated on the real caller
+    /// instead of trusting a self-declared `caller` argument.
+    DisputeResolutionContract,
     /// When `true`, `assign_driver` requires the driver to have
     /// `kyc_verified = true` in the identity contract before assignment is
     /// permitted.  Defaults to `false` so existing deployments and test
@@ -220,6 +225,57 @@ impl DeliveryContract {
         env.storage()
             .instance()
             .set(&DataKey::IdentityReputationContract, &identity_contract);
+    }
+
+    /// Configure the `dispute_resolution_contract` that is the only caller
+    /// permitted to drive a delivery into `DeliveryStatus::Disputed` (Issue #444).
+    ///
+    /// `raise_dispute` used to accept the sender, recipient, or driver as long
+    /// as they passed `caller.require_auth()`, which let any of them pause the
+    /// escrow directly and skip the dispute state machine entirely — leaving the
+    /// funds locked with no `DisputeCase` an admin could ever resolve. The
+    /// dispute contract now passes its own address as `caller`, and this
+    /// function pins that address so the gate cannot be spoofed.
+    ///
+    /// **Authorization:** Admin only.
+    pub fn set_dispute_resolution_contract(env: Env, admin: Address, dispute_contract: Address) {
+        admin.require_auth();
+        if !is_admin(&env, &admin) {
+            panic_with_error!(&env, FaniLabError::Unauthorized);
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::DisputeResolutionContract, &dispute_contract);
+        env.storage()
+            .instance()
+            .extend_ttl(ttl::LEDGER_TTL_THRESHOLD, ttl::LEDGER_TTL_EXTEND_TO);
+    }
+
+    pub fn get_dispute_resolution_contract(env: Env) -> Option<Address> {
+        env.storage()
+            .instance()
+            .get(&DataKey::DisputeResolutionContract)
+    }
+
+    /// Update the escrow contract this delivery contract cross-calls for every
+    /// escrow-backed operation (funding, refunds, releases, disputes).
+    ///
+    /// `init` stores the escrow address once and, without this setter, any
+    /// upgrade of `escrow_contract` would force a redeployment of this
+    /// contract too — dragging every delivery record with it (Issue #443).
+    ///
+    /// **Authorization:** Admin only.
+    pub fn set_escrow_contract(env: Env, admin: Address, escrow_contract: Address) {
+        admin.require_auth();
+        if !is_admin(&env, &admin) {
+            panic_with_error!(&env, FaniLabError::Unauthorized);
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::EscrowContract, &escrow_contract);
+        env.storage()
+            .instance()
+            .extend_ttl(ttl::LEDGER_TTL_THRESHOLD, ttl::LEDGER_TTL_EXTEND_TO);
     }
 
     pub fn get_identity_reputation_contract(env: Env) -> Option<Address> {
@@ -851,13 +907,30 @@ impl DeliveryContract {
         );
     }
 
-    /// Allow sender or recipient to escalate a delivery to Disputed and pause
-    /// the escrow via a cross-contract call. The escrow call executes first so
-    /// that delivery state is never mutated when the escrow call fails.
+    /// Drives a delivery into `DeliveryStatus::Disputed` and pauses the escrow
+    /// via a cross-contract call. The escrow call executes first so that
+    /// delivery state is never mutated when the escrow call fails.
+    ///
+    /// **Authorization:** the configured `dispute_resolution_contract` only
+    /// (Issue #444). Previously the sender, recipient, or driver could call
+    /// this directly, which paused the escrow without ever creating a
+    /// `DisputeCase` — the funds were then permanently frozen because every
+    /// admin resolution entry point requires a dispute case to exist.
+    /// Authentication of the human party is the dispute contract's job; this
+    /// contract only trusts the pinned dispute contract address.
     #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
     pub fn raise_dispute(env: Env, caller: Address, delivery_id: DeliveryId) {
         caller.require_auth();
         require_escrow_not_paused(&env);
+
+        let dispute_contract: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::DisputeResolutionContract)
+            .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::NotInitialized));
+        if caller != dispute_contract {
+            panic_with_error!(&env, FaniLabError::Unauthorized);
+        }
 
         let key = delivery_key(delivery_id);
         let mut delivery: DeliveryRecord = env
@@ -865,13 +938,6 @@ impl DeliveryContract {
             .persistent()
             .get(&key)
             .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::DeliveryNotFound));
-
-        let is_sender = caller == delivery.sender;
-        let is_recipient = caller == delivery.recipient;
-        let is_driver = delivery.driver.as_ref().map(|d| *d == caller).unwrap_or(false);
-        if !is_sender && !is_recipient && !is_driver {
-            panic_with_error!(&env, FaniLabError::Unauthorized);
-        }
 
         validate_transition(delivery.status, DeliveryStatus::Disputed)
             .unwrap_or_else(|_| panic_with_error!(&env, FaniLabError::InvalidState));

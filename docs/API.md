@@ -507,17 +507,24 @@ escrow_contract.refund_escrow(
 ```
 
 #### `raise_dispute`
-Pause escrow for dispute resolution.
+Pauses the escrow as part of a recorded dispute. **Not a user entry point** —
+it is called by `delivery_contract::raise_dispute` while
+`dispute_resolution_contract::raise_dispute` is recording the `DisputeCase`, and
+can also be driven directly by the dispute contract.
 
 **Parameters:**
-- `caller: Address` - Sender or recipient
+- `caller: Address` - Must be the configured `dispute_resolution_contract`
 - `delivery_id: u64` - Delivery identifier
 
-**Authorization:** Sender or Recipient
+**Authorization:** the configured `dispute_resolution_contract` only, set via
+`set_dispute_resolution_contract` (Issue #445). Previously the sender,
+recipient, or driver could pause the escrow directly, orphaning the funds with
+no resolvable dispute case.
 
 **Errors:**
-- `Unauthorized` - Caller not sender or recipient
-- `InvalidState` - Escrow not in Locked state
+- `NotInitialized` - No dispute contract configured
+- `Unauthorized` - Caller is not the configured dispute contract
+- `InvalidState` - Escrow not in Locked or Holdback state
 
 **Events:** `delivery_disputed`
 
@@ -1252,16 +1259,20 @@ delivery_contract.cancel_delivery(&sender, &delivery_id);
 ```
 
 #### `raise_dispute`
-Sender or recipient raises a dispute.
+Records a dispute and pauses the escrow. **Not a user entry point** — it is
+called exclusively by `dispute_resolution_contract::raise_dispute`, which
+authenticates the human party and creates the `DisputeCase` first.
 
 **Parameters:**
-- `caller: Address` - Sender or recipient
+- `caller: Address` - Must be the configured `dispute_resolution_contract`
 - `delivery_id: DeliveryId` - Delivery identifier
 
-**Authorization:** Sender or Recipient
+**Authorization:** the configured `dispute_resolution_contract` only, set via
+`set_dispute_resolution_contract` (Issue #444).
 
 **Errors:**
-- `NotAuthorized` - Caller not sender or recipient
+- `NotInitialized` - No dispute contract configured
+- `Unauthorized` - Caller is not the configured dispute contract
 - `InvalidState` - Cannot transition to Disputed
 - `ProtocolPaused` - The escrow contract reports a protocol-wide pause
 
@@ -1273,7 +1284,7 @@ Sender or recipient raises a dispute.
 
 **Example:**
 ```rust
-delivery_contract.raise_dispute(&sender, &delivery_id);
+delivery_contract.raise_dispute(&dispute_contract_address, &delivery_id);
 ```
 
 #### `reclaim_delivery_expired_escrow`
@@ -1627,6 +1638,37 @@ Configure the identity/reputation contract address used for reputation penalties
 
 **Errors:**
 - `Unauthorized` - Caller is not an admin
+
+#### `set_escrow_contract`
+Repoint the escrow contract this delivery contract cross-calls for every
+escrow-backed operation (funding, refunds, releases, disputes). Added in Issue
+#443 — previously the address was fixed at `init`, so any escrow upgrade forced
+a redeployment of this contract and every delivery record with it.
+
+**Parameters:**
+- `admin: Address` - Admin address
+- `escrow_contract: Address` - New escrow contract address
+
+**Authorization:** Admin only
+
+**Errors:**
+- `Unauthorized` - Caller is not an admin
+
+#### `set_dispute_resolution_contract`
+Configure the dispute-resolution contract that is the only caller permitted to
+drive a delivery into `Disputed` (Issue #444).
+
+**Parameters:**
+- `admin: Address` - Admin address
+- `dispute_contract: Address` - Address of the dispute resolution contract
+
+**Authorization:** Admin only
+
+**Errors:**
+- `Unauthorized` - Caller is not an admin
+
+#### `get_dispute_resolution_contract`
+Returns the configured dispute-resolution contract address, or `None` when unset.
 
 #### `set_dispute_reputation_penalty`
 Set the flat driver reputation penalty applied when a dispute resolves in the sender's favour.

@@ -29,8 +29,28 @@ export class FleetManagementClient {
     await this.invoker.call('set_identity_contract', [address(params.admin), address(params.identityContract)], options);
   }
 
+  /**
+   * Return the configured identity_reputation_contract address, if any.
+   * Returns `null` when no identity contract has been wired to this fleet contract yet.
+   * Exposes the on-chain `get_identity_contract` read getter (Issue #486).
+   */
+  async getIdentityContract(options?: ContractInvokeOptions): Promise<string | null> {
+    const result = await this.invoker.call('get_identity_contract', [], options);
+    return result == null ? null : String(result);
+  }
+
   async setEscrowContract(params: FleetManagementTypes.SetEscrowContractParams, options?: ContractInvokeOptions): Promise<void> {
     await this.invoker.call('set_escrow_contract', [address(params.admin), address(params.escrowContract)], options);
+  }
+
+  /**
+   * Return the configured escrow_contract address, if any.
+   * Returns `null` when no escrow contract has been wired to this fleet contract yet.
+   * Exposes the on-chain `get_escrow_contract` read getter (Issue #486).
+   */
+  async getEscrowContract(options?: ContractInvokeOptions): Promise<string | null> {
+    const result = await this.invoker.call('get_escrow_contract', [], options);
+    return result == null ? null : String(result);
   }
 
   async registerFleet(params: FleetManagementTypes.RegisterFleetParams, options?: ContractInvokeOptions): Promise<bigint> {

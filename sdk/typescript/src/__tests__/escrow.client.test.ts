@@ -175,3 +175,169 @@ describe('EscrowClient releaseExpiredHoldback binding (issue #452)', () => {
     expect(call).toHaveBeenCalledWith('release_expired_holdback', expect.anything(), undefined);
   });
 });
+
+// ── Issue #485: getPendingSettlementContract and confirmSettlementContract ────
+
+describe('EscrowClient settlement contract timelock lifecycle (Issue #485)', () => {
+  const SETTLEMENT = 'GAEQSCIJBEEQSCIJBEEQSCIJBEEQSCIJBEEQSCIJBEEQSCIJBEEQSH7S';
+  const ACTIVATES_AT = 1_800_000_000n; // a plausible future Unix timestamp
+
+  /**
+   * Step 1 — proposal:
+   * `setSettlementContract` encodes and dispatches the on-chain proposal that
+   * starts the three-day timelock. Confirms the correct function name and args.
+   */
+  it('setSettlementContract calls set_settlement_contract with (admin, address) args', async () => {
+    const call = mockInvoker({ set_settlement_contract: [nativeToScVal(null)] });
+
+    await client().setSettlementContract({ admin: ADMIN, settlementContract: SETTLEMENT });
+
+    const [fn, args] = call.mock.calls[0];
+    expect(fn).toBe('set_settlement_contract');
+    expect(args).toHaveLength(2);
+    expect(decodeAddress(args[0] as xdr.ScVal)).toBe(ADMIN);
+    expect(decodeAddress(args[1] as xdr.ScVal)).toBe(SETTLEMENT);
+  });
+
+  /**
+   * Step 2 — inspection during the timelock window:
+   * `getPendingSettlementContract` reads the pending proposal so frontends can
+   * display the upcoming routing change and its activation timestamp.
+   * Returns `null` when no change is pending.
+   */
+  it('getPendingSettlementContract reads the pending proposal from the contract', async () => {
+    const pending = nativeToScVal({
+      settlement_contract: SETTLEMENT,
+      activates_at: ACTIVATES_AT,
+    });
+    const call = mockInvoker({ get_pending_settlement_contract: [pending] });
+
+    const result = await client().getPendingSettlementContract();
+
+    expect(result).not.toBeNull();
+    expect(result!.settlementContract).toBe(SETTLEMENT);
+    expect(result!.activatesAt).toBe(ACTIVATES_AT);
+    const [fn, args] = call.mock.calls[0];
+    expect(fn).toBe('get_pending_settlement_contract');
+    expect(args).toHaveLength(0);
+  });
+
+  it('getPendingSettlementContract returns null when no proposal is in-flight', async () => {
+    mockInvoker({ get_pending_settlement_contract: [nativeToScVal(null)] });
+
+    const result = await client().getPendingSettlementContract();
+
+    expect(result).toBeNull();
+  });
+
+  it('getPendingSettlementContract returns null when the invoker resolves undefined', async () => {
+    jest
+      .spyOn(ContractInvoker.prototype, 'call')
+      .mockResolvedValue(undefined as never);
+
+    const result = await client().getPendingSettlementContract();
+
+    expect(result).toBeNull();
+  });
+
+  /**
+   * Step 3 — confirmation after the timelock elapses:
+   * `confirmSettlementContract` applies the pending change. Only an admin may
+   * call it; the contract will reject the call if the timelock has not yet
+   * elapsed. This test confirms the SDK binding targets the right function and
+   * passes only the admin address (the contract derives the rest from storage).
+   */
+  it('confirmSettlementContract calls confirm_settlement_contract with only the admin arg', async () => {
+    const call = mockInvoker({ confirm_settlement_contract: [nativeToScVal(null)] });
+
+    await client().confirmSettlementContract({ admin: ADMIN });
+
+    const [fn, args] = call.mock.calls[0];
+    expect(fn).toBe('confirm_settlement_contract');
+    expect(args).toHaveLength(1);
+    expect(decodeAddress(args[0] as xdr.ScVal)).toBe(ADMIN);
+  });
+
+  it('confirmSettlementContract rejects TimelockNotElapsed from the contract', async () => {
+    jest
+      .spyOn(ContractInvoker.prototype, 'call')
+      .mockRejectedValue(
+        new Error('Soroban simulation failed: EscrowError::TimelockNotElapsed'),
+      );
+
+    await expect(client().confirmSettlementContract({ admin: ADMIN })).rejects.toThrow(
+      'TimelockNotElapsed',
+    );
+  });
+
+  it('confirmSettlementContract rejects NoPendingSettlementChange from the contract', async () => {
+    jest
+      .spyOn(ContractInvoker.prototype, 'call')
+      .mockRejectedValue(
+        new Error('Soroban simulation failed: EscrowError::NoPendingSettlementChange'),
+      );
+
+    await expect(client().confirmSettlementContract({ admin: ADMIN })).rejects.toThrow(
+      'NoPendingSettlementChange',
+    );
+  });
+
+  /**
+   * Full two-step lifecycle — the primary acceptance criterion for Issue #485.
+   *
+   * Sequence:
+   *   1. Admin proposes a new settlement contract → timelock starts.
+   *   2. Pending state is visible via `getPendingSettlementContract`.
+   *   3. After the timelock, admin confirms → change applied on-chain.
+   *   4. `getPendingSettlementContract` returns null (proposal consumed).
+   *   5. `getSettlementContract` returns the new address.
+   *
+   * The test is pure SDK / mock — no live node needed — but it exercises the
+   * full call sequence an administrator performs, verifying that every binding
+   * targets the correct contract function and produces the correct arg encoding.
+   */
+  it('full two-step timelock lifecycle: propose → inspect → confirm → verify', async () => {
+    const call = mockInvoker({
+      set_settlement_contract: [nativeToScVal(null)],
+      get_pending_settlement_contract: [
+        // First read: proposal in-flight
+        nativeToScVal({ settlement_contract: SETTLEMENT, activates_at: ACTIVATES_AT }),
+        // Second read: proposal consumed after confirmation
+        nativeToScVal(null),
+      ],
+      confirm_settlement_contract: [nativeToScVal(null)],
+      get_settlement_contract: [nativeToScVal(SETTLEMENT, { type: 'address' })],
+    });
+
+    const escrow = client();
+
+    // Step 1: propose
+    await escrow.setSettlementContract({ admin: ADMIN, settlementContract: SETTLEMENT });
+
+    // Step 2: inspect — change is pending, not yet active
+    const pending = await escrow.getPendingSettlementContract();
+    expect(pending).not.toBeNull();
+    expect(pending!.settlementContract).toBe(SETTLEMENT);
+    expect(pending!.activatesAt).toBe(ACTIVATES_AT);
+
+    // Step 3: confirm (simulates time advancing past the timelock on-chain)
+    await escrow.confirmSettlementContract({ admin: ADMIN });
+
+    // Step 4: pending entry is now consumed — no further proposal in-flight
+    const pendingAfter = await escrow.getPendingSettlementContract();
+    expect(pendingAfter).toBeNull();
+
+    // Step 5: the active settlement contract now resolves to the new address
+    const active = await escrow.getSettlementContract();
+    expect(active).toBe(SETTLEMENT);
+
+    // Confirm the exact sequence of on-chain calls
+    expect(call.mock.calls.map((c) => c[0])).toEqual([
+      'set_settlement_contract',
+      'get_pending_settlement_contract',
+      'confirm_settlement_contract',
+      'get_pending_settlement_contract',
+      'get_settlement_contract',
+    ]);
+  });
+});

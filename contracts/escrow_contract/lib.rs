@@ -552,6 +552,15 @@ pub struct FeeUpdated {
     pub new_fee: u32,
 }
 
+/// Payload of the `slippage_tolerance_updated` event published by
+/// `escrow_contract::update_slippage_tolerance` (Issue #469).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SlippageToleranceUpdated {
+    pub old_slippage_bps: u32,
+    pub new_slippage_bps: u32,
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProtocolInitialized {
@@ -676,6 +685,10 @@ impl EscrowContract {
         load_protocol_config(&env).protocol_version
     }
 
+    /// Update the protocol slippage tolerance (basis points). Publishes a
+    /// `slippage_tolerance_updated` event carrying the previous and the new
+    /// value so subgraph indexers can track constraint history (Issue #469).
+    #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
     pub fn update_slippage_tolerance(env: Env, admin: Address, new_slippage_bps: u32) {
         let stored_admin: Address = env
             .storage()
@@ -690,8 +703,16 @@ impl EscrowContract {
             panic_with_error!(&env, EscrowError::InvalidFee);
         }
         let mut config = load_protocol_config(&env);
+        let old_slippage_bps = config.slippage_tolerance_bps;
         config.slippage_tolerance_bps = new_slippage_bps;
         save_protocol_config(&env, &config);
+        env.events().publish(
+            (events::slippage_tolerance_updated(&env),),
+            SlippageToleranceUpdated {
+                old_slippage_bps,
+                new_slippage_bps,
+            },
+        );
         extend_instance_ttl(&env);
     }
 

@@ -216,6 +216,12 @@ pub mod events {
         Symbol::new(env, "fee_updated")
     }
 
+    /// Emitted by `escrow_contract::update_slippage_tolerance` so indexers
+    /// can track protocol slippage-constraint history off-chain (Issue #469).
+    pub fn slippage_tolerance_updated(env: &Env) -> Symbol {
+        Symbol::new(env, "slippage_tolerance_updated")
+    }
+
     pub fn settlement_contract_proposed(env: &Env) -> Symbol {
         // Soroban Symbol values are capped at 32 bytes; the fuller
         // "settlement_contract_change_proposed" (35 bytes) exceeds that.

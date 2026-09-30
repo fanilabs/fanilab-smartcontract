@@ -150,6 +150,7 @@ export const ErrorCodes = {
   DuplicateDelivery: 8,
   ProviderNotFound: 9,
   ProtocolPaused: 11,
+  LimitExceeded: 12,
 } as const;
 
 export interface ContractInvokeOptions {

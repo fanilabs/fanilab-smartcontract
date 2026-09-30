@@ -136,6 +136,24 @@ export class DisputeResolutionClient {
   }
 }
 
+/**
+ * Serialize a `BytesN<32>` evidence hash into its canonical lowercase hex
+ * form. `scValToNative` hands back a byte buffer (`Uint8Array`/`Buffer`),
+ * so a bare `String(...)` would yield "[object Uint8Array]" and destroy the
+ * proof-of-delivery hash (Issue #474). A value that is already a string is
+ * passed through unchanged so the decoder tolerates RPCs that surface the
+ * hash as text.
+ */
+function hexEncode(value: unknown): string {
+  if (typeof value === 'string') {
+    return value;
+  }
+  if (value instanceof Uint8Array) {
+    return Buffer.from(value).toString('hex');
+  }
+  throw new TypeError(`Expected a byte buffer evidence hash, received ${typeof value}`);
+}
+
 function decodeDispute(value: unknown): DisputeCase {
   const record = value as Record<string, unknown>;
   return {
@@ -147,7 +165,7 @@ function decodeDispute(value: unknown): DisputeCase {
       const item = entry as Record<string, unknown>;
       return {
         submitter: String(item.submitter),
-        hash: String(item.hash),
+        hash: hexEncode(item.hash),
       };
     }),
     resolvedAt: record.resolved_at === null || record.resolved_at === undefined ? undefined : Number(record.resolved_at),

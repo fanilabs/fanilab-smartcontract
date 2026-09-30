@@ -6,7 +6,7 @@ use shared_types::{EscrowReleasedEvent, FaniLabError};
 use soroban_sdk::{
     testutils::{Address as _, Events, Ledger as _},
     token::{Client as TokenClient, StellarAssetClient},
-    xdr, Address, Env, TryFromVal, TryIntoVal, Val,
+    xdr, Address, Env, IntoVal, TryFromVal, TryIntoVal, Val,
 };
 
 fn arm_reentrant_mock(env: &Env, target: &Address, attacker: &Address, method: &str, delivery_id: u64) {
@@ -1022,6 +1022,31 @@ fn test_update_slippage_tolerance() {
     client.update_slippage_tolerance(&admin, &1000); // 10%
 
     assert_eq!(client.get_slippage_tolerance(), 1000);
+}
+
+/// Issue #469 — the setter must publish `slippage_tolerance_updated` with the
+/// old and new bps so indexers can track slippage-constraint history.
+#[test]
+fn test_update_slippage_tolerance_emits_event() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+
+    client.init(&admin, &token, &0);
+    client.update_slippage_tolerance(&admin, &1000); // 10%
+
+    let (topics, data) = last_event(&env);
+    let expected: Symbol = events::slippage_tolerance_updated(&env);
+    assert_eq!(topics.len(), 1);
+    assert_eq!(topics.get(0), expected.into_val(&env));
+
+    let payload: SlippageToleranceUpdated = SlippageToleranceUpdated::try_from_val(&env, &data)
+        .expect("failed to decode slippage_tolerance_updated payload");
+    assert_eq!(payload.old_slippage_bps, 500); // default 5%
+    assert_eq!(payload.new_slippage_bps, 1000);
 }
 
 #[test]

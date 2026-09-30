@@ -334,6 +334,8 @@ executed. The default is 500 (5%); the maximum is 10000 (100%).
 
 **Authorization:** Admin only
 
+**Events:** `slippage_tolerance_updated` with the previous and new basis-point values
+
 **Errors:**
 - `Unauthorized` - Caller is not admin
 - `InvalidFee` - Slippage tolerance exceeds 10000

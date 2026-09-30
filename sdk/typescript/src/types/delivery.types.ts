@@ -2,7 +2,7 @@
  * Type definitions for delivery contract functions
  */
 
-import { DeliveryStatus } from './common.types';
+import { DeliveryStatus, DriverStatus, EscrowStatus } from './common.types';
 
 export interface CreateDeliveryParams {
   sender: string;
@@ -11,19 +11,33 @@ export interface CreateDeliveryParams {
   metadata: DeliveryMetadata;
 }
 
+export enum CargoCategory {
+  Documents = 'Documents',
+  Electronics = 'Electronics',
+  Perishables = 'Perishables',
+  Clothing = 'Clothing',
+  General = 'General',
+}
+
 export interface CargoDescriptor {
-  description: string;
-  weight?: number;
-  dimensions?: string;
-  fragile?: boolean;
+  weightGrams: number;
+  category: CargoCategory;
+  fragile: boolean;
 }
 
 export interface DeliveryMetadata {
-  origin: string;
-  destination: string;
-  cargo_description: string;
-  created_at: number;
-  estimated_delivery: number;
+  pickupLocation: string;
+  dropoffLocation: string;
+  cargoDescription?: CargoDescriptor;
+  deliveryId?: bigint;
+  createdAt?: number;
+  estimatedDelivery?: number;
+  /** @deprecated Use estimatedDelivery, which is an absolute Unix timestamp. */
+  estimatedDistance?: number;
+  /** Legacy application-only metadata; it is not stored by the contract. */
+  items?: string;
+  /** Legacy application-only metadata; it is not stored by the contract. */
+  notes?: string;
 }
 
 export interface AssignDriverParams {
@@ -67,6 +81,37 @@ export interface DeliveryRecord {
   createdAt: number;
   deliveredAt?: number;
   transitStartedAt?: number;
+}
+
+export interface DeliveryDriverProfile {
+  address: string;
+  deliveriesCompleted: number;
+  reputationScore: number;
+  registeredAt: number;
+  kycVerified: boolean;
+  status: DriverStatus;
+}
+
+export interface DeliveryEscrowState {
+  deliveryId: bigint;
+  sender: string;
+  recipient: string;
+  driver: string;
+  token: string;
+  amount: bigint;
+  status: EscrowStatus;
+  createdAt: number;
+  expiresAt?: number;
+  disputedBy?: string;
+  disputedAt?: number;
+  holdbackStartedAt?: number;
+  fleetId?: bigint;
+}
+
+export interface CombinedDeliveryState {
+  delivery: DeliveryRecord;
+  escrow?: DeliveryEscrowState;
+  isSynchronized: boolean;
 }
 
 export interface DeliveryCreatedEvent {

@@ -82,18 +82,7 @@ export class DeliveryClient {
     params: DeliveryTypes.CreateDeliveryParams,
     options?: ContractInvokeOptions
   ): Promise<bigint> {
-    const metadata = map([
-      ['delivery_id', u64(params.deliveryId)],
-      ['origin', string(params.metadata.pickupLocation ?? '')],
-      ['destination', string(params.metadata.dropoffLocation ?? '')],
-      ['cargo_description', map([
-        ['weight_grams', u32(1)],
-        ['category', symbol('General')],
-        ['fragile', bool(false)],
-      ])],
-      ['created_at', u64(Math.floor(Date.now() / 1000))],
-      ['estimated_delivery', u64(Math.floor(Date.now() / 1000) + (params.metadata.estimatedDistance ?? 0))],
-    ]);
+    const metadata = encodeDeliveryMetadata(params.deliveryId, params.metadata);
     return BigInt(String(await this.invoker.call('create_delivery', [address(params.sender), address(params.recipient), metadata], options)));
   }
 
@@ -105,18 +94,7 @@ export class DeliveryClient {
     options?: ContractInvokeOptions
   ): Promise<bigint[]> {
     const metadatas = params.deliveries.map((delivery) =>
-      map([
-        ['delivery_id', u64(delivery.deliveryId)],
-        ['origin', string(delivery.metadata.pickupLocation ?? '')],
-        ['destination', string(delivery.metadata.dropoffLocation ?? '')],
-        ['cargo_description', map([
-          ['weight_grams', u32(1)],
-          ['category', symbol('General')],
-          ['fragile', bool(false)],
-        ])],
-        ['created_at', u64(Math.floor(Date.now() / 1000))],
-        ['estimated_delivery', u64(Math.floor(Date.now() / 1000) + (delivery.metadata.estimatedDistance ?? 0))],
-      ])
+      encodeDeliveryMetadata(delivery.deliveryId, delivery.metadata)
     );
     const result = await this.invoker.call(
       'create_deliveries_batch',
@@ -174,18 +152,7 @@ export class DeliveryClient {
     params: DeliveryTypes.UpdateDeliveryMetadataParams,
     options?: ContractInvokeOptions
   ): Promise<void> {
-    const metadata = map([
-      ['delivery_id', u64(params.deliveryId)],
-      ['origin', string(params.metadata.pickupLocation ?? '')],
-      ['destination', string(params.metadata.dropoffLocation ?? '')],
-      ['cargo_description', map([
-        ['weight_grams', u32(1)],
-        ['category', symbol('General')],
-        ['fragile', bool(false)],
-      ])],
-      ['created_at', u64(Math.floor(Date.now() / 1000))],
-      ['estimated_delivery', u64(Math.floor(Date.now() / 1000) + (params.metadata.estimatedDistance ?? 0))],
-    ]);
+    const metadata = encodeDeliveryMetadata(params.deliveryId, params.metadata);
     await this.invoker.call(
       'update_delivery_metadata',
       [address(params.sender), u64(params.deliveryId), metadata],
@@ -217,8 +184,8 @@ export class DeliveryClient {
   /**
    * Get a driver profile from the identity contract
    */
-  async getDriverProfile(driver: string, options?: ContractInvokeOptions): Promise<DeliveryTypes.DriverProfile> {
-    return decodeDriverProfile(await this.identity().call('get_driver_profile', [address(driver)], options));
+  async getDriverProfile(driver: string, options?: ContractInvokeOptions): Promise<DeliveryTypes.DeliveryDriverProfile> {
+    return decodeDriverProfile(await this.invoker.call('get_driver_profile', [address(driver)], options));
   }
 
   /**
@@ -296,25 +263,48 @@ function decodeIds(value: unknown): bigint[] {
   return (value as unknown[]).map((id) => BigInt(String(id)));
 }
 
-function decodeDriverProfile(value: unknown): DeliveryTypes.DriverProfile {
+function decodeDriverProfile(value: unknown): DeliveryTypes.DeliveryDriverProfile {
   const record = value as Record<string, unknown>;
   return {
-    driver: String(record.driver),
-    name: String(record.name),
-    vehicleType: String(record.vehicle_type),
-    licenseNumber: String(record.license_number),
-    isVerified: Boolean(record.is_verified),
-    rating: Number(record.rating),
-    completedDeliveries: Number(record.completed_deliveries),
+    address: String(record.address),
+    deliveriesCompleted: Number(record.deliveries_completed),
+    reputationScore: Number(record.reputation_score),
+    registeredAt: Number(record.registered_at),
+    kycVerified: Boolean(record.kyc_verified),
+    status: String(record.status) as DeliveryTypes.DeliveryDriverProfile['status'],
   };
 }
 
 function decodeCombinedState(value: unknown): DeliveryTypes.CombinedDeliveryState {
+  if (!Array.isArray(value) || value.length !== 3) {
+    throw new TypeError('Invalid combined delivery state returned by contract');
+  }
+  const [delivery, escrow, isSynchronized] = value;
+  return {
+    delivery: decodeDelivery(delivery),
+    escrow: escrow === null || escrow === undefined ? undefined : decodeDeliveryEscrow(escrow),
+    isSynchronized: Boolean(isSynchronized),
+  };
+}
+
+function decodeDeliveryEscrow(value: unknown): DeliveryTypes.DeliveryEscrowState {
   const record = value as Record<string, unknown>;
   return {
-    delivery: decodeDelivery(record.delivery),
-    escrowStatus: record.escrow_status === null ? undefined : String(record.escrow_status),
-    escrowAmount: record.escrow_amount === null ? undefined : BigInt(String(record.escrow_amount)),
+    deliveryId: BigInt(String(record.delivery_id)),
+    sender: String(record.sender),
+    recipient: String(record.recipient),
+    driver: String(record.driver),
+    token: String(record.token),
+    amount: BigInt(String(record.amount)),
+    status: String(record.status) as DeliveryTypes.DeliveryEscrowState['status'],
+    createdAt: Number(record.created_at),
+    expiresAt: record.expires_at == null ? undefined : Number(record.expires_at),
+    disputedBy: record.disputed_by == null ? undefined : String(record.disputed_by),
+    disputedAt: record.disputed_at == null ? undefined : Number(record.disputed_at),
+    holdbackStartedAt: record.holdback_started_at == null
+      ? undefined
+      : Number(record.holdback_started_at),
+    fleetId: record.fleet_id == null ? undefined : BigInt(String(record.fleet_id)),
   };
 }
 
@@ -332,12 +322,42 @@ function decodeDeliveryPage(value: unknown): DeliveryTypes.DeliveryPage {
 function decodeDelivery(value: unknown): DeliveryTypes.DeliveryRecord {
   const record = value as Record<string, unknown>;
   const metadata = record.metadata as Record<string, unknown>;
+  const cargo = metadata.cargo_description as Record<string, unknown>;
   return {
     deliveryId: BigInt(String(record.delivery_id)), sender: String(record.sender), recipient: String(record.recipient),
     driver: record.driver === null ? undefined : String(record.driver), status: record.status as DeliveryTypes.DeliveryRecord['status'],
     metadata: {
-      pickupLocation: String(metadata.origin), dropoffLocation: String(metadata.destination),
+      pickupLocation: String(metadata.origin),
+      dropoffLocation: String(metadata.destination),
+      cargoDescription: {
+        weightGrams: Number(cargo.weight_grams),
+        category: String(cargo.category) as DeliveryTypes.CargoCategory,
+        fragile: Boolean(cargo.fragile),
+      },
+      deliveryId: BigInt(String(metadata.delivery_id)),
+      createdAt: Number(metadata.created_at),
+      estimatedDelivery: Number(metadata.estimated_delivery),
     }, createdAt: Number(record.created_at), deliveredAt: record.delivered_at === null ? undefined : Number(record.delivered_at),
     transitStartedAt: record.transit_started_at === null ? undefined : Number(record.transit_started_at),
   };
+}
+
+function encodeDeliveryMetadata(
+  deliveryId: bigint,
+  metadata: DeliveryTypes.DeliveryMetadata
+) {
+  const now = Math.floor(Date.now() / 1000);
+  const cargo = metadata.cargoDescription;
+  return map([
+    ['delivery_id', u64(deliveryId)],
+    ['origin', string(metadata.pickupLocation)],
+    ['destination', string(metadata.dropoffLocation)],
+    ['cargo_description', map([
+      ['weight_grams', u32(cargo?.weightGrams ?? 1)],
+      ['category', symbol(cargo?.category ?? DeliveryTypes.CargoCategory.General)],
+      ['fragile', bool(cargo?.fragile ?? false)],
+    ])],
+    ['created_at', u64(metadata.createdAt ?? now)],
+    ['estimated_delivery', u64(metadata.estimatedDelivery ?? now + (metadata.estimatedDistance ?? 0))],
+  ]);
 }

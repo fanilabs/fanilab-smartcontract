@@ -157,6 +157,25 @@ Get all escrow IDs for a recipient.
 ##### `getEscrowsByDriver(driver: string): Promise<bigint[]>`
 Get all escrow IDs for a driver.
 
+##### `getTotalLocked(token: string): Promise<bigint>`
+Get the total amount of the token currently locked by escrows.
+
+##### `getUntrackedBalance(token: string): Promise<bigint>`
+Get the contract's token balance that is not tracked as locked escrow funds.
+
+##### `sweepUntrackedBalance(params: SweepUntrackedBalanceParams): Promise<bigint>`
+Sweep the untracked balance to a recipient (admin only) and return the amount
+transferred.
+
+##### `setVolumeTiers(params: SetVolumeTiersParams): Promise<void>`
+Configure the volume thresholds and fee discounts for senders (admin only).
+
+##### `getVolumeTiers(): Promise<VolumeTier[]>`
+Read the configured volume thresholds and discounts.
+
+##### `getSenderVolume(sender: string): Promise<number>`
+Read a sender's accumulated volume.
+
 ### DeliveryClient
 
 #### Methods
@@ -177,6 +196,14 @@ Create a new delivery.
 - `params.deliveryId`: Unique delivery identifier
 - `params.metadata`: Delivery metadata (location, items, notes, etc.)
 
+Delivery metadata accepts `pickupLocation`, `dropoffLocation`, and an optional
+`cargoDescription` with `weightGrams`, `category`, and `fragile`. The cargo
+category is one of `Documents`, `Electronics`, `Perishables`, `Clothing`, or
+`General`. Optional `createdAt` and `estimatedDelivery` values are Unix
+timestamps in seconds. If omitted, the SDK supplies the current creation time
+and estimates delivery from the legacy `estimatedDistance` value. Reads return
+the complete cargo description and all contract metadata fields.
+
 ##### `assignDriver(params: AssignDriverParams, options?: ContractInvokeOptions): Promise<void>`
 Assign a driver to a delivery.
 
@@ -194,6 +221,13 @@ Confirm that a delivery has been completed.
 
 ##### `getDelivery(deliveryId: bigint): Promise<DeliveryRecord>`
 Get a delivery record.
+
+##### `getDriverProfile(driver: string): Promise<DeliveryDriverProfile>`
+Get the driver's identity and reputation profile through the delivery contract.
+
+##### `getCombinedState(deliveryId: bigint): Promise<CombinedDeliveryState>`
+Get a delivery record and its optional escrow record, together with the contract's
+synchronization check.
 
 ## Types
 

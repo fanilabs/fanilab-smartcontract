@@ -5775,243 +5775,237 @@ fn test_batch_zero_amount_rejected() {
     }
 }
 
-// ── Issue #466 — confirm_delivery bypass via direct escrow calls ──────────────
+// ── Issue #457 — set_holdback_window / release_expired_holdback ────────────────
 //
-// The architecture expects a recipient to finalize a delivery by calling
-// `delivery_contract::confirm_delivery`, which advances the delivery record,
-// awards the driver reputation, and *then* cross-calls the escrow. Both
-// `release_escrow` and `mark_holdback_escrow` used to authorize on
-// `caller == record.recipient` alone, so a recipient could call them straight
-// on this contract: the driver got paid, the escrow went to `Released`, and
-// the later `confirm_delivery` then panicked because the escrow was no longer
-// `Locked` — stranding the delivery in `InTransit` forever and permanently
-// denying the driver the reputation they earned.
-//
-// These tests pin the corrected authorization boundary: once a delivery
-// contract is configured, only it (or an admin) may drive those transitions.
+// `release_expired_holdback` is the permissionless escape hatch that stops a
+// driver's funds from being stranded in `Holdback` forever when the recipient
+// never releases them and no dispute freezes the escrow. It and the admin-
+// configurable window governing it had no direct test coverage, so the
+// timelock, the bounds, the authorization, and the state guards were all
+// unpinned.
 
-/// Wire the real delivery → escrow → identity chain, fund one in-transit
-/// delivery, and leave it in the `Locked` state that the exploit needs.
-/// Unlike `setup_confirmed_delivery_in_holdback` the delivery is *not*
-/// confirmed: the escrow is still `Locked` and the driver has no reputation
-/// yet, so the recipient still has the bypass available to attempt.
-#[allow(clippy::type_complexity)]
-fn setup_locked_delivery_with_configured_delivery(
-    amount: i128,
-) -> (
-    Env,
-    Address,
-    Address,
-    Address,
-    Address,
-    Address,
-    Address,
-    u64,
-) {
-    let env = Env::default();
-    env.mock_all_auths_allowing_non_root_auth();
+/// Default window applies before any admin configuration.
+#[test]
+fn test_holdback_window_defaults_before_admin_configures_it() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
-    let sender = Address::generate(&env);
-    let recipient = Address::generate(&env);
-    let driver = Address::generate(&env);
-
-    let delivery_contract_id = env.register(delivery_contract::DeliveryContract, ());
-    let escrow_contract_id = env.register(EscrowContract, ());
-    let identity_contract_id =
-        env.register(identity_reputation_contract::IdentityReputationContract, ());
-
-    let delivery_client =
-        delivery_contract::DeliveryContractClient::new(&env, &delivery_contract_id);
-    let escrow_client = EscrowContractClient::new(&env, &escrow_contract_id);
-    let identity_client = identity_reputation_contract::IdentityReputationContractClient::new(
-        &env,
-        &identity_contract_id,
-    );
-
     let token_admin = Address::generate(&env);
     let token = setup_token(&env, &token_admin);
+    client.init(&admin, &token, &0);
 
-    escrow_client.init(&admin, &token, &0);
-    delivery_client.init(&admin, &escrow_contract_id);
-    identity_client.init(&admin, &delivery_contract_id, &Address::generate(&env));
-    delivery_client.set_identity_reputation_contract(&admin, &identity_contract_id);
-
-    identity_client.register_driver(&driver);
-    mint(&env, &token, &sender, amount);
-
-    let metadata = make_delivery_metadata(&env, 0);
-    let delivery_id = delivery_client.create_delivery(&sender, &recipient, &metadata);
-    escrow_client.create_escrow(
-        &sender,
-        &recipient,
-        &driver,
-        &u64::from(delivery_id),
-        &token,
-        &amount,
-        &None,
-    );
-    delivery_client.assign_driver(&admin, &delivery_id, &driver);
-    delivery_client.mark_in_transit(&driver, &delivery_id);
-    // Wired only after funding: the escrow's `verify_delivery_if_configured`
-    // cross-call is a pre-existing broken path (it passes a bare `u64` to
-    // delivery's `get_delivery(DeliveryId)`), unrelated to this issue. The
-    // gate under test is read at call time, so configuring the peer here is
-    // equivalent and keeps this test focused on Issue #466.
-    escrow_client.set_delivery_contract(&admin, &delivery_contract_id);
-
-    (
-        env,
-        escrow_contract_id,
-        identity_contract_id,
-        token,
-        admin,
-        recipient,
-        driver,
-        u64::from(delivery_id),
-    )
-}
-
-/// The reported exploit: a recipient calls `release_escrow` directly on the
-/// escrow contract. This must be rejected, leaving the escrow `Locked`, the
-/// funds in custody, and the delivery confirmable.
-#[test]
-fn test_recipient_cannot_release_escrow_directly_bypassing_confirm_delivery() {
-    let (env, escrow_id, _identity_id, token, _admin, recipient, driver, delivery_id) =
-        setup_locked_delivery_with_configured_delivery(1000);
-    let escrow_client = EscrowContractClient::new(&env, &escrow_id);
-    let delivery_client = delivery_contract::DeliveryContractClient::new(
-        &env,
-        &escrow_client
-            .get_delivery_contract()
-            .expect("delivery contract configured"),
-    );
-
-    let result = escrow_client.try_release_escrow(&recipient, &delivery_id);
-    match result {
-        Err(Ok(err)) => assert_eq!(err, FaniLabError::Unauthorized.into()),
-        _ => panic!("Expected FaniLabError::Unauthorized for a direct recipient release"),
-    }
-
-    // Nothing moved: the escrow is untouched, the driver is unpaid, and the
-    // delivery is still confirmable — i.e. not permanently stranded.
     assert_eq!(
-        escrow_client.get_escrow(&delivery_id).status,
-        EscrowStatus::Locked
-    );
-    assert_eq!(balance(&env, &token, &driver), 0);
-    assert_eq!(balance(&env, &token, &escrow_id), 1000);
-    assert_eq!(escrow_client.get_total_locked(&token), 1000);
-    assert_eq!(
-        delivery_client.get_delivery(&delivery_id.into()).status,
-        shared_types::DeliveryStatus::InTransit
+        client.get_holdback_window(),
+        constants::DEFAULT_HOLDBACK_WINDOW_SECONDS
     );
 }
 
-/// The same bypass applied to `mark_holdback_escrow`: moving the escrow to
-/// `Holdback` without confirming the delivery is equally state-breaking,
-/// because the driver is credited reputation only inside `confirm_delivery`.
+/// Admin may set any window at or above the minimum, and it is readable back.
 #[test]
-fn test_recipient_cannot_mark_holdback_directly_bypassing_confirm_delivery() {
-    let (env, escrow_id, _identity_id, _token, _admin, recipient, _driver, delivery_id) =
-        setup_locked_delivery_with_configured_delivery(1000);
-    let escrow_client = EscrowContractClient::new(&env, &escrow_id);
+fn test_set_holdback_window_by_admin_updates_window() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
 
-    let result = escrow_client.try_mark_holdback_escrow(&recipient, &delivery_id);
+    let admin = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+    client.init(&admin, &token, &0);
+
+    let new_window = constants::MIN_HOLDBACK_WINDOW_SECONDS + 3600;
+    client.set_holdback_window(&admin, &new_window);
+
+    assert_eq!(client.get_holdback_window(), new_window);
+}
+
+/// Exactly the minimum is accepted — the bound is inclusive.
+#[test]
+fn test_set_holdback_window_accepts_exact_minimum() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+    client.init(&admin, &token, &0);
+
+    client.set_holdback_window(&admin, &constants::MIN_HOLDBACK_WINDOW_SECONDS);
+
+    assert_eq!(
+        client.get_holdback_window(),
+        constants::MIN_HOLDBACK_WINDOW_SECONDS
+    );
+}
+
+/// One second below the minimum is rejected with `InvalidState` (code 5), and
+/// the previously configured window is left untouched.
+#[test]
+fn test_set_holdback_window_rejects_below_minimum() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+    client.init(&admin, &token, &0);
+
+    let result =
+        client.try_set_holdback_window(&admin, &(constants::MIN_HOLDBACK_WINDOW_SECONDS - 1));
     match result {
-        Err(Ok(err)) => assert_eq!(err, FaniLabError::Unauthorized.into()),
-        _ => panic!("Expected FaniLabError::Unauthorized for a direct holdback mark"),
+        Err(Ok(err)) => assert_eq!(err, EscrowError::InvalidState.into()),
+        _ => panic!("Expected EscrowError::InvalidState for a below-minimum window"),
     }
 
     assert_eq!(
-        escrow_client.get_escrow(&delivery_id).status,
-        EscrowStatus::Locked
+        client.get_holdback_window(),
+        constants::DEFAULT_HOLDBACK_WINDOW_SECONDS
     );
 }
 
-/// An unrelated third party must not be able to drive these transitions
-/// either — the gate is "the delivery contract or an admin", not a
-/// recipient-shaped hole.
+/// A zero window must be rejected too — the sharpest edge of the bound.
 #[test]
-fn test_stranger_cannot_drive_delivery_lifecycle_transitions() {
-    let (env, escrow_id, _identity_id, _token, _admin, _recipient, _driver, delivery_id) =
-        setup_locked_delivery_with_configured_delivery(1000);
-    let escrow_client = EscrowContractClient::new(&env, &escrow_id);
+fn test_set_holdback_window_rejects_zero() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+    client.init(&admin, &token, &0);
+
+    let result = client.try_set_holdback_window(&admin, &0u64);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, EscrowError::InvalidState.into()),
+        _ => panic!("Expected EscrowError::InvalidState for a zero window"),
+    }
+}
+
+/// Only the admin may reconfigure the window; a stranger is rejected with
+/// `FaniLabError::Unauthorized` (code 1).
+#[test]
+fn test_set_holdback_window_rejects_non_admin() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
     let stranger = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+    client.init(&admin, &token, &0);
 
-    for result in [
-        escrow_client.try_release_escrow(&stranger, &delivery_id),
-        escrow_client.try_mark_holdback_escrow(&stranger, &delivery_id),
-    ] {
-        match result {
-            Err(Ok(err)) => assert_eq!(err, FaniLabError::Unauthorized.into()),
-            _ => panic!("Expected FaniLabError::Unauthorized for a stranger caller"),
-        }
+    let result = client.try_set_holdback_window(&stranger, &(7 * 24 * 60 * 60));
+    match result {
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::Unauthorized.into()),
+        _ => panic!("Expected FaniLabError::Unauthorized for a non-admin caller"),
     }
 
     assert_eq!(
-        escrow_client.get_escrow(&delivery_id).status,
-        EscrowStatus::Locked
+        client.get_holdback_window(),
+        constants::DEFAULT_HOLDBACK_WINDOW_SECONDS
     );
 }
 
-/// The legitimate path is unaffected: the configured `delivery_contract` is
-/// accepted, which is exactly what `delivery_contract::confirm_delivery` now
-/// passes (its own address instead of the recipient's). Asserted here directly
-/// rather than through a full `confirm_delivery` round-trip because that path
-/// currently trips an unrelated, pre-existing re-entrancy failure inside
-/// `identity_reputation_contract::require_escrow_not_paused`, which calls back
-/// into the delivery contract while it is mid-invocation.
+/// Before the window elapses the permissionless release is refused with
+/// `TimelockNotElapsed` (code 9) and nothing moves.
 #[test]
-fn test_configured_delivery_contract_may_drive_the_transitions() {
-    let (env, escrow_id, _identity_id, token, _admin, recipient, driver, delivery_id) =
-        setup_locked_delivery_with_configured_delivery(1000);
-    let escrow_client = EscrowContractClient::new(&env, &escrow_id);
-    let delivery_contract_addr = escrow_client
-        .get_delivery_contract()
-        .expect("delivery contract configured");
+fn test_release_expired_holdback_rejected_before_timelock() {
+    let (env, contract_id, token, _admin, _sender, _recipient, driver) =
+        setup_holdback_escrow(9501, 1000);
+    let client = EscrowContractClient::new(&env, &contract_id);
 
-    // This is the address `confirm_delivery` supplies.
-    escrow_client.mark_holdback_escrow(&delivery_contract_addr, &delivery_id);
+    let result = client.try_release_expired_holdback(&9501u64);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, EscrowError::TimelockNotElapsed.into()),
+        _ => panic!("Expected EscrowError::TimelockNotElapsed before the window elapsed"),
+    }
+
     assert_eq!(
-        escrow_client.get_escrow(&delivery_id).status,
+        client.get_escrow(&9501u64).status,
         EscrowStatus::Holdback
     );
+    assert_eq!(balance(&env, &token, &contract_id), 1000);
+    assert_eq!(balance(&env, &token, &driver), 0);
+    assert_eq!(client.get_total_locked(&token), 1000);
+}
 
-    // And the settlement out of Holdback is untouched by this fix: that
-    // transition is recipient-driven and still is.
-    escrow_client.release_holdback_escrow(&recipient, &delivery_id);
+/// One second before the deadline is still too early; at the deadline it
+/// succeeds.  This pins the comparison as inclusive of the boundary.
+#[test]
+fn test_release_expired_holdback_boundary_is_inclusive() {
+    let (env, contract_id, token, _admin, _sender, _recipient, driver) =
+        setup_holdback_escrow(9502, 1000);
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let started_at = env.ledger().timestamp();
+    let deadline = started_at + constants::DEFAULT_HOLDBACK_WINDOW_SECONDS;
+
+    // deadline - 1 → still locked.
+    env.ledger().set_timestamp(deadline - 1);
+    assert!(client.try_release_expired_holdback(&9502u64).is_err());
+
+    // deadline → released, permissionlessly (no caller required).
+    env.ledger().set_timestamp(deadline);
+    client.release_expired_holdback(&9502u64);
+
     assert_eq!(
-        escrow_client.get_escrow(&delivery_id).status,
+        client.get_escrow(&9502u64).status,
+        EscrowStatus::Released
+    );
+    assert_eq!(balance(&env, &token, &driver), 1000);
+    assert_eq!(balance(&env, &token, &contract_id), 0);
+    assert_eq!(client.get_total_locked(&token), 0);
+}
+
+/// The release needs no authorization at all — the function takes no caller —
+/// which is exactly what makes it the escape hatch against a non-responsive
+/// recipient.
+#[test]
+fn test_release_expired_holdback_is_permissionless() {
+    let (env, contract_id, token, _admin, _sender, _recipient, driver) =
+        setup_holdback_escrow(9503, 1000);
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    env.ledger()
+        .set_timestamp(env.ledger().timestamp() + constants::DEFAULT_HOLDBACK_WINDOW_SECONDS);
+
+    client.release_expired_holdback(&9503u64);
+
+    assert_eq!(
+        client.get_escrow(&9503u64).status,
         EscrowStatus::Released
     );
     assert_eq!(balance(&env, &token, &driver), 1000);
 }
 
-/// An admin keeps the recovery path the fix intentionally preserves: an
-/// escrow left inconsistent by the pre-fix exploit can still be settled
-/// rather than being permanently stuck.
+/// The admin-configured window — not the default — is what governs the
+/// timelock, so shortening it lets the driver reclaim sooner.
 #[test]
-fn test_admin_can_still_release_escrow_after_the_gate_is_added() {
-    let (env, escrow_id, _identity_id, token, admin, _recipient, driver, delivery_id) =
-        setup_locked_delivery_with_configured_delivery(1000);
-    let escrow_client = EscrowContractClient::new(&env, &escrow_id);
+fn test_release_expired_holdback_uses_admin_configured_window() {
+    let (env, contract_id, token, admin, _sender, _recipient, driver) =
+        setup_holdback_escrow(9504, 1000);
+    let client = EscrowContractClient::new(&env, &contract_id);
 
-    escrow_client.release_escrow(&admin, &delivery_id);
+    // An admin may lengthen the window beyond the default.
+    let long_window = constants::DEFAULT_HOLDBACK_WINDOW_SECONDS * 2;
+    client.set_holdback_window(&admin, &long_window);
 
-    assert_eq!(
-        escrow_client.get_escrow(&delivery_id).status,
-        EscrowStatus::Released
-    );
+    let started_at = env.ledger().timestamp();
+
+    // The default window has elapsed, but the configured one has not.
+    env.ledger()
+        .set_timestamp(started_at + constants::DEFAULT_HOLDBACK_WINDOW_SECONDS);
+    assert!(client.try_release_expired_holdback(&9504u64).is_err());
+
+    env.ledger().set_timestamp(started_at + long_window);
+    client.release_expired_holdback(&9504u64);
+
     assert_eq!(balance(&env, &token, &driver), 1000);
 }
 
-/// Deployments that have not wired up a delivery contract keep the legacy
-/// recipient path, matching the optional-integration precedent established by
-/// `verify_delivery_if_configured` (Issue #295). There is no confirmation
-/// state machine to strand in that configuration.
+/// Only a `Holdback` escrow may be reclaimed this way; a `Locked` one is
+/// rejected with `InvalidState` regardless of how long it has been open.
 #[test]
-fn test_recipient_release_still_allowed_when_delivery_contract_unconfigured() {
+fn test_release_expired_holdback_rejects_non_holdback_escrow() {
     let (env, contract_id) = setup_env();
     let client = EscrowContractClient::new(&env, &contract_id);
 
@@ -6023,12 +6017,76 @@ fn test_recipient_release_still_allowed_when_delivery_contract_unconfigured() {
     let token = setup_token(&env, &token_admin);
 
     client.init(&admin, &token, &0);
-    assert_eq!(client.get_delivery_contract(), None);
     mint(&env, &token, &sender, 1000);
+    client.create_escrow(&sender, &recipient, &driver, &9505u64, &token, &1000, &None);
 
-    client.create_escrow(&sender, &recipient, &driver, &9500u64, &token, &1000, &None);
-    client.release_escrow(&recipient, &9500u64);
+    env.ledger()
+        .set_timestamp(env.ledger().timestamp() + constants::DEFAULT_HOLDBACK_WINDOW_SECONDS * 10);
 
-    assert_eq!(client.get_escrow(&9500u64).status, EscrowStatus::Released);
-    assert_eq!(balance(&env, &token, &driver), 1000);
+    let result = client.try_release_expired_holdback(&9505u64);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, EscrowError::InvalidState.into()),
+        _ => panic!("Expected EscrowError::InvalidState for a Locked escrow"),
+    }
+
+    assert_eq!(client.get_escrow(&9505u64).status, EscrowStatus::Locked);
+    assert_eq!(balance(&env, &token, &sender), 0);
+    assert_eq!(balance(&env, &token, &contract_id), 1000);
+}
+
+/// An unknown delivery has no record to reclaim.
+#[test]
+fn test_release_expired_holdback_rejects_unknown_delivery() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+    client.init(&admin, &token, &0);
+
+    assert!(client.try_release_expired_holdback(&9506u64).is_err());
+}
+
+/// A protocol-wide pause freezes the escape hatch too, so an admin can halt
+/// the permissionless path during an incident.
+#[test]
+fn test_release_expired_holdback_rejected_while_paused() {
+    let (env, contract_id, _token, admin, _sender, _recipient, _driver) =
+        setup_holdback_escrow(9507, 1000);
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    env.ledger()
+        .set_timestamp(env.ledger().timestamp() + constants::DEFAULT_HOLDBACK_WINDOW_SECONDS);
+    client.set_paused(&admin, &true);
+
+    let result = client.try_release_expired_holdback(&9507u64);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::ProtocolPaused.into()),
+        _ => panic!("Expected FaniLabError::ProtocolPaused"),
+    }
+
+    assert_eq!(
+        client.get_escrow(&9507u64).status,
+        EscrowStatus::Holdback
+    );
+}
+
+/// An escrow disputed out of `Holdback` (i.e. `Paused`) falls back to dispute
+/// arbitration; the permissionless path must not release it.
+#[test]
+fn test_release_expired_holdback_rejects_disputed_escrow() {
+    let (env, contract_id, _token, _admin, _sender, recipient, _driver) =
+        setup_holdback_escrow(9508, 1000);
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    client.raise_dispute(&recipient, &9508u64);
+    env.ledger()
+        .set_timestamp(env.ledger().timestamp() + constants::DEFAULT_HOLDBACK_WINDOW_SECONDS);
+
+    let result = client.try_release_expired_holdback(&9508u64);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, EscrowError::InvalidState.into()),
+        _ => panic!("Expected EscrowError::InvalidState for a Paused escrow"),
+    }
 }

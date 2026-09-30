@@ -35,6 +35,16 @@ export interface RegisterUserParams {
   user: string;
 }
 
+export interface SuspendDriverParams {
+  admin: string;
+  driver: string;
+}
+
+export interface ReinstateDriverParams {
+  admin: string;
+  driver: string;
+}
+
 export interface UpdateDriverKycStatusParams {
   admin: string;
   driver: string;

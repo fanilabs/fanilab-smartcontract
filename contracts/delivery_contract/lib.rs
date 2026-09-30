@@ -802,7 +802,13 @@ impl DeliveryContract {
             &soroban_sdk::Symbol::new(&env, "mark_holdback_escrow"),
             soroban_sdk::vec![
                 &env,
-                recipient.into_val(&env),
+                // Issue #466: pass this contract's own address, not the
+                // recipient's. The escrow now restricts this transition to the
+                // configured `delivery_contract` (or an admin) so a recipient
+                // cannot strand the delivery record by calling the escrow
+                // directly. Passing the recipient here would fail the escrow's
+                // own authorization check on every confirmation.
+                env.current_contract_address().into_val(&env),
                 u64::from(delivery_id).into_val(&env),
             ],
         );

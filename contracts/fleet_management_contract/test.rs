@@ -6,7 +6,7 @@ use escrow_contract::EscrowContract;
 use identity_reputation_contract::IdentityReputationContract;
 use shared_types::{CargoCategory, CargoDescriptor, DeliveryMetadata, DeliveryStatus, EscrowStatus};
 use soroban_sdk::{
-    testutils::{Address as _, Events, Ledger as _},
+    testutils::{storage::Persistent as _, Address as _, Events, Ledger as _},
     xdr, Address, Env, Symbol, TryFromVal, TryIntoVal, Val,
 };
 

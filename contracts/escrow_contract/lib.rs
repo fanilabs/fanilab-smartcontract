@@ -227,6 +227,52 @@ fn get_identity_reputation_contract(env: &Env) -> Option<Address> {
         .get(&DataKey::IdentityReputationContract)
 }
 
+/// Authorize the delivery-lifecycle transitions `mark_holdback_escrow` and
+/// `release_escrow` (Issue #466).
+///
+/// These two functions are the escrow-side half of a delivery confirmation:
+/// `delivery_contract::confirm_delivery` is the only caller that can also
+/// advance the `DeliveryRecord` to `Delivered` and award the driver their
+/// reputation points. When they were reachable by `caller == record.recipient`
+/// alone, a recipient could invoke them straight on the escrow contract and
+/// take the funds owed for a delivery without ever confirming it. The escrow
+/// then sits in `Released`, so the later `confirm_delivery` call panics inside
+/// `mark_holdback_escrow` (which requires `Locked`), permanently stranding the
+/// delivery in `InTransit` and permanently denying the driver the reputation
+/// they earned for the job.
+///
+/// The fix mirrors how `identity_reputation_contract` restricts score updates
+/// (`is_authorized_contract`, Issue #465) and how `freeze_funds` pins its
+/// caller to the configured dispute contract: the caller must be the
+/// configured `delivery_contract`, or a protocol admin, who keeps a recovery
+/// path for escrows that would otherwise be stuck.
+///
+/// Following the optional-integration pattern already used by
+/// `verify_delivery_if_configured` (Issue #295), an unconfigured deployment
+/// falls back to the legacy `record.recipient` rule. Without a delivery
+/// contract there is no confirmation state machine for a recipient to strand,
+/// so the bypass has nothing to strand; deployments that do run the delivery
+/// lifecycle are protected as soon as they call `set_delivery_contract`.
+fn require_delivery_lifecycle_caller(env: &Env, caller: &Address, record: &EscrowRecord) {
+    if is_admin(env, caller) {
+        return;
+    }
+    match get_delivery_contract(env) {
+        // Configured: only the delivery contract may drive this transition.
+        Some(delivery_contract) => {
+            if *caller != delivery_contract {
+                panic_with_error!(env, FaniLabError::Unauthorized);
+            }
+        }
+        // Not configured: preserve the pre-existing recipient path.
+        None => {
+            if *caller != record.recipient {
+                panic_with_error!(env, FaniLabError::Unauthorized);
+            }
+        }
+    }
+}
+
 #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
 fn payout_driver(
     env: &Env,
@@ -1281,10 +1327,11 @@ impl EscrowContract {
         caller.require_auth();
         require_not_paused(&env);
         let mut record = load_escrow(&env, delivery_id);
-        let recipient_authorized = caller == record.recipient;
-        if !recipient_authorized {
-            panic_with_error!(&env, FaniLabError::Unauthorized);
-        }
+        // Issue #466: only the configured delivery_contract (via
+        // `confirm_delivery`) or an admin may drive this transition; a
+        // recipient calling in directly would strand the delivery record and
+        // deny the driver their reputation.
+        require_delivery_lifecycle_caller(&env, &caller, &record);
         if record.status != EscrowStatus::Locked {
             panic_with_error!(&env, EscrowError::InvalidState);
         }
@@ -1303,11 +1350,12 @@ impl EscrowContract {
         caller.require_auth();
         require_not_paused(&env);
         let mut record = load_escrow(&env, delivery_id);
-        let admin_authorized = is_admin(&env, &caller);
-        let recipient_authorized = caller == record.recipient;
-        if !admin_authorized && !recipient_authorized {
-            panic_with_error!(&env, FaniLabError::Unauthorized);
-        }
+        // Issue #466: only the configured delivery_contract (via
+        // `confirm_delivery`) or an admin may drive this transition. Allowing
+        // the recipient through here let them take the funds without ever
+        // confirming the delivery, permanently stranding the delivery record
+        // and denying the driver their reputation.
+        require_delivery_lifecycle_caller(&env, &caller, &record);
         if record.status != EscrowStatus::Locked {
             panic_with_error!(&env, EscrowError::InvalidState);
         }

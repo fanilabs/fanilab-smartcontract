@@ -395,12 +395,22 @@ impl IdentityReputationContract {
 
         let config = Self::get_reputation_config(env.clone());
 
+        // Issue #437: accumulate the per-delivery point total with saturating
+        // addition. `points` is derived from admin-configurable
+        // `ReputationConfig` fields; a raw `+=` here is an unchecked `u32`
+        // addition that can overflow (and panic, since the release profile
+        // enables `overflow-checks`) if a large `base_points` /
+        // `heavy_cargo_points` / `fragile_points` is ever configured. An
+        // overflow here would permanently brick reputation credit for every
+        // subsequent delivery. Saturating keeps the total well-defined and
+        // leaves the actual score update to `reputation_up`, which is the
+        // single place the `MAX_REPUTATION` ceiling is applied.
         let mut points: u32 = config.base_points;
         if weight_grams > HEAVY_CARGO_GRAMS {
-            points += config.heavy_cargo_points;
+            points = points.saturating_add(config.heavy_cargo_points);
         }
         if fragile {
-            points += config.fragile_points;
+            points = points.saturating_add(config.fragile_points);
         }
 
         profile.reputation_score = reputation_up(profile.reputation_score, points);
@@ -475,7 +485,7 @@ impl IdentityReputationContract {
             .get(&key)
             .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::ProviderNotFound));
 
-        profile.reputation_score = profile.reputation_score.saturating_add(points).min(MAX_REPUTATION);
+        profile.reputation_score = reputation_up(profile.reputation_score, points);
 
         env.storage().persistent().set(&key, &profile);
         env.storage().persistent().extend_ttl(

@@ -962,6 +962,17 @@ impl FleetManagementContract {
             profile.total_active_drivers -= 1;
             let fleet_key = DataKey::Fleet(fleet_id);
             env.storage().persistent().set(&fleet_key, &profile);
+            // Issue #436: this branch rewrites the fleet profile but was the
+            // only `DataKey::Fleet` mutation in the contract that skipped the
+            // `extend_ttl` call, leaving the fleet's active profile TTL
+            // drifting out of sync with its mutation cycle and risking
+            // premature expiration. Every other `fleet_key` writer pairs its
+            // `set` with this extension; do the same here.
+            env.storage().persistent().extend_ttl(
+                &fleet_key,
+                ttl::LEDGER_TTL_THRESHOLD,
+                ttl::LEDGER_TTL_EXTEND_TO,
+            );
         }
 
         // Transition to Removed terminal state instead of deleting, preserving historical record.

@@ -15,3 +15,10 @@ shared_types = { path = "../shared_types" }
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
 proptest = "1"
+# Integration-test only: `increase_reputation` / `award_reputation` gate on
+# `require_escrow_not_paused`, which cross-calls the delivery and escrow
+# contracts. The Issue #437 overflow regression test therefore needs the real
+# contracts wired rather than a random address. Mirrors the dev-dependency
+# pattern already used by dispute_resolution_contract and escrow_contract.
+delivery_contract = { path = "../delivery_contract" }
+escrow_contract = { path = "../escrow_contract" }

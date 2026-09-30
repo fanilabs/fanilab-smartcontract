@@ -851,6 +851,7 @@ impl DeliveryContract {
     #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
     pub fn raise_dispute(env: Env, caller: Address, delivery_id: DeliveryId) {
         caller.require_auth();
+        require_escrow_not_paused(&env);
 
         let key = delivery_key(delivery_id);
         let mut delivery: DeliveryRecord = env

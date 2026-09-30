@@ -1642,6 +1642,54 @@ fn test_add_driver_to_fleet_rejects_invite_on_deactivated_fleet() {
     client.add_driver_to_fleet(&owner, &fleet_id, &driver, &no_co_signers(&env));
 }
 
+/// Issue #456: an invite issued before deactivation must not remain
+/// acceptable afterwards — accepting it would transition the driver to
+/// `Active` and inflate `total_active_drivers` on a shut-down fleet.
+#[test]
+#[should_panic(expected = "Error(Contract, #10)")]
+fn test_accept_fleet_invite_rejects_deactivated_fleet() {
+    let (env, client, _admin) = setup_test();
+    let (fleet_id, owner, _treasury) = register_fleet(&env, &client);
+    let driver = Address::generate(&env);
+
+    client.add_driver_to_fleet(&owner, &fleet_id, &driver, &no_co_signers(&env));
+    client.deactivate_fleet(&owner, &fleet_id);
+    client.accept_fleet_invite(&fleet_id, &driver);
+}
+
+#[test]
+fn test_accept_fleet_invite_after_deactivation_leaves_roster_unchanged() {
+    let (env, client, _admin) = setup_test();
+    let (fleet_id, owner, _treasury) = register_fleet(&env, &client);
+    let driver = Address::generate(&env);
+
+    client.add_driver_to_fleet(&owner, &fleet_id, &driver, &no_co_signers(&env));
+    client.deactivate_fleet(&owner, &fleet_id);
+
+    assert!(client
+        .try_accept_fleet_invite(&fleet_id, &driver)
+        .is_err());
+
+    assert_eq!(client.get_fleet(&fleet_id).total_active_drivers, 0);
+    assert!(client.get_fleet_roster(&fleet_id, &0u32, &10u32).is_empty());
+}
+
+/// A reactivated fleet accepts its outstanding invite again.
+#[test]
+fn test_accept_fleet_invite_works_after_reactivation() {
+    let (env, client, _admin) = setup_test();
+    let (fleet_id, owner, _treasury) = register_fleet(&env, &client);
+    let driver = Address::generate(&env);
+
+    client.add_driver_to_fleet(&owner, &fleet_id, &driver, &no_co_signers(&env));
+    client.deactivate_fleet(&owner, &fleet_id);
+    client.reactivate_fleet(&owner, &fleet_id);
+
+    client.accept_fleet_invite(&fleet_id, &driver);
+
+    assert_eq!(client.get_fleet(&fleet_id).total_active_drivers, 1);
+}
+
 #[test]
 fn test_get_payout_address_falls_back_to_driver_after_deactivation() {
     let (env, client, _admin) = setup_test();

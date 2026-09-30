@@ -2116,7 +2116,6 @@ impl EscrowContract {
     ) -> i128 {
         admin.require_auth();
         require_admin(&env, &admin);
-        require_not_paused(&env);
 
         let contract_balance =
             token::Client::new(&env, &token).balance(&env.current_contract_address());

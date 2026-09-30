@@ -1304,6 +1304,39 @@ fn test_sweep_untracked_balance_recovers_mistaken_transfer() {
 }
 
 #[test]
+fn test_sweep_untracked_balance_while_paused() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let driver = Address::generate(&env);
+    let recovery_address = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+
+    client.init(&admin, &token, &0);
+    mint(&env, &token, &sender, 2000);
+
+    client.create_escrow(&sender, &recipient, &driver, &400u64, &token, &1000, &None);
+    assert_eq!(client.get_total_locked(&token), 1000);
+
+    mint(&env, &token, &contract_id, 1000);
+    assert_eq!(balance(&env, &token, &contract_id), 2000);
+
+    // Pause the protocol
+    client.pause(&admin);
+
+    // Should succeed even though paused
+    client.sweep_untracked_balance(&admin, &token, &recovery_address);
+
+    assert_eq!(balance(&env, &token, &contract_id), 1000);
+    assert_eq!(balance(&env, &token, &recovery_address), 1000);
+    assert_eq!(client.get_total_locked(&token), 1000);
+}
+
+#[test]
 fn test_sweep_untracked_balance_with_empty_untracked() {
     let (env, contract_id) = setup_env();
     let client = EscrowContractClient::new(&env, &contract_id);

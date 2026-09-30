@@ -557,7 +557,7 @@ impl DeliveryContract {
             panic_with_error!(&env, FaniLabError::Unauthorized);
         }
 
-        if delivery.status != DeliveryStatus::Pending {
+        if delivery.status != DeliveryStatus::Pending && delivery.status != DeliveryStatus::Active {
             panic_with_error!(&env, FaniLabError::InvalidState);
         }
 
@@ -715,6 +715,8 @@ impl DeliveryContract {
 
         delivery.driver = Some(driver.clone());
         delivery.status = DeliveryStatus::Active;
+        
+        index_push(&env, &driver, 2, delivery_id);
 
         env.storage().persistent().set(&key, &delivery);
         env.storage().persistent().extend_ttl(
@@ -1087,6 +1089,14 @@ impl DeliveryContract {
         recipient: Address,
     ) -> soroban_sdk::Vec<DeliveryId> {
         index_page(&env, recipient, 1, 0, 100)
+    }
+
+    /// Get all delivery IDs assigned to a specific driver.
+    pub fn get_deliveries_by_driver(
+        env: Env,
+        driver: Address,
+    ) -> soroban_sdk::Vec<DeliveryId> {
+        index_page(&env, driver, 2, 0, 100)
     }
 
     #[rustfmt::skip]

@@ -73,6 +73,18 @@ export class DeliveryClient {
   }
 
   /**
+   * Get all deliveries for a specific driver.
+   * If pagination is provided, it falls back to the index-based
+   * `get_deliveries_page` contract method.
+   */
+  async getDeliveriesByDriver(
+    driver: string,
+    pagination?: PaginationOptions,
+  ): Promise<any[]> {
+    return this.getDeliveries('get_deliveries_by_driver', 'get_deliveries_page', driver, pagination);
+  }
+
+  /**
    * Shared read path for delivery list methods. Falls back to the
    * non-paginated contract method when no pagination options are given,
    * preserving backward-compatible behavior.

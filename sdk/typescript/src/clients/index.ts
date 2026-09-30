@@ -77,6 +77,23 @@ export class DeliveryClient {
     return this.invokeRead(method, args);
   }
 
+  async getDeliveriesByDriver(
+    driver: string,
+    options?: PaginationOptions,
+  ): Promise<any[]> {
+    const { offset, limit } = resolvePagination(options);
+    const method = hasPagination(options) ? "get_deliveries_page" : "get_deliveries_by_driver";
+    const args = hasPagination(options)
+      ? [
+          new Address(driver).toScVal(),
+          nativeToScVal(offset, { type: "u32" }),
+          nativeToScVal(limit, { type: "u32" }),
+        ]
+      : [new Address(driver).toScVal()];
+    return this.invokeRead(method, args);
+  }
+
+
   private async invokeRead(method: string, args: xdr.ScVal[]): Promise<any[]> {
     const source = Keypair.random();
     const account = await this.server.getAccount(source.publicKey());

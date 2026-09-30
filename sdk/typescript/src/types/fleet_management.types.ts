@@ -102,6 +102,7 @@ export interface ConfigureSignersParams {
   fleetId: bigint;
   signers: string[];
   threshold: number;
+  coSigners?: string[];
 }
 
 export { DriverFleetStatus, FleetProfile, PendingTreasuryChange };

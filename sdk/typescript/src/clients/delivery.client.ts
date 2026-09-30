@@ -272,7 +272,7 @@ export class DeliveryClient {
    * Get all deliveries for a driver
    */
   async getDeliveriesByDriver(driver: string): Promise<bigint[]> {
-    const result = await this.invoker.call('get_deliveries_by_driver', [address(driver)], this.options);
+    const result = await this.invoker.call('get_deliveries_by_driver', [address(driver)], undefined);
     return decodeIds(result);
   }
 

@@ -219,6 +219,33 @@ impl MockReputationContract {
             .temporary()
             .set(&Symbol::new(&_env, "rep_dec"), &driver);
     }
+
+    pub fn is_driver_suspended(_env: Env, _driver: Address) -> bool {
+        _env.storage().temporary().has(&Symbol::new(&_env, "suspended"))
+    }
+
+    pub fn has_driver_profile(_env: Env, _driver: Address) -> bool {
+        !_env.storage().temporary().has(&Symbol::new(&_env, "unregistered"))
+    }
+
+    pub fn get_driver_profile(_env: Env, driver: Address) -> shared_types::DriverProfile {
+        let is_suspended = _env
+            .storage()
+            .temporary()
+            .has(&Symbol::new(&_env, "suspended"));
+        shared_types::DriverProfile {
+            address: driver,
+            deliveries_completed: 0,
+            reputation_score: 100,
+            registered_at: _env.ledger().timestamp(),
+            kyc_verified: true,
+            status: if is_suspended {
+                shared_types::DriverStatus::Suspended
+            } else {
+                shared_types::DriverStatus::Active
+            },
+        }
+    }
 }
 
 /// Issue #455 — an escrow reporting a protocol pause.  Its `raise_dispute`
@@ -1640,12 +1667,12 @@ fn test_update_delivery_metadata_while_pending() {
 #[test]
 fn test_update_delivery_metadata_while_active() {
     let env = Env::default();
-    let (client, shipper, driver, recipient, escrow_id, _) = setup_full(&env);
+    let (client, shipper, driver, recipient, _escrow_id, _) = setup_full(&env);
     let metadata = get_test_metadata(&env, 1);
     let delivery_id = client.create_delivery(&shipper, &recipient, &metadata);
 
     // Make it Active
-    client.assign_driver(&delivery_id, &driver, &escrow_id);
+    client.assign_driver(&shipper, &delivery_id, &driver);
 
     use shared_types::{CargoCategory, CargoDescriptor};
     let updated_metadata = DeliveryMetadata {
@@ -2508,3 +2535,139 @@ fn test_raise_dispute_without_dispute_contract_is_not_initialized() {
         _ => panic!("Expected FaniLabError::NotInitialized"),
     }
 }
+
+// ── Issue #446: raise_dispute authorization ─────────────────────────────────
+
+#[test]
+fn test_raise_dispute_rejects_unauthorized_caller() {
+    let env = Env::default();
+    let (client, shipper, driver, recipient, _, _) = setup_full(&env);
+    let metadata = get_test_metadata(&env, 1);
+    let delivery_id = client.create_delivery(&shipper, &recipient, &metadata);
+    client.assign_driver(&shipper, &delivery_id, &driver);
+
+    let unauthorized = Address::generate(&env);
+    let result = client.try_raise_dispute(&unauthorized, &delivery_id);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::Unauthorized.into()),
+        _ => panic!("Expected FaniLabError::Unauthorized"),
+    }
+}
+
+// ── Issue #447: resolve_dispute transition & caller authorization ───────────
+
+#[test]
+fn test_resolve_dispute_transitions_delivery_to_resolved() {
+    let env = Env::default();
+    let (client, shipper, driver, recipient, _, _) = setup_full(&env);
+    let metadata = get_test_metadata(&env, 1);
+    let delivery_id = client.create_delivery(&shipper, &recipient, &metadata);
+    client.assign_driver(&shipper, &delivery_id, &driver);
+
+    let dispute_contract = dispute_of(&client);
+    client.raise_dispute(&dispute_contract, &delivery_id);
+    assert_eq!(
+        client.get_delivery(&delivery_id).status,
+        DeliveryStatus::Disputed
+    );
+
+    client.resolve_dispute(&dispute_contract, &delivery_id);
+    assert_eq!(
+        client.get_delivery(&delivery_id).status,
+        DeliveryStatus::Resolved
+    );
+}
+
+#[test]
+fn test_resolve_dispute_rejects_unauthorized_caller() {
+    let env = Env::default();
+    let (client, shipper, driver, recipient, _, _) = setup_full(&env);
+    let metadata = get_test_metadata(&env, 1);
+    let delivery_id = client.create_delivery(&shipper, &recipient, &metadata);
+    client.assign_driver(&shipper, &delivery_id, &driver);
+
+    let dispute_contract = dispute_of(&client);
+    client.raise_dispute(&dispute_contract, &delivery_id);
+
+    let unauthorized = Address::generate(&env);
+    let result = client.try_resolve_dispute(&unauthorized, &delivery_id);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::Unauthorized.into()),
+        _ => panic!("Expected FaniLabError::Unauthorized"),
+    }
+}
+
+#[test]
+fn test_resolve_dispute_rejects_non_disputed_state() {
+    let env = Env::default();
+    let (client, shipper, driver, recipient, _, _) = setup_full(&env);
+    let metadata = get_test_metadata(&env, 1);
+    let delivery_id = client.create_delivery(&shipper, &recipient, &metadata);
+    client.assign_driver(&shipper, &delivery_id, &driver);
+
+    let dispute_contract = dispute_of(&client);
+    let result = client.try_resolve_dispute(&dispute_contract, &delivery_id);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::InvalidState.into()),
+        _ => panic!("Expected FaniLabError::InvalidState"),
+    }
+}
+
+// ── Issue #449: unregistered or suspended driver checks in assign_driver ─────
+
+#[test]
+fn test_assign_driver_rejects_unregistered_driver() {
+    let env = Env::default();
+    let (client, shipper, driver, recipient, _, reputation_id) = setup_full(&env);
+    let metadata = get_test_metadata(&env, 1);
+    let delivery_id = client.create_delivery(&shipper, &recipient, &metadata);
+
+    // Flag as unregistered in MockReputationContract
+    env.as_contract(&reputation_id, || {
+        env.storage()
+            .temporary()
+            .set(&Symbol::new(&env, "unregistered"), &true);
+    });
+
+    let result = client.try_assign_driver(&shipper, &delivery_id, &driver);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::ProviderNotFound.into()),
+        _ => panic!("Expected FaniLabError::ProviderNotFound"),
+    }
+}
+
+#[test]
+fn test_assign_driver_rejects_suspended_driver() {
+    let env = Env::default();
+    let (client, shipper, driver, recipient, _, reputation_id) = setup_full(&env);
+    let metadata = get_test_metadata(&env, 1);
+    let delivery_id = client.create_delivery(&shipper, &recipient, &metadata);
+
+    // Flag as suspended in MockReputationContract
+    env.as_contract(&reputation_id, || {
+        env.storage()
+            .temporary()
+            .set(&Symbol::new(&env, "suspended"), &true);
+    });
+
+    let result = client.try_assign_driver(&shipper, &delivery_id, &driver);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::Unauthorized.into()),
+        _ => panic!("Expected FaniLabError::Unauthorized"),
+    }
+}
+
+#[test]
+fn test_assign_driver_succeeds_registered_active_driver() {
+    let env = Env::default();
+    let (client, shipper, driver, recipient, _, _) = setup_full(&env);
+    let metadata = get_test_metadata(&env, 1);
+    let delivery_id = client.create_delivery(&shipper, &recipient, &metadata);
+
+    client.assign_driver(&shipper, &delivery_id, &driver);
+    assert_eq!(
+        client.get_delivery(&delivery_id).status,
+        DeliveryStatus::Active
+    );
+}
+

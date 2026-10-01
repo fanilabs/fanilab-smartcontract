@@ -48,6 +48,23 @@ impl MockDeliveryContract {
             env.storage().instance().set(&storage_key, &record);
         }
     }
+
+    pub fn resolve_dispute(env: Env, _caller: Address, delivery_id: DeliveryId) {
+        let storage_key = u64::from(delivery_id);
+        if env.storage().instance().has(&storage_key) {
+            let mut record: DeliveryRecord = env.storage().instance().get(&storage_key).unwrap();
+            record.status = shared_types::DeliveryStatus::Resolved;
+            env.storage().instance().set(&storage_key, &record);
+        }
+    }
+
+    pub fn get_escrow_contract(env: Env) -> Address {
+        let key = soroban_sdk::Symbol::new(&env, "escrow");
+        env.storage()
+            .instance()
+            .get(&key)
+            .unwrap_or_else(|| env.register(MockEscrowContract, ()))
+    }
 }
 
 #[contract]
@@ -125,6 +142,11 @@ fn setup_test() -> (
 
     let delivery_id = env.register(MockDeliveryContract, ());
     let escrow_id = env.register(MockEscrowContract, ());
+    env.as_contract(&delivery_id, || {
+        env.storage()
+            .instance()
+            .set(&soroban_sdk::Symbol::new(&env, "escrow"), &escrow_id);
+    });
     let dispute_id = env.register(DisputeResolutionContract, ());
 
     let dispute_client = DisputeResolutionContractClient::new(&env, &dispute_id);
@@ -2209,3 +2231,84 @@ fn test_peer_setters_publish_events() {
     let topic0: Symbol = Symbol::try_from_val(&env, &topics.get(0).unwrap()).unwrap();
     assert_eq!(topic0, Symbol::new(&env, "escrow_contract_set"));
 }
+
+/// Issue #447: Integration tests proving delivery record correctly reaches
+/// terminal `DeliveryStatus::Resolved` across all three resolution paths.
+#[test]
+fn test_dispute_resolution_transitions_delivery_to_resolved_across_all_paths() {
+    let (env, admin, sender, recipient, driver, delivery_id, escrow_id, dispute_client) =
+        setup_test();
+
+    // 1. Path: resolve_dispute_refund_sender
+    let mut d1 = create_mock_delivery_record(
+        &env,
+        did(101),
+        sender.clone(),
+        recipient.clone(),
+        DeliveryStatus::Active,
+        None,
+    );
+    d1.driver = Some(driver.clone());
+    set_mock_delivery(&env, &delivery_id, did(101), &d1);
+    let e1 = create_mock_escrow_record(
+        sender.clone(),
+        recipient.clone(),
+        driver.clone(),
+        Address::generate(&env),
+        shared_types::EscrowStatus::Paused,
+    );
+    set_mock_escrow(&env, &escrow_id, 101, &e1);
+    dispute_client.raise_dispute(&sender, &did(101));
+    dispute_client.resolve_dispute_refund_sender(&admin, &did(101));
+    let delivery1 = MockDeliveryContractClient::new(&env, &delivery_id).get_delivery(&did(101));
+    assert_eq!(delivery1.status, DeliveryStatus::Resolved);
+
+    // 2. Path: resolve_dispute_pay_driver
+    let mut d2 = create_mock_delivery_record(
+        &env,
+        did(102),
+        sender.clone(),
+        recipient.clone(),
+        DeliveryStatus::Active,
+        None,
+    );
+    d2.driver = Some(driver.clone());
+    set_mock_delivery(&env, &delivery_id, did(102), &d2);
+    let e2 = create_mock_escrow_record(
+        sender.clone(),
+        recipient.clone(),
+        driver.clone(),
+        Address::generate(&env),
+        shared_types::EscrowStatus::Paused,
+    );
+    set_mock_escrow(&env, &escrow_id, 102, &e2);
+    dispute_client.raise_dispute(&sender, &did(102));
+    dispute_client.resolve_dispute_pay_driver(&admin, &did(102));
+    let delivery2 = MockDeliveryContractClient::new(&env, &delivery_id).get_delivery(&did(102));
+    assert_eq!(delivery2.status, DeliveryStatus::Resolved);
+
+    // 3. Path: resolve_dispute_split_funds
+    let mut d3 = create_mock_delivery_record(
+        &env,
+        did(103),
+        sender.clone(),
+        recipient.clone(),
+        DeliveryStatus::Active,
+        None,
+    );
+    d3.driver = Some(driver.clone());
+    set_mock_delivery(&env, &delivery_id, did(103), &d3);
+    let e3 = create_mock_escrow_record(
+        sender.clone(),
+        recipient.clone(),
+        driver.clone(),
+        Address::generate(&env),
+        shared_types::EscrowStatus::Paused,
+    );
+    set_mock_escrow(&env, &escrow_id, 103, &e3);
+    dispute_client.raise_dispute(&sender, &did(103));
+    dispute_client.resolve_dispute_split_funds(&admin, &did(103), &5000);
+    let delivery3 = MockDeliveryContractClient::new(&env, &delivery_id).get_delivery(&did(103));
+    assert_eq!(delivery3.status, DeliveryStatus::Resolved);
+}
+

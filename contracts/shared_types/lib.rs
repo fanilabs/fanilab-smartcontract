@@ -622,6 +622,7 @@ pub enum DeliveryStatus {
     Delivered,
     Disputed,
     Cancelled,
+    Resolved,
 }
 
 #[contracttype]
@@ -895,6 +896,7 @@ mod test {
         assert_eq!(DeliveryStatus::Delivered, DeliveryStatus::Delivered);
         assert_eq!(DeliveryStatus::Disputed, DeliveryStatus::Disputed);
         assert_eq!(DeliveryStatus::Cancelled, DeliveryStatus::Cancelled);
+        assert_eq!(DeliveryStatus::Resolved, DeliveryStatus::Resolved);
 
         assert_eq!(EscrowState::Locked, EscrowState::Locked);
         assert_eq!(EscrowState::Released, EscrowState::Released);

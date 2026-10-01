@@ -1041,7 +1041,7 @@ fn test_update_slippage_tolerance_emits_event() {
     let (topics, data) = last_event(&env);
     let expected: Symbol = events::slippage_tolerance_updated(&env);
     assert_eq!(topics.len(), 1);
-    assert_eq!(topics.get(0), expected.into_val(&env));
+    let topic: Symbol = Symbol::try_from_val(&env, &topics.get(0).unwrap()).unwrap(); assert_eq!(topic, expected);
 
     let payload: SlippageToleranceUpdated = SlippageToleranceUpdated::try_from_val(&env, &data)
         .expect("failed to decode slippage_tolerance_updated payload");
@@ -1326,7 +1326,7 @@ fn test_sweep_untracked_balance_while_paused() {
     assert_eq!(balance(&env, &token, &contract_id), 2000);
 
     // Pause the protocol
-    client.pause(&admin);
+    client.set_paused(&admin, &true);
 
     // Should succeed even though paused
     client.sweep_untracked_balance(&admin, &token, &recovery_address);
@@ -1960,7 +1960,9 @@ fn test_release_holdback_escrow_rejects_reentrancy_via_fleet_get_payout_address(
         &1000,
         &Some(1u64),
     );
-    client.mark_holdback_escrow(&recipient, &901u64);
+    let delivery_contract = Address::generate(&env);
+    client.set_delivery_contract(&admin, &delivery_contract);
+    client.mark_holdback_escrow(&delivery_contract, &901u64);
 
     let fleet = env.register(MaliciousFleetContract, ());
     arm_reentrant_mock(&env, &fleet, &contract_id, "release_holdback_escrow", 901);
@@ -2255,6 +2257,7 @@ fn test_release_holdback_escrow_applies_volume_discount() {
     let token_admin = Address::generate(&env);
     let token = setup_token(&env, &token_admin);
 
+    let delivery_contract = Address::generate(&env);
     client.init(&admin, &token, &100); // 1% base fee
     mint(&env, &token, &sender, 3000);
 
@@ -2273,7 +2276,8 @@ fn test_release_holdback_escrow_applies_volume_discount() {
     assert_eq!(balance(&env, &token, &admin), 10);
 
     client.create_escrow(&sender, &recipient, &driver, &514u64, &token, &1000, &None);
-    client.mark_holdback_escrow(&recipient, &514u64);
+    client.set_delivery_contract(&admin, &delivery_contract);
+    client.mark_holdback_escrow(&delivery_contract, &514u64);
     client.release_holdback_escrow(&recipient, &514u64);
 
     assert_eq!(balance(&env, &token, &driver), 990 + 994); // 1000 - 6 discounted fee
@@ -3618,6 +3622,7 @@ fn setup_confirmed_delivery_in_holdback(
     let token = setup_token(&env, &token_admin);
 
     escrow_client.init(&admin, &token, &0);
+    escrow_client.set_delivery_contract(&admin, &delivery_contract_id);
     delivery_client.init(&admin, &escrow_contract_id);
     // Only delivery_contract needs authority to call increase_reputation here;
     // the dispute_resolution_contract slot is unused by this flow.
@@ -3682,6 +3687,7 @@ fn setup_holdback_escrow(
     let sender = Address::generate(&env);
     let recipient = Address::generate(&env);
     let driver = Address::generate(&env);
+    let delivery_contract = Address::generate(&env);
     let token_admin = Address::generate(&env);
     let token = setup_token(&env, &token_admin);
 
@@ -3696,7 +3702,8 @@ fn setup_holdback_escrow(
         &amount,
         &None,
     );
-    client.mark_holdback_escrow(&recipient, &delivery_id);
+    client.set_delivery_contract(&admin, &delivery_contract);
+    client.mark_holdback_escrow(&delivery_contract, &delivery_id);
 
     (env, contract_id, token, admin, sender, recipient, driver)
 }
@@ -3840,10 +3847,12 @@ fn test_release_holdback_escrow_still_pays_driver_after_fix() {
     let token_admin = Address::generate(&env);
     let token = setup_token(&env, &token_admin);
 
+    let delivery_contract = Address::generate(&env);
     client.init(&admin, &token, &500);
     mint(&env, &token, &sender, 1000);
     client.create_escrow(&sender, &recipient, &driver, &923u64, &token, &1000, &None);
-    client.mark_holdback_escrow(&recipient, &923u64);
+    client.set_delivery_contract(&admin, &delivery_contract);
+    client.mark_holdback_escrow(&delivery_contract, &923u64);
 
     client.release_holdback_escrow(&recipient, &923u64);
 
@@ -4807,6 +4816,7 @@ fn test_escrow_released_event_shape_matches_across_emitters() {
     let sender_b = Address::generate(&env_b);
     let recipient_b = Address::generate(&env_b);
     let driver_b = Address::generate(&env_b);
+    let delivery_contract_b = Address::generate(&env_b);
     let token_admin_b = Address::generate(&env_b);
     let token_b = setup_token(&env_b, &token_admin_b);
 
@@ -4821,7 +4831,8 @@ fn test_escrow_released_event_shape_matches_across_emitters() {
         &AMOUNT,
         &None,
     );
-    client_b.mark_holdback_escrow(&recipient_b, &801u64);
+    client_b.set_delivery_contract(&admin_b, &delivery_contract_b);
+    client_b.mark_holdback_escrow(&delivery_contract_b, &801u64);
     client_b.release_holdback_escrow(&recipient_b, &801u64);
 
     let record_b = client_b.get_escrow(&801u64);
@@ -4846,6 +4857,7 @@ fn test_release_holdback_escrow_event_carries_correct_fields() {
     let sender = Address::generate(&env);
     let recipient = Address::generate(&env);
     let driver = Address::generate(&env);
+    let delivery_contract = Address::generate(&env);
     let token_admin = Address::generate(&env);
     let token = setup_token(&env, &token_admin);
     const AMOUNT: i128 = 1200;
@@ -4862,7 +4874,8 @@ fn test_release_holdback_escrow_event_carries_correct_fields() {
         &AMOUNT,
         &None,
     );
-    client.mark_holdback_escrow(&recipient, &DELIVERY_ID);
+    client.set_delivery_contract(&admin, &delivery_contract);
+    client.mark_holdback_escrow(&delivery_contract, &DELIVERY_ID);
     client.release_holdback_escrow(&recipient, &DELIVERY_ID);
 
     assert_eq!(
@@ -5229,12 +5242,14 @@ fn test_freeze_funds_holdback_escrow_succeeds() {
     let token_admin = Address::generate(&env);
     let token = setup_token(&env, &token_admin);
     let dispute_contract = Address::generate(&env);
+    let delivery_contract = Address::generate(&env);
 
     client.init(&admin, &token, &0);
     client.set_dispute_resolution_contract(&admin, &dispute_contract);
     mint(&env, &token, &sender, 1000);
     client.create_escrow(&sender, &recipient, &driver, &2945u64, &token, &1000, &None);
-    client.mark_holdback_escrow(&recipient, &2945u64);
+    client.set_delivery_contract(&admin, &delivery_contract);
+    client.mark_holdback_escrow(&delivery_contract, &2945u64);
     assert_eq!(client.get_escrow(&2945u64).status, EscrowStatus::Holdback);
 
     client.freeze_funds(&dispute_contract, &2945u64);
@@ -6286,11 +6301,13 @@ fn test_release_expired_holdback_rejected_while_paused() {
 /// arbitration; the permissionless path must not release it.
 #[test]
 fn test_release_expired_holdback_rejects_disputed_escrow() {
-    let (env, contract_id, _token, _admin, _sender, recipient, _driver) =
+    let (env, contract_id, _token, admin, _sender, _recipient, _driver) =
         setup_holdback_escrow(9508, 1000);
     let client = EscrowContractClient::new(&env, &contract_id);
+    let dispute_contract = Address::generate(&env);
+    client.set_dispute_resolution_contract(&admin, &dispute_contract);
 
-    client.raise_dispute(&recipient, &9508u64);
+    client.raise_dispute(&dispute_contract, &9508u64);
     env.ledger()
         .set_timestamp(env.ledger().timestamp() + constants::DEFAULT_HOLDBACK_WINDOW_SECONDS);
 
@@ -6299,4 +6316,60 @@ fn test_release_expired_holdback_rejects_disputed_escrow() {
         Err(Ok(err)) => assert_eq!(err, EscrowError::InvalidState.into()),
         _ => panic!("Expected EscrowError::InvalidState for a Paused escrow"),
     }
+}
+
+/// Issue #448: Verify that a recipient cannot call mark_holdback_escrow directly,
+/// and that only the configured delivery_contract is authorized.
+#[test]
+fn test_recipient_cannot_call_mark_holdback_escrow_directly() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let driver = Address::generate(&env);
+    let delivery_contract = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+
+    client.init(&admin, &token, &0);
+    mint(&env, &token, &sender, 1000);
+    client.create_escrow(&sender, &recipient, &driver, &10001u64, &token, &1000, &None);
+    client.set_delivery_contract(&admin, &delivery_contract);
+
+    // Calling mark_holdback_escrow directly as recipient must fail with Unauthorized
+    let res = client.try_mark_holdback_escrow(&recipient, &10001u64);
+    assert_eq!(res.err(), Some(Ok(FaniLabError::Unauthorized.into())));
+
+    // Sender also cannot call it
+    let res_sender = client.try_mark_holdback_escrow(&sender, &10001u64);
+    assert_eq!(res_sender.err(), Some(Ok(FaniLabError::Unauthorized.into())));
+
+    // Admin also cannot call it (restricted to delivery_contract ONLY)
+    let res_admin = client.try_mark_holdback_escrow(&admin, &10001u64);
+    assert_eq!(res_admin.err(), Some(Ok(FaniLabError::Unauthorized.into())));
+
+    // Only delivery_contract succeeds
+    let ok_res = client.try_mark_holdback_escrow(&delivery_contract, &10001u64);
+    assert!(ok_res.is_ok());
+    assert_eq!(client.get_escrow(&10001u64).status, EscrowStatus::Holdback);
+}
+
+#[test]
+fn test_mark_holdback_escrow_fails_when_delivery_contract_not_initialized() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let driver = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+
+    client.init(&admin, &token, &0);
+    mint(&env, &token, &sender, 1000);
+    client.create_escrow(&sender, &recipient, &driver, &10002u64, &token, &1000, &None);
+
+    let res = client.try_mark_holdback_escrow(&recipient, &10002u64);
+    assert_eq!(res.err(), Some(Ok(FaniLabError::NotInitialized.into())));
 }

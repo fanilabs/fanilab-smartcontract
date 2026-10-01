@@ -840,6 +840,18 @@ impl DisputeResolutionContract {
             ],
         );
 
+        // Issue #447: transition delivery from Disputed to Resolved so the delivery
+        // record does not remain permanently stranded in Disputed state.
+        let _: () = env.invoke_contract(
+            &delivery_contract_addr,
+            &Symbol::new(&env, "resolve_dispute"),
+            soroban_sdk::vec![
+                &env,
+                env.current_contract_address().into_val(&env),
+                delivery_id.into_val(&env),
+            ],
+        );
+
         env.events().publish(
             (events::dispute_resolved_refund(&env), delivery_id),
             DisputeResolvedRefundEvent {
@@ -939,6 +951,18 @@ impl DisputeResolutionContract {
             ],
         );
 
+        // Issue #447: transition delivery from Disputed to Resolved so the delivery
+        // record does not remain permanently stranded in Disputed state.
+        let _: () = env.invoke_contract(
+            &delivery_contract_addr,
+            &Symbol::new(&env, "resolve_dispute"),
+            soroban_sdk::vec![
+                &env,
+                env.current_contract_address().into_val(&env),
+                delivery_id.into_val(&env),
+            ],
+        );
+
         env.events().publish(
             (events::dispute_resolved_split(&env), delivery_id),
             DisputeResolvedSplitEvent {
@@ -1027,6 +1051,18 @@ impl DisputeResolutionContract {
                 );
             }
         }
+
+        // Issue #447: transition delivery from Disputed to Resolved so the delivery
+        // record does not remain permanently stranded in Disputed state.
+        let _: () = env.invoke_contract(
+            &delivery_contract_addr,
+            &Symbol::new(&env, "resolve_dispute"),
+            soroban_sdk::vec![
+                &env,
+                env.current_contract_address().into_val(&env),
+                delivery_id.into_val(&env),
+            ],
+        );
 
         env.events().publish(
             (events::dispute_resolved_payout(&env), delivery_id),
@@ -1142,6 +1178,18 @@ impl DisputeResolutionContract {
                 env.current_contract_address().into_val(&env),
                 u64::from(delivery_id).into_val(&env),
                 DEFAULT_SENDER_SHARE_BPS.into_val(&env),
+            ],
+        );
+
+        // Issue #447: transition delivery from Disputed to Resolved so the delivery
+        // record does not remain permanently stranded in Disputed state.
+        let _: () = env.invoke_contract(
+            &delivery_contract_addr,
+            &Symbol::new(&env, "resolve_dispute"),
+            soroban_sdk::vec![
+                &env,
+                env.current_contract_address().into_val(&env),
+                delivery_id.into_val(&env),
             ],
         );
 

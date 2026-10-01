@@ -141,8 +141,10 @@ mod constants {
 ///               delivery whose escrow expired)
 ///   Delivered → Disputed
 ///   Disputed  → Delivered (only via dispute resolution)
+///   Disputed  → Resolved (only via dispute resolution, Issue #447)
 ///   Cancelled → (terminal, no transitions)
 ///   Delivered → (terminal, no further transitions)
+///   Resolved  → (terminal, no further transitions)
 pub fn validate_transition(from: DeliveryStatus, to: DeliveryStatus) -> Result<(), FaniLabError> {
     let valid = matches!(
         (from, to),
@@ -156,6 +158,7 @@ pub fn validate_transition(from: DeliveryStatus, to: DeliveryStatus) -> Result<(
             | (DeliveryStatus::InTransit, DeliveryStatus::Cancelled)
             | (DeliveryStatus::Delivered, DeliveryStatus::Disputed)
             | (DeliveryStatus::Disputed, DeliveryStatus::Delivered)
+            | (DeliveryStatus::Disputed, DeliveryStatus::Resolved)
     );
     if valid {
         Ok(())
@@ -664,54 +667,42 @@ impl DeliveryContract {
             panic_with_error!(&env, DeliveryError::InvalidDriver);
         }
 
-        let identity_contract: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::IdentityReputationContract)
-            .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::NotInitialized));
-        let is_suspended: bool = env.invoke_contract(
-            &identity_contract,
-            &Symbol::new(&env, "is_driver_suspended"),
-            soroban_sdk::vec![&env, driver.into_val(&env)],
-        );
-        if is_suspended {
-            panic_with_error!(&env, FaniLabError::Unauthorized);
+        // Issue #449: fetch the driver's profile from identity_reputation_contract
+        // before assignment succeeds. An unregistered driver would later cause
+        // confirm_delivery to panic inside increase_reputation (ProviderNotFound),
+        // permanently locking the delivery in InTransit and bricking the escrow.
+        if let Some(identity_contract) = Self::get_identity_reputation_contract(env.clone()) {
+            let has_profile: bool = env.invoke_contract(
+                &identity_contract,
+                &Symbol::new(&env, "has_driver_profile"),
+                soroban_sdk::vec![&env, driver.clone().into_val(&env)],
+            );
+            if !has_profile {
+                panic_with_error!(&env, FaniLabError::ProviderNotFound);
+            }
+
+            let profile: DriverProfile = env.invoke_contract(
+                &identity_contract,
+                &Symbol::new(&env, "get_driver_profile"),
+                soroban_sdk::vec![&env, driver.clone().into_val(&env)],
+            );
+            if profile.status == shared_types::DriverStatus::Suspended {
+                panic_with_error!(&env, FaniLabError::Unauthorized);
+            }
+
+            // Issue #314: when `require_kyc` is enabled, verify that `kyc_verified == true`.
+            let require_kyc: bool = env
+                .storage()
+                .instance()
+                .get(&DataKey::RequireKyc)
+                .unwrap_or(false);
+            if require_kyc && !profile.kyc_verified {
+                panic_with_error!(&env, FaniLabError::Unauthorized);
+            }
         }
 
         validate_transition(delivery.status, DeliveryStatus::Active)
             .unwrap_or_else(|_| panic_with_error!(&env, FaniLabError::InvalidState));
-
-        // Issue #314: when `require_kyc` is enabled and the identity contract
-        // is configured, verify that the driver's profile exists and that
-        // `kyc_verified == true` before proceeding.  The gate is skipped
-        // when the identity contract is absent so deployments that have not
-        // wired it up continue to work even with the flag set.
-        let require_kyc: bool = env
-            .storage()
-            .instance()
-            .get(&DataKey::RequireKyc)
-            .unwrap_or(false);
-        if require_kyc {
-            if let Some(identity_contract) = Self::get_identity_reputation_contract(env.clone()) {
-                // `has_driver_profile` is a non-panicking presence check.
-                let has_profile: bool = env.invoke_contract(
-                    &identity_contract,
-                    &Symbol::new(&env, "has_driver_profile"),
-                    soroban_sdk::vec![&env, driver.clone().into_val(&env)],
-                );
-                if !has_profile {
-                    panic_with_error!(&env, FaniLabError::ProviderNotFound);
-                }
-                let profile: DriverProfile = env.invoke_contract(
-                    &identity_contract,
-                    &Symbol::new(&env, "get_driver_profile"),
-                    soroban_sdk::vec![&env, driver.clone().into_val(&env)],
-                );
-                if !profile.kyc_verified {
-                    panic_with_error!(&env, FaniLabError::Unauthorized);
-                }
-            }
-        }
 
         delivery.driver = Some(driver.clone());
         delivery.status = DeliveryStatus::Active;
@@ -983,6 +974,51 @@ impl DeliveryContract {
         );
     }
 
+    /// Transitions a delivery from `DeliveryStatus::Disputed` to `DeliveryStatus::Resolved`.
+    ///
+    /// **Authorization:** the configured `dispute_resolution_contract` only (Issue #447).
+    #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
+    pub fn resolve_dispute(env: Env, caller: Address, delivery_id: DeliveryId) {
+        caller.require_auth();
+        require_escrow_not_paused(&env);
+
+        let dispute_contract: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::DisputeResolutionContract)
+            .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::NotInitialized));
+        if caller != dispute_contract {
+            panic_with_error!(&env, FaniLabError::Unauthorized);
+        }
+
+        let key = delivery_key(delivery_id);
+        let mut delivery: DeliveryRecord = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::DeliveryNotFound));
+
+        validate_transition(delivery.status, DeliveryStatus::Resolved)
+            .unwrap_or_else(|_| panic_with_error!(&env, FaniLabError::InvalidState));
+
+        delivery.status = DeliveryStatus::Resolved;
+
+        env.storage().persistent().set(&key, &delivery);
+        env.storage().persistent().extend_ttl(
+            &key,
+            ttl::LEDGER_TTL_THRESHOLD,
+            ttl::LEDGER_TTL_EXTEND_TO,
+        );
+
+        env.events().publish(
+            (events::dispute_resolved(&env),),
+            shared_types::DisputeResolvedEvent {
+                delivery_id: delivery_id.value(),
+                resolver: caller,
+            },
+        );
+    }
+
     pub fn get_driver_profile(env: Env, driver: Address) -> DriverProfile {
         let identity_contract: Address = env
             .storage()
@@ -1069,6 +1105,11 @@ impl DeliveryContract {
 
             // Disputed: escrow must be Paused
             (DeliveryStatus::Disputed, shared_types::EscrowStatus::Paused) => true,
+
+            // Resolved: dispute outcome applied to escrow (refund, payout, or split) (Issue #447)
+            (DeliveryStatus::Resolved, shared_types::EscrowStatus::Refunded) => true,
+            (DeliveryStatus::Resolved, shared_types::EscrowStatus::Released) => true,
+            (DeliveryStatus::Resolved, shared_types::EscrowStatus::Split) => true,
 
             // Cancelled: escrow should be Refunded
             (DeliveryStatus::Cancelled, shared_types::EscrowStatus::Refunded) => true,

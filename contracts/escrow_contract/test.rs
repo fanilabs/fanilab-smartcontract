@@ -4,7 +4,7 @@ use super::*;
 use proptest::prelude::*;
 use shared_types::{DeliveryId, EscrowReleasedEvent, FaniLabError};
 use soroban_sdk::{
-    testutils::{Address as _, Events, Ledger as _},
+    testutils::{storage::Persistent as _, Address as _, Events, Ledger as _},
     token::{Client as TokenClient, StellarAssetClient},
     xdr, Address, Env, IntoVal, TryFromVal, TryIntoVal, Val,
 };
@@ -6596,4 +6596,357 @@ fn test_mark_holdback_escrow_fails_when_delivery_contract_not_initialized() {
 
     let res = client.try_mark_holdback_escrow(&recipient, &10002u64);
     assert_eq!(res.err(), Some(Ok(FaniLabError::NotInitialized.into())));
+}
+
+// ── Issue #460: SenderVolume TTL extension ────────────────────────────────
+//
+// The sender volume drives the volume-tier fee discount, so a silently expired
+// `DataKey::SenderVolume` entry would wipe an active sender's accrued discount.
+// Every mutation site must therefore extend the entry's TTL. `extend_ttl` raises
+// a below-threshold entry to the protocol-wide `LEDGER_TTL_EXTEND_TO`, which is
+// far beyond the host's default entry TTL, so these assertions fail outright
+// when the `extend_ttl` call is missing.
+
+/// Read the TTL the contract holds for a sender's volume entry.
+fn sender_volume_ttl(env: &Env, contract_id: &Address, sender: &Address) -> u32 {
+    let key = DataKey::SenderVolume(sender.clone());
+    env.as_contract(contract_id, || env.storage().persistent().get_ttl(&key))
+}
+
+/// TTL every SenderVolume write is expected to leave behind. `extend_ttl`
+/// raises a below-threshold entry to `LEDGER_TTL_EXTEND_TO`; the point of these
+/// assertions is that this value is far above the host's default entry TTL, so
+/// they fail when the `extend_ttl` call is missing.
+const EXPECTED_VOLUME_TTL: u32 = ttl::LEDGER_TTL_EXTEND_TO;
+
+/// TTL the host gives a persistent entry written without `extend_ttl` — the
+/// value `DataKey::SenderVolume` would be left with under the Issue #460 bug.
+fn default_persistent_ttl(env: &Env, contract_id: &Address) -> u32 {
+    let key = Symbol::new(env, "ttl_probe");
+    env.as_contract(contract_id, || {
+        env.storage().persistent().set(&key, &1u32);
+        env.storage().persistent().get_ttl(&key)
+    })
+}
+
+#[test]
+fn test_sender_volume_ttl_extended_on_release_escrow() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let driver = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+
+    client.init(&admin, &token, &100);
+    mint(&env, &token, &sender, 1000);
+    client.create_escrow(
+        &sender, &recipient, &driver, &10300u64, &token, &1000, &None,
+    );
+    client.release_escrow(&recipient, &10300u64);
+
+    assert_eq!(client.get_sender_volume(&sender), 1u32);
+    assert_eq!(
+        sender_volume_ttl(&env, &contract_id, &sender),
+        EXPECTED_VOLUME_TTL
+    );
+    // The extended TTL must be strictly better than the host default the
+    // volume entry would have been left with without the `extend_ttl` call.
+    assert!(EXPECTED_VOLUME_TTL > default_persistent_ttl(&env, &contract_id));
+}
+
+#[test]
+fn test_sender_volume_ttl_extended_on_release_holdback_escrow() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let driver = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+
+    client.init(&admin, &token, &100);
+    mint(&env, &token, &sender, 1000);
+    let delivery_contract = Address::generate(&env);
+    client.create_escrow(
+        &sender, &recipient, &driver, &10301u64, &token, &1000, &None,
+    );
+    client.set_delivery_contract(&admin, &delivery_contract);
+    client.mark_holdback_escrow(&delivery_contract, &10301u64);
+    client.release_holdback_escrow(&recipient, &10301u64);
+
+    assert_eq!(client.get_sender_volume(&sender), 1u32);
+    assert_eq!(
+        sender_volume_ttl(&env, &contract_id, &sender),
+        EXPECTED_VOLUME_TTL
+    );
+}
+
+#[test]
+fn test_sender_volume_ttl_extended_on_resolve_dispute_release_to_driver() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let driver = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+
+    client.init(&admin, &token, &100);
+    mint(&env, &token, &sender, 1000);
+    client.create_escrow(
+        &sender, &recipient, &driver, &10302u64, &token, &1000, &None,
+    );
+    client.raise_dispute(&new_dispute_contract(&env, &client, &admin), &10302u64);
+    client.resolve_dispute(&admin, &10302u64, &true);
+
+    assert_eq!(client.get_sender_volume(&sender), 1u32);
+    assert_eq!(
+        sender_volume_ttl(&env, &contract_id, &sender),
+        EXPECTED_VOLUME_TTL
+    );
+}
+
+#[test]
+fn test_sender_volume_ttl_extended_on_resolve_dispute_split() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let driver = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+
+    client.init(&admin, &token, &100);
+    mint(&env, &token, &sender, 1000);
+    client.create_escrow(
+        &sender, &recipient, &driver, &10303u64, &token, &1000, &None,
+    );
+    client.raise_dispute(&new_dispute_contract(&env, &client, &admin), &10303u64);
+    client.resolve_dispute_split(&admin, &10303u64, &5000u32);
+
+    assert_eq!(client.get_sender_volume(&sender), 1u32);
+    assert_eq!(
+        sender_volume_ttl(&env, &contract_id, &sender),
+        EXPECTED_VOLUME_TTL
+    );
+}
+
+/// The user-visible consequence of the missing `extend_ttl`: an active sender's
+/// accrued volume (and therefore their tier discount) must survive well past
+/// the host's default entry lifetime, instead of being silently archived.
+#[test]
+fn test_sender_volume_survives_well_past_default_entry_lifetime() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let driver = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+
+    client.init(&admin, &token, &100);
+    mint(&env, &token, &sender, 10000);
+    client.create_escrow(
+        &sender, &recipient, &driver, &10304u64, &token, &1000, &None,
+    );
+    client.release_escrow(&recipient, &10304u64);
+    client.create_escrow(
+        &sender, &recipient, &driver, &10305u64, &token, &1000, &None,
+    );
+    client.release_escrow(&recipient, &10305u64);
+    assert_eq!(client.get_sender_volume(&sender), 2u32);
+
+    // Idle for well over the 30-day window an un-extended entry would get.
+    env.ledger()
+        .set_timestamp(env.ledger().timestamp() + 45 * 24 * 60 * 60);
+
+    mint(&env, &token, &sender, 1000);
+    client.create_escrow(
+        &sender, &recipient, &driver, &10306u64, &token, &1000, &None,
+    );
+    client.release_escrow(&recipient, &10306u64);
+
+    // Volume accrued at 1 and 2 is retained and the third release takes it to 3.
+    assert_eq!(client.get_sender_volume(&sender), 3u32);
+}
+
+// ── Issue #461: admin_freeze_funds ─────────────────────────────────────────
+
+/// Issue #461: `freeze_funds` documents that an admin can secure a suspicious
+/// escrow during a protocol pause, but its only caller is the dispute contract,
+/// which rejects admin callers. `admin_freeze_funds` makes that path reachable.
+#[test]
+fn test_admin_freeze_funds_allowed_while_paused() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let driver = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+
+    client.init(&admin, &token, &0);
+    mint(&env, &token, &sender, 1000);
+    client.create_escrow(
+        &sender, &recipient, &driver, &10400u64, &token, &1000, &None,
+    );
+    client.set_paused(&admin, &true);
+
+    client.admin_freeze_funds(&admin, &10400u64);
+
+    assert_eq!(client.get_escrow(&10400u64).status, EscrowStatus::Paused);
+    // Freezing secures but never moves funds.
+    assert_eq!(balance(&env, &token, &sender), 0);
+    assert_eq!(balance(&env, &token, &contract_id), 1000);
+}
+
+/// The admin path works identically when the protocol is not paused.
+#[test]
+fn test_admin_freeze_funds_allowed_while_not_paused() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let driver = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+
+    client.init(&admin, &token, &0);
+    mint(&env, &token, &sender, 1000);
+    client.create_escrow(
+        &sender, &recipient, &driver, &10401u64, &token, &1000, &None,
+    );
+
+    client.admin_freeze_funds(&admin, &10401u64);
+
+    assert_eq!(client.get_escrow(&10401u64).status, EscrowStatus::Paused);
+}
+
+/// A holdback escrow can be frozen too — the same Locked/Holdback → Paused
+/// transition `freeze_funds` performs.
+#[test]
+fn test_admin_freeze_funds_on_holdback_escrow() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let driver = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+
+    client.init(&admin, &token, &0);
+    mint(&env, &token, &sender, 1000);
+    let delivery_contract = Address::generate(&env);
+    client.create_escrow(
+        &sender, &recipient, &driver, &10402u64, &token, &1000, &None,
+    );
+    client.set_delivery_contract(&admin, &delivery_contract);
+    client.mark_holdback_escrow(&delivery_contract, &10402u64);
+
+    client.admin_freeze_funds(&admin, &10402u64);
+
+    assert_eq!(client.get_escrow(&10402u64).status, EscrowStatus::Paused);
+}
+
+/// Only the protocol admin may use the admin override; the sender, recipient and
+/// driver keep using the dispute path.
+#[test]
+fn test_admin_freeze_funds_rejects_non_admin() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let driver = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+
+    client.init(&admin, &token, &0);
+    mint(&env, &token, &sender, 1000);
+    client.create_escrow(
+        &sender, &recipient, &driver, &10403u64, &token, &1000, &None,
+    );
+
+    for impostor in [&sender, &recipient, &driver] {
+        let result = client.try_admin_freeze_funds(impostor, &10403u64);
+        match result {
+            Err(Ok(err)) => assert_eq!(err, FaniLabError::Unauthorized.into()),
+            _ => panic!("Expected FaniLabError::Unauthorized"),
+        }
+    }
+
+    assert_eq!(client.get_escrow(&10403u64).status, EscrowStatus::Locked);
+}
+
+/// Freezing a terminal escrow is meaningless — the funds are gone — so it must
+/// revert rather than record a freeze against a settled delivery.
+#[test]
+fn test_admin_freeze_funds_rejects_terminal_state() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let driver = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+
+    client.init(&admin, &token, &0);
+    mint(&env, &token, &sender, 1000);
+    client.create_escrow(
+        &sender, &recipient, &driver, &10404u64, &token, &1000, &None,
+    );
+    client.release_escrow(&recipient, &10404u64);
+
+    let result = client.try_admin_freeze_funds(&admin, &10404u64);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, EscrowError::InvalidState.into()),
+        _ => panic!("Expected EscrowError::InvalidState"),
+    }
+}
+
+/// Re-freezing an already frozen escrow is a harmless no-op, matching
+/// `freeze_funds`.
+#[test]
+fn test_admin_freeze_funds_is_idempotent() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let driver = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+
+    client.init(&admin, &token, &0);
+    mint(&env, &token, &sender, 1000);
+    client.create_escrow(
+        &sender, &recipient, &driver, &10405u64, &token, &1000, &None,
+    );
+
+    client.admin_freeze_funds(&admin, &10405u64);
+    client.admin_freeze_funds(&admin, &10405u64);
+
+    assert_eq!(client.get_escrow(&10405u64).status, EscrowStatus::Paused);
 }

@@ -16,6 +16,12 @@ use soroban_sdk::{
 /// Maximum number of drivers per fleet roster to prevent unbounded storage growth.
 pub const MAX_ROSTER_SIZE: u32 = 10000;
 
+/// Maximum number of roster entries a single `get_fleet_roster` call may read
+/// (Issue #442).  `limit` is clamped to this value so one invocation can never
+/// exceed Soroban's ledger read-entry budget on a large fleet; off-chain
+/// callers page through the roster with `offset`.
+pub const MAX_ROSTER_PAGE_SIZE: u32 = 100;
+
 /// Maximum number of signers a fleet may configure (Issue #463).
 ///
 /// `FleetProfile.signers` is stored as one vector that must be fully
@@ -148,6 +154,8 @@ pub enum FleetError {
     /// identity_reputation_contract, so it cannot legally complete a
     /// delivery (Issue #451).
     DriverNotRegistered = 13,
+    /// The fleet already holds `MAX_ROSTER_SIZE` active drivers.
+    RosterFull = 14,
 }
 
 #[contracttype]
@@ -665,6 +673,12 @@ impl FleetManagementContract {
     /// Callable by anyone: the security guarantee is the elapsed delay, not
     /// caller identity, matching `reclaim_expired_escrow`'s permissionless
     /// finalization pattern.
+    ///
+    /// A deactivated fleet rejects the confirmation, exactly as
+    /// `update_fleet_treasury` rejects the proposal. Without this check a
+    /// treasury change proposed before `deactivate_fleet` could still be
+    /// applied afterwards, mutating the `FleetProfile` of a fleet that is
+    /// supposed to be frozen for historical auditing (Issue #467).
     #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
     pub fn confirm_fleet_treasury_update(env: Env, fleet_id: u64) {
         env.storage().instance().extend_ttl(ttl::LEDGER_TTL_THRESHOLD, ttl::LEDGER_TTL_EXTEND_TO);
@@ -685,6 +699,13 @@ impl FleetManagementContract {
             .persistent()
             .get(&DataKey::Fleet(fleet_id))
             .unwrap_or_else(|| panic_with_error!(&env, FleetError::FleetNotFound));
+
+        // A deactivated fleet's core configuration is frozen: a pending
+        // treasury redirect proposed while the fleet was active must not be
+        // applied once the fleet has been shut down (Issue #467).
+        if !profile.active {
+            panic_with_error!(&env, FleetError::FleetInactive);
+        }
 
         profile.treasury = pending.treasury.clone();
 
@@ -1042,11 +1063,13 @@ impl FleetManagementContract {
                     let last_driver: Address = env
                         .storage()
                         .persistent()
-                        .get(&next_key)
+                        .get(&last_key)
                         .unwrap_or_else(|| {
                             panic_with_error!(&env, FleetError::InternalStorageError)
                         });
-                    env.storage().persistent().set(&current_key, &next_driver);
+                    env.storage()
+                        .persistent()
+                        .set(&removed_slot_key, &last_driver);
                     env.storage().persistent().extend_ttl(
                         &removed_slot_key,
                         ttl::LEDGER_TTL_THRESHOLD,

@@ -2,7 +2,7 @@ extern crate std;
 
 use super::*;
 use proptest::prelude::*;
-use shared_types::{EscrowReleasedEvent, FaniLabError};
+use shared_types::{DeliveryId, EscrowReleasedEvent, FaniLabError};
 use soroban_sdk::{
     testutils::{Address as _, Events, Ledger as _},
     token::{Client as TokenClient, StellarAssetClient},
@@ -4301,6 +4301,230 @@ fn test_freeze_funds_is_noop_on_already_paused_escrow() {
     assert_eq!(after_freeze.disputed_at, disputed_at_after_raise);
     // disputed_by is set by raise_dispute and must not be cleared by freeze_funds.
     assert_eq!(after_freeze.disputed_by, Some(dispute_contract));
+}
+
+/// Issue #468: wires the four real contracts together in the configuration a
+/// production deployment uses, with a registered driver and a funded sender.
+///
+/// Returns `(env, delivery_id, delivery_addr, escrow_addr, dispute_addr,
+/// identity_addr, token, admin, sender, recipient, driver)` with the delivery
+/// created and a driver assigned, but the escrow still `Locked`.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn setup_wired_protocol(
+    amount: i128,
+) -> (
+    Env,
+    DeliveryId,
+    Address,
+    Address,
+    Address,
+    Address,
+    Address,
+    Address,
+    Address,
+    Address,
+    Address,
+) {
+    let env = Env::default();
+    env.mock_all_auths_allowing_non_root_auth();
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let driver = Address::generate(&env);
+
+    let delivery_addr = env.register(delivery_contract::DeliveryContract, ());
+    let escrow_addr = env.register(EscrowContract, ());
+    let dispute_addr = env.register(dispute_resolution_contract::DisputeResolutionContract, ());
+    let identity_addr = env.register(identity_reputation_contract::IdentityReputationContract, ());
+
+    let delivery_client = delivery_contract::DeliveryContractClient::new(&env, &delivery_addr);
+    let escrow_client = EscrowContractClient::new(&env, &escrow_addr);
+    let dispute_client =
+        dispute_resolution_contract::DisputeResolutionContractClient::new(&env, &dispute_addr);
+    let identity_client =
+        identity_reputation_contract::IdentityReputationContractClient::new(&env, &identity_addr);
+
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+
+    escrow_client.init(&admin, &token, &0);
+    escrow_client.set_dispute_resolution_contract(&admin, &dispute_addr);
+    // Issue #466: `mark_holdback_escrow` is restricted to the configured
+    // `delivery_contract`, so the escrow's peer must be wired as well.
+    escrow_client.set_delivery_contract(&admin, &delivery_addr);
+    delivery_client.init(&admin, &escrow_addr);
+    // Issue #444: delivery::raise_dispute only accepts the dispute contract.
+    delivery_client.set_dispute_resolution_contract(&admin, &dispute_addr);
+    // Only the delivery and dispute contracts are on the identity contract's
+    // reputation allowlist — the escrow contract deliberately is not (Issue #468).
+    identity_client.init(&admin, &delivery_addr, &dispute_addr);
+    delivery_client.set_identity_reputation_contract(&admin, &identity_addr);
+    dispute_client.init(&admin, &delivery_addr, &escrow_addr, &86400, &604800);
+    dispute_client.set_identity_reputation_contract(&admin, &identity_addr);
+
+    identity_client.register_driver(&driver);
+    mint(&env, &token, &sender, amount);
+
+    let metadata = shared_types::DeliveryMetadata {
+        delivery_id: 0,
+        origin: soroban_sdk::String::from_str(&env, "Origin"),
+        destination: soroban_sdk::String::from_str(&env, "Destination"),
+        cargo_description: shared_types::CargoDescriptor {
+            weight_grams: 500,
+            category: shared_types::CargoCategory::Electronics,
+            fragile: false,
+        },
+        created_at: env.ledger().timestamp(),
+        estimated_delivery: env.ledger().timestamp() + 3600,
+    };
+
+    let delivery_id = delivery_client.create_delivery(&sender, &recipient, &metadata);
+    escrow_client.create_escrow(
+        &sender,
+        &recipient,
+        &driver,
+        &u64::from(delivery_id),
+        &token,
+        &amount,
+        &None,
+    );
+    delivery_client.assign_driver(&admin, &delivery_id, &driver);
+
+    (
+        env,
+        delivery_id,
+        delivery_addr,
+        escrow_addr,
+        dispute_addr,
+        identity_addr,
+        token,
+        admin,
+        sender,
+        recipient,
+        driver,
+    )
+}
+
+/// Issue #468: refunding a `Holdback` escrow used to be guaranteed to panic.
+///
+/// Once the recipient confirms delivery the escrow sits in `Holdback` and the
+/// driver has been credited reputation. `refund_escrow` tried to reverse that
+/// credit by calling `identity_reputation_contract::decrease_reputation`
+/// itself, but the escrow contract is not on the identity contract's
+/// `AuthorizedContract` allowlist (only the delivery and dispute contracts are),
+/// so the cross-call reverted with `Unauthorized` and permanently locked the
+/// escrow funds: the sender could never be refunded and the driver kept
+/// reputation for a delivery they were never paid for.
+///
+/// Reputation adjustments now live exclusively in
+/// `dispute_resolution_contract`, which *is* on the allowlist and already
+/// applies the penalty on the arbitration path. The direct admin refund out of
+/// `Holdback` therefore settles the funds without reverting.
+///
+/// The escrow transitions are driven directly (as `delivery_contract::
+/// confirm_delivery` and `increase_reputation` do internally) rather than
+/// through the delivery contract, because that path re-enters the delivery
+/// contract from inside a delivery frame — a pre-existing reentrancy
+/// limitation unrelated to this issue.
+#[test]
+fn test_refund_from_holdback_no_longer_panics() {
+    let (
+        env,
+        delivery_id,
+        delivery_addr,
+        escrow_addr,
+        _dispute_addr,
+        identity_addr,
+        token,
+        admin,
+        sender,
+        _recipient,
+        driver,
+    ) = setup_wired_protocol(1000);
+
+    let escrow_client = EscrowContractClient::new(&env, &escrow_addr);
+    let identity_client =
+        identity_reputation_contract::IdentityReputationContractClient::new(&env, &identity_addr);
+
+    // Precondition: the escrow contract is not allowed to mutate reputation,
+    // which is exactly why its own cross-call used to revert.
+    assert!(!identity_client.is_authorized_contract(&escrow_addr));
+
+    // Replicate what `delivery_contract::confirm_delivery` does: move the
+    // escrow into `Holdback` and credit the driver.
+    escrow_client.mark_holdback_escrow(&delivery_addr, &u64::from(delivery_id));
+    identity_client.increase_reputation(&delivery_addr, &driver, &1u64, &500u32, &false);
+
+    assert_eq!(
+        escrow_client.get_escrow(&u64::from(delivery_id)).status,
+        EscrowStatus::Holdback
+    );
+    let credited = identity_client.get_driver_profile(&driver).reputation_score;
+    assert!(credited > 50, "confirmation must credit the driver");
+
+    // The admin arbitration path out of `Holdback`. Before the fix this reverted
+    // with `Unauthorized` from inside `decrease_reputation`, permanently locking
+    // the escrow funds.
+    escrow_client.refund_escrow(&admin, &u64::from(delivery_id));
+
+    assert_eq!(
+        escrow_client.get_escrow(&u64::from(delivery_id)).status,
+        EscrowStatus::Refunded
+    );
+    assert_eq!(balance(&env, &token, &sender), 1000);
+    assert_eq!(balance(&env, &token, &escrow_addr), 0);
+    assert_eq!(balance(&env, &token, &driver), 0);
+    assert_eq!(escrow_client.get_total_locked(&token), 0);
+
+    // No unauthorized reputation mutation is attempted from this contract; the
+    // dispute contract owns that adjustment and applies it on the arbitration
+    // path (covered by the dispute contract's own tests).
+    assert_eq!(
+        identity_client.get_driver_profile(&driver).reputation_score,
+        credited
+    );
+}
+
+/// Non-regression: the sender's unilateral refund from `Locked` (the
+/// `delivery_contract::cancel_delivery` path) is untouched.
+#[test]
+fn test_refund_from_locked_by_sender_still_works() {
+    let (
+        env,
+        delivery_id,
+        _delivery_addr,
+        escrow_addr,
+        _dispute_addr,
+        identity_addr,
+        token,
+        _admin,
+        sender,
+        _recipient,
+        driver,
+    ) = setup_wired_protocol(1000);
+
+    let escrow_client = EscrowContractClient::new(&env, &escrow_addr);
+    let identity_client =
+        identity_reputation_contract::IdentityReputationContractClient::new(&env, &identity_addr);
+
+    let score_before = identity_client.get_driver_profile(&driver).reputation_score;
+    assert_eq!(
+        escrow_client.get_escrow(&u64::from(delivery_id)).status,
+        EscrowStatus::Locked
+    );
+
+    escrow_client.refund_escrow(&sender, &u64::from(delivery_id));
+
+    assert_eq!(
+        escrow_client.get_escrow(&u64::from(delivery_id)).status,
+        EscrowStatus::Refunded
+    );
+    assert_eq!(balance(&env, &token, &sender), 1000);
+    assert_eq!(
+        identity_client.get_driver_profile(&driver).reputation_score,
+        score_before
+    );
 }
 
 /// Integration: full confirm_delivery → dispute_resolution_contract::raise_dispute

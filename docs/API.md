@@ -493,6 +493,16 @@ Refund funds to the sender for an escrow that is still refundable.
 
 **Events:** `escrow_refunded`
 
+**Reputation:** none. Reputation adjustments happen exclusively in
+`dispute_resolution_contract`, which is the contract on the
+`identity_reputation_contract` `AuthorizedContract` allowlist. This function
+previously called `decrease_reputation` directly when refunding out of
+`Holdback`, which reverted with `Unauthorized` because the escrow contract is
+not on that allowlist — every Holdback refund was impossible and the escrow's
+funds were permanently locked (Issue #468). A refund that reverses a
+dispute-arbitrated Holdback escrow goes through
+`resolve_dispute_refund_sender`, which applies the penalty itself.
+
 **Example:**
 ```rust
 // Locked escrow: sender may self-refund.
@@ -2217,6 +2227,8 @@ Apply a previously proposed treasury change once its timelock has elapsed.
 - `NoPendingTreasuryChange` - No treasury change has been proposed for this fleet
 - `TimelockNotElapsed` - The proposal's timelock has not yet elapsed
 - `FleetNotFound` - No fleet with that ID exists
+- `FleetInactive` - The fleet has been deactivated since the change was
+  proposed; a deactivated fleet's core configuration stays frozen (Issue #467)
 
 **Events:** `fleet_treasury_updated`
 

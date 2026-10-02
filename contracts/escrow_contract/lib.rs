@@ -221,12 +221,6 @@ fn get_fleet_management_contract(env: &Env) -> Option<Address> {
         .get(&DataKey::FleetManagementContract)
 }
 
-fn get_identity_reputation_contract(env: &Env) -> Option<Address> {
-    env.storage()
-        .instance()
-        .get(&DataKey::IdentityReputationContract)
-}
-
 /// Authorize the delivery-lifecycle transitions `mark_holdback_escrow` and
 /// `release_escrow` (Issue #466).
 ///
@@ -1528,40 +1522,28 @@ impl EscrowContract {
             panic_with_error!(&env, EscrowError::InsufficientFunds);
         }
 
-        // If refunding from Holdback (delivery was confirmed and driver credited reputation),
-        // reverse the reputation gain before transferring funds. Use the same penalty mechanism
-        // as resolve_dispute_refund_sender for consistency with the accounting invariant:
-        // "reputation credited for a delivery implies the driver was paid for it".
-        let is_holdback_refund = record.status == EscrowStatus::Holdback;
-        if is_holdback_refund {
-            if let Some(reputation_addr) = get_identity_reputation_contract(&env) {
-                // Query dispute_resolution_contract for the penalty, or use a default if unavailable.
-                // This ensures consistency across all refund paths.
-                let penalty: u32 = if let Some(dispute_addr) = 
-                    env.storage().instance().get::<DataKey, Address>(&DataKey::DisputeResolutionContract)
-                {
-                    env.invoke_contract(
-                        &dispute_addr,
-                        &Symbol::new(&env, "get_dispute_reputation_penalty"),
-                        soroban_sdk::vec![&env],
-                    )
-                } else {
-                    10u32 // DEFAULT_DISPUTE_REPUTATION_PENALTY
-                };
-
-                use soroban_sdk::IntoVal;
-                let _: () = env.invoke_contract(
-                    &reputation_addr,
-                    &Symbol::new(&env, "decrease_reputation"),
-                    soroban_sdk::vec![
-                        &env,
-                        env.current_contract_address().into_val(&env),
-                        record.driver.clone().into_val(&env),
-                        penalty.into_val(&env),
-                    ],
-                );
-            }
-        }
+        // Issue #468: no reputation adjustment is performed here. Refunding a
+        // `Holdback` escrow does mean reversing the reputation the driver was
+        // credited at `confirm_delivery`, but this contract is not on the
+        // `identity_reputation_contract` `AuthorizedContract` allowlist (only
+        // the delivery and dispute contracts are), so calling
+        // `decrease_reputation` from here reverted with `Unauthorized` and made
+        // every Holdback refund — and with it the escrow's funds — permanently
+        // unresolvable.
+        //
+        // Reputation adjustments now live exclusively in the
+        // `dispute_resolution_contract`, which is on the allowlist: the
+        // arbitration path (`raise_dispute` -> `resolve_dispute_refund_sender`)
+        // applies the penalty before settling the escrow, and the escrow is
+        // already `Paused` there, so this branch is not reached. A direct admin
+        // refund out of `Holdback` is the protocol's recovery hatch and settles
+        // the funds without touching reputation, exactly as this contract has
+        // always done for every other refund path.
+        //
+        // Delegating the call to the dispute contract instead is not an option
+        // either: the identity contract's pause guard re-enters this contract
+        // (`is_paused`), and Soroban forbids re-entering a contract that is
+        // already on the call stack.
 
         // Effects (state) are committed before the interaction (transfer)
         // below, per checks-effects-interactions.

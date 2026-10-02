@@ -39,14 +39,14 @@ impl SettlementContract {
         env.storage().instance().set(&DataKey::EscrowContract, &escrow_contract);
         env.storage()
             .instance()
-            .extend_ttl(&shared_types::ttl::LEDGER_TTL_THRESHOLD, &shared_types::ttl::LEDGER_TTL_EXTEND_TO);
+            .extend_ttl(shared_types::ttl::LEDGER_TTL_THRESHOLD, shared_types::ttl::LEDGER_TTL_EXTEND_TO);
     }
 
     /// Get the settlement contract administrator.
     pub fn get_admin(env: Env) -> Address {
         env.storage()
             .instance()
-            .extend_ttl(&shared_types::ttl::LEDGER_TTL_THRESHOLD, &shared_types::ttl::LEDGER_TTL_EXTEND_TO);
+            .extend_ttl(shared_types::ttl::LEDGER_TTL_THRESHOLD, shared_types::ttl::LEDGER_TTL_EXTEND_TO);
         env.storage()
             .instance()
             .get(&StorageKey::Admin)
@@ -57,7 +57,7 @@ impl SettlementContract {
     pub fn get_driver_preference(env: Env, _driver: Address) -> Option<Address> {
         env.storage()
             .instance()
-            .extend_ttl(&shared_types::ttl::LEDGER_TTL_THRESHOLD, &shared_types::ttl::LEDGER_TTL_EXTEND_TO);
+            .extend_ttl(shared_types::ttl::LEDGER_TTL_THRESHOLD, shared_types::ttl::LEDGER_TTL_EXTEND_TO);
         // Implementation to be added in Phase 3
         None
     }
@@ -80,7 +80,7 @@ impl SettlementContract {
 
         env.storage()
             .instance()
-            .extend_ttl(&shared_types::ttl::LEDGER_TTL_THRESHOLD, &shared_types::ttl::LEDGER_TTL_EXTEND_TO);
+            .extend_ttl(shared_types::ttl::LEDGER_TTL_THRESHOLD, shared_types::ttl::LEDGER_TTL_EXTEND_TO);
 
         let escrow_contract: Address = env
             .storage()

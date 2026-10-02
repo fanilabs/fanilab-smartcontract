@@ -363,6 +363,62 @@ fn test_confirm_fleet_treasury_update_applies_after_timelock() {
     assert_eq!(client.get_pending_treasury_update(&fleet_id), None);
 }
 
+/// Issue #467: a treasury change proposed while the fleet was active must not
+/// be confirmable after the fleet has been deactivated. `update_fleet_treasury`
+/// already refuses to propose on an inactive fleet; the confirmation step is
+/// permissionless, so without an `active` check the pending change could still
+/// be applied during the timelock window and mutate the frozen `FleetProfile`.
+#[test]
+fn test_confirm_fleet_treasury_update_rejected_after_deactivation() {
+    let (env, client, _admin) = setup_test();
+    let (fleet_id, owner, _old_treasury) = register_fleet(&env, &client);
+    let new_treasury = Address::generate(&env);
+
+    client.update_fleet_treasury(&owner, &fleet_id, &new_treasury, &no_co_signers(&env));
+
+    // The fleet is shut down while the timelock is still running.
+    client.deactivate_fleet(&owner, &fleet_id);
+    assert!(!client.get_fleet(&fleet_id).active);
+
+    env.ledger()
+        .set_timestamp(env.ledger().timestamp() + TREASURY_CHANGE_TIMELOCK_SECONDS);
+
+    // Confirmation must be rejected: the deactivated fleet's core
+    // configuration is frozen for historical auditing.
+    let result = client.try_confirm_fleet_treasury_update(&fleet_id);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, FleetError::FleetInactive.into()),
+        _ => panic!("Expected FleetError::FleetInactive"),
+    }
+}
+
+/// Non-regression companion to the test above: the rejection must leave the
+/// profile untouched (no partial mutation) and the pending entry in place, so a
+/// reactivated fleet can still finalize the change.
+#[test]
+fn test_pending_treasury_survives_rejected_confirmation_after_deactivation() {
+    let (env, client, _admin) = setup_test();
+    let (fleet_id, owner, old_treasury) = register_fleet(&env, &client);
+    let new_treasury = Address::generate(&env);
+
+    client.update_fleet_treasury(&owner, &fleet_id, &new_treasury, &no_co_signers(&env));
+    client.deactivate_fleet(&owner, &fleet_id);
+    env.ledger()
+        .set_timestamp(env.ledger().timestamp() + TREASURY_CHANGE_TIMELOCK_SECONDS);
+
+    let _ = client.try_confirm_fleet_treasury_update(&fleet_id);
+
+    // Treasury unchanged while deactivated.
+    let profile = client.get_fleet(&fleet_id);
+    assert_eq!(profile.treasury, old_treasury);
+    assert!(!profile.active);
+
+    // Once the fleet is operational again the pending change applies normally.
+    client.reactivate_fleet(&owner, &fleet_id);
+    client.confirm_fleet_treasury_update(&fleet_id);
+    assert_eq!(client.get_fleet(&fleet_id).treasury, new_treasury);
+}
+
 // ── Issue #68 tests — add_driver_to_fleet ────────────────────────────────────
 
 #[test]
@@ -1208,7 +1264,8 @@ fn test_configure_signers_requires_threshold() {
     let signer2 = Address::generate(&env);
     let signer3 = Address::generate(&env);
 
-    let fleet_id = client.register_fleet(&owner);
+    let treasury = Address::generate(&env);
+    let fleet_id = client.register_fleet(&owner, &treasury);
 
     let mut signers = soroban_sdk::Vec::new(&env);
     signers.push_back(owner.clone());
@@ -1224,7 +1281,7 @@ fn test_configure_signers_requires_threshold() {
     // Fails without co-signers
     let result = client.try_configure_signers(&owner, &fleet_id, &new_signers, &1u32, &soroban_sdk::Vec::new(&env));
     match result {
-        Err(Ok(err)) => assert_eq!(err, FleetError::ThresholdNotMet.into()),
+        Err(Ok(err)) => assert_eq!(err, FleetError::Unauthorized.into()),
         _ => panic!("Expected threshold error"),
     }
 

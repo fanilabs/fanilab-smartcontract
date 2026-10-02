@@ -956,6 +956,53 @@ fn test_non_admin_cannot_reinstate_driver() {
     assert!(client.is_driver_suspended(&driver));
 }
 
+/// Issue #458: KYC moderation is identity data, not escrow lifecycle state, so
+/// `update_driver_kyc_status` must stay administrable while the escrow protocol
+/// is paused.
+#[test]
+fn test_update_driver_kyc_status_allowed_while_escrow_paused() {
+    let (env, admin, client, delivery_id, _) = setup_wired();
+    let driver = Address::generate(&env);
+    client.register_driver(&driver);
+    assert!(!client.get_driver_profile(&driver).kyc_verified);
+
+    // Pause the escrow protocol via the delivery contract's escrow address.
+    let escrow_addr =
+        delivery_contract::DeliveryContractClient::new(&env, &delivery_id).get_escrow_contract();
+    let escrow_client = escrow_contract::EscrowContractClient::new(&env, &escrow_addr);
+    escrow_client.set_paused(&admin, &true);
+    assert!(escrow_client.is_paused());
+
+    // Must succeed despite the pause.
+    client.update_driver_kyc_status(&admin, &driver, &true);
+    assert!(client.get_driver_profile(&driver).kyc_verified);
+
+    // And the reversal works just as well.
+    client.update_driver_kyc_status(&admin, &driver, &false);
+    assert!(!client.get_driver_profile(&driver).kyc_verified);
+}
+
+/// Issue #458 scope check: removing the pause guard from
+/// `update_driver_kyc_status` must not loosen the escrow-coupled entry points —
+/// reputation adjustments stay rejected while the escrow is paused.
+#[test]
+fn test_increase_reputation_still_rejected_while_escrow_paused() {
+    let (env, admin, client, delivery_id, _) = setup_wired();
+    let driver = Address::generate(&env);
+    client.register_driver(&driver);
+
+    let escrow_addr =
+        delivery_contract::DeliveryContractClient::new(&env, &delivery_id).get_escrow_contract();
+    let escrow_client = escrow_contract::EscrowContractClient::new(&env, &escrow_addr);
+    escrow_client.set_paused(&admin, &true);
+
+    let result = client.try_increase_reputation(&delivery_id, &driver, &1u64, &1000u32, &false);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::ProtocolPaused.into()),
+        _ => panic!("Expected FaniLabError::ProtocolPaused"),
+    }
+}
+
 /// Suspension preserves reputation score, deliveries_completed, and kyc_verified.
 #[test]
 fn test_suspension_preserves_driver_history() {

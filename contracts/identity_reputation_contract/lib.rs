@@ -340,7 +340,9 @@ impl IdentityReputationContract {
     #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
     pub fn update_driver_kyc_status(env: Env, admin: Address, driver: Address, kyc_verified: bool) {
         admin.require_auth();
-        require_escrow_not_paused(&env);
+        // Issue #458: deliberately NOT gated on require_escrow_not_paused.
+        // KYC moderation is global identity data, independent of the escrow
+        // lifecycle, so it must stay administrable during an escrow pause.
 
         if !is_admin(&env, &admin) {
             panic_with_error!(&env, FaniLabError::Unauthorized);

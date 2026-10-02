@@ -15,6 +15,9 @@ use soroban_sdk::{contract, contracterror, contractimpl, contracttype, panic_wit
 #[derive(Clone)]
 pub enum DataKey {
     EscrowContract,
+    /// Per-driver preferred payout asset recorded via
+    /// `set_driver_preference` (Issue #459).
+    DriverPreference(Address),
 }
 
 #[contracterror]
@@ -53,13 +56,31 @@ impl SettlementContract {
             .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::NotInitialized))
     }
 
+    /// Record the asset a driver wants to be paid in.
+    ///
+    /// Any driver may set (or overwrite) their own preference; the caller must
+    /// authenticate as the driver. Stored in persistent storage so the entry
+    /// survives independently of the contract's instance entry, and its TTL is
+    /// extended on every write (Issue #459).
+    pub fn set_driver_preference(env: Env, driver: Address, to_token: Address) {
+        driver.require_auth();
+
+        let key = DataKey::DriverPreference(driver);
+        env.storage().persistent().set(&key, &to_token);
+        env.storage().persistent().extend_ttl(
+            &key,
+            shared_types::ttl::LEDGER_TTL_THRESHOLD,
+            shared_types::ttl::LEDGER_TTL_EXTEND_TO,
+        );
+    }
+
     /// Get driver's preferred asset for payment
-    pub fn get_driver_preference(env: Env, _driver: Address) -> Option<Address> {
+    pub fn get_driver_preference(env: Env, driver: Address) -> Option<Address> {
         env.storage()
             .instance()
             .extend_ttl(shared_types::ttl::LEDGER_TTL_THRESHOLD, shared_types::ttl::LEDGER_TTL_EXTEND_TO);
-        // Implementation to be added in Phase 3
-        None
+        let key = DataKey::DriverPreference(driver);
+        env.storage().persistent().get(&key)
     }
 
     /// Execute asset swap and transfer to driver.

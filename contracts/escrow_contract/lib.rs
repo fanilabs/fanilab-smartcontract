@@ -101,6 +101,51 @@ fn extend_instance_ttl(env: &Env) {
         .extend_ttl(ttl::LEDGER_TTL_THRESHOLD, ttl::LEDGER_TTL_EXTEND_TO);
 }
 
+/// Shared escrow state transition behind `freeze_funds` and
+/// `admin_freeze_funds`: move a Locked/Holdback escrow into the Paused
+/// (disputed) state. `actor` is the authorized caller recorded in the
+/// `funds_frozen` event. Never transfers funds, so both entry points stay
+/// usable while the protocol is paused (Issue #461).
+#[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
+fn apply_freeze_funds(env: &Env, actor: &Address, delivery_id: u64) {
+    let mut record = load_escrow(env, delivery_id);
+    // Issue #294: reject terminal states (Released, Refunded, Split) with a
+    // typed error so the caller — typically dispute_resolution_contract::
+    // raise_dispute — gets a transaction revert rather than a silent no-op.
+    // This prevents an unresolvable DisputeCase from being recorded against
+    // a delivery whose funds are already gone.
+    //
+    // Already-Paused is treated as a safe no-op: raise_dispute in the
+    // delivery contract may call freeze_funds a second time in certain
+    // re-entry paths (e.g. Delivered → Disputed after the escrow was already
+    // paused by a direct escrow::raise_dispute call), and that double-call
+    // must succeed harmlessly rather than reverting the whole dispute chain.
+    // An already-Paused escrow has its funds secured — the goal of freeze —
+    // so repeating the operation changes nothing meaningful and is documented
+    // here as an intentional, stable contract.
+    match record.status {
+        EscrowStatus::Locked | EscrowStatus::Holdback => {
+            record.status = EscrowStatus::Paused;
+            record.disputed_at = Some(env.ledger().timestamp());
+            save_escrow(env, delivery_id, &record);
+            env.events().publish(
+                (Symbol::new(env, "funds_frozen"), delivery_id),
+                (actor.clone(), env.ledger().timestamp()),
+            );
+        }
+        EscrowStatus::Paused => {
+            // Already frozen — safe no-op (see comment above).
+        }
+        // Released, Refunded, Split: funds are no longer held by this
+        // contract; freezing them is meaningless and would leave the
+        // dispute contract with an unresolvable DisputeCase. Panic so
+        // the calling transaction reverts cleanly.
+        _ => {
+            panic_with_error!(env, EscrowError::InvalidState);
+        }
+    }
+}
+
 fn calculate_fee(amount: i128, platform_fee_bps: u32) -> i128 {
     amount.saturating_mul(platform_fee_bps as i128) / 10_000
 }
@@ -412,6 +457,14 @@ fn settle_holdback_escrow(env: &Env, delivery_id: u64, mut record: EscrowRecord)
     env.storage()
         .persistent()
         .set(&sender_volume_key, &sender_volume.saturating_add(1));
+    // Issue #460: the sender volume drives the volume-tier fee discount, so a
+    // silently expired entry would wipe an active sender's accrued discount.
+    // Every write must therefore extend the entry's TTL.
+    env.storage().persistent().extend_ttl(
+        &sender_volume_key,
+        ttl::LEDGER_TTL_THRESHOLD,
+        ttl::LEDGER_TTL_EXTEND_TO,
+    );
 
     // Effects (state) are committed before the interaction (transfer)
     // below, per checks-effects-interactions.
@@ -1400,6 +1453,13 @@ impl EscrowContract {
         env.storage()
             .persistent()
             .set(&sender_volume_key, &sender_volume.saturating_add(1));
+        // Issue #460: extend the volume entry's TTL so an active sender's
+        // accrued tier discount cannot silently expire.
+        env.storage().persistent().extend_ttl(
+            &sender_volume_key,
+            ttl::LEDGER_TTL_THRESHOLD,
+            ttl::LEDGER_TTL_EXTEND_TO,
+        );
 
         // Effects (state) are committed before the interaction (transfer)
         // below, per checks-effects-interactions.
@@ -1674,6 +1734,13 @@ impl EscrowContract {
             env.storage()
                 .persistent()
                 .set(&sender_volume_key, &sender_volume.saturating_add(1));
+            // Issue #460: extend the volume entry's TTL so an active sender's
+            // accrued tier discount cannot silently expire.
+            env.storage().persistent().extend_ttl(
+                &sender_volume_key,
+                ttl::LEDGER_TTL_THRESHOLD,
+                ttl::LEDGER_TTL_EXTEND_TO,
+            );
 
             record.status = EscrowStatus::Released;
             Some((
@@ -1781,6 +1848,13 @@ impl EscrowContract {
         env.storage()
             .persistent()
             .set(&sender_volume_key, &sender_volume.saturating_add(1));
+        // Issue #460: extend the volume entry's TTL so an active sender's
+        // accrued tier discount cannot silently expire.
+        env.storage().persistent().extend_ttl(
+            &sender_volume_key,
+            ttl::LEDGER_TTL_THRESHOLD,
+            ttl::LEDGER_TTL_EXTEND_TO,
+        );
 
         // Effects (state) are committed before the interactions (transfers)
         // below, per checks-effects-interactions.
@@ -1942,15 +2016,18 @@ impl EscrowContract {
             .unwrap_or_else(|| panic_with_error!(env, EscrowError::DeliveryNotFound))
     }
 
+    /// Dispute-contract entry point for freezing an escrow's funds.
+    ///
+    /// Intentionally NOT gated on `require_not_paused`: this only moves an
+    /// escrow into the Paused (disputed) state and never transfers funds, so it
+    /// remains available during a protocol pause. The caller is restricted to
+    /// the configured `dispute_resolution_contract` below. Because that
+    /// contract's `raise_dispute` only admits the sender / recipient / driver,
+    /// this path is *not* reachable by an administrator — see
+    /// `admin_freeze_funds`, which is the admin-facing counterpart (Issue #461).
     #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
     pub fn freeze_funds(env: Env, caller: Address, delivery_id: u64) {
         caller.require_auth();
-        // Intentionally NOT gated on require_not_paused: this only moves an
-        // escrow into the Paused (disputed) state and never transfers funds,
-        // so it remains available during a protocol pause — an admin should
-        // still be able to freeze a suspicious escrow while the protocol is
-        // paused for an unrelated incident. The caller is already restricted
-        // to the configured dispute_resolution_contract below.
         let dispute_contract = env
             .storage()
             .instance()
@@ -1959,42 +2036,24 @@ impl EscrowContract {
         if caller != dispute_contract {
             panic_with_error!(&env, FaniLabError::Unauthorized);
         }
-        let mut record = load_escrow(&env, delivery_id);
-        // Issue #294: reject terminal states (Released, Refunded, Split) with a
-        // typed error so the caller — typically dispute_resolution_contract::
-        // raise_dispute — gets a transaction revert rather than a silent no-op.
-        // This prevents an unresolvable DisputeCase from being recorded against
-        // a delivery whose funds are already gone.
-        //
-        // Already-Paused is treated as a safe no-op: raise_dispute in the
-        // delivery contract may call freeze_funds a second time in certain
-        // re-entry paths (e.g. Delivered → Disputed after the escrow was already
-        // paused by a direct escrow::raise_dispute call), and that double-call
-        // must succeed harmlessly rather than reverting the whole dispute chain.
-        // An already-Paused escrow has its funds secured — the goal of freeze —
-        // so repeating the operation changes nothing meaningful and is documented
-        // here as an intentional, stable contract.
-        match record.status {
-            EscrowStatus::Locked | EscrowStatus::Holdback => {
-                record.status = EscrowStatus::Paused;
-                record.disputed_at = Some(env.ledger().timestamp());
-                save_escrow(&env, delivery_id, &record);
-                env.events().publish(
-                    (Symbol::new(&env, "funds_frozen"), delivery_id),
-                    (caller, env.ledger().timestamp()),
-                );
-            }
-            EscrowStatus::Paused => {
-                // Already frozen — safe no-op (see comment above).
-            }
-            // Released, Refunded, Split: funds are no longer held by this
-            // contract; freezing them is meaningless and would leave the
-            // dispute contract with an unresolvable DisputeCase. Panic so
-            // the calling transaction reverts cleanly.
-            _ => {
-                panic_with_error!(&env, EscrowError::InvalidState);
-            }
-        }
+        apply_freeze_funds(&env, &caller, delivery_id);
+    }
+
+    /// Admin-only counterpart to `freeze_funds` (Issue #461).
+    ///
+    /// `freeze_funds` documents that an admin should be able to secure a
+    /// suspicious escrow while the protocol is paused for an incident, but its
+    /// only caller is `dispute_resolution_contract`, whose `raise_dispute`
+    /// rejects admin callers — so the documented admin path was unreachable.
+    /// This entry point makes it real: callable only by the protocol admin, not
+    /// gated on `require_not_paused`, and it moves the escrow into the same
+    /// Paused (disputed) state as `freeze_funds` without ever transferring
+    /// funds.
+    pub fn admin_freeze_funds(env: Env, admin: Address, delivery_id: u64) {
+        admin.require_auth();
+        require_admin(&env, &admin);
+        // Intentionally NOT gated on require_not_paused — see above.
+        apply_freeze_funds(&env, &admin, delivery_id);
     }
 
     #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)

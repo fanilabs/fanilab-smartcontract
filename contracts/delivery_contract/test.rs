@@ -3,8 +3,8 @@ extern crate std;
 use super::*;
 use proptest::prelude::*;
 use soroban_sdk::{
-    testutils::{Address as _, Ledger as _},
-    Address, Env, IntoVal, String, Symbol,
+    testutils::{Address as _, Events, Ledger as _},
+    xdr, Address, Env, IntoVal, String, Symbol, TryFromVal, Val,
 };
 
 proptest! {
@@ -1662,6 +1662,33 @@ fn test_update_delivery_metadata_while_pending() {
         500
     );
     assert!(updated_delivery.metadata.cargo_description.fragile);
+}
+
+#[test]
+fn test_update_delivery_metadata_emits_event() {
+    let env = Env::default();
+    let (client, shipper, _, recipient, _, _) = setup_full(&env);
+    let metadata = get_test_metadata(&env, 1);
+    let delivery_id = client.create_delivery(&shipper, &recipient, &metadata);
+
+    let updated_metadata = get_test_metadata(&env, 2);
+    client.update_delivery_metadata(&shipper, &delivery_id, &updated_metadata);
+
+    let events = env.events().all();
+    let raw_event = events.events().last().expect("no event emitted");
+    let xdr::ContractEventBody::V0(body) = raw_event.body.clone();
+    let mut topics = soroban_sdk::Vec::new(&env);
+    for raw_topic in body.topics.iter() {
+        topics.push_back(Val::try_from_val(&env, raw_topic).unwrap());
+    }
+    let topic = Symbol::try_from_val(&env, &topics.get(0).unwrap()).unwrap();
+    let data = Val::try_from_val(&env, &body.data).unwrap();
+    let (event_delivery_id, event_sender): (DeliveryId, Address) =
+        <(DeliveryId, Address)>::try_from_val(&env, &data).unwrap();
+
+    assert_eq!(topic, events::delivery_metadata_updated(&env));
+    assert_eq!(event_delivery_id, delivery_id);
+    assert_eq!(event_sender, shipper);
 }
 
 #[test]

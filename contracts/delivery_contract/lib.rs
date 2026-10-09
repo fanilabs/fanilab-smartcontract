@@ -581,7 +581,7 @@ impl DeliveryContract {
         );
 
         env.events().publish(
-            (Symbol::new(&env, "delivery_metadata_updated"),),
+            (events::delivery_metadata_updated(&env),),
             (delivery_id, sender),
         );
     }

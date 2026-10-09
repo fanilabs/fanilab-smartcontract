@@ -37,6 +37,7 @@ pub mod events {
     pub const ESCROW_FUNDED: &str = "escrow_funded";
     pub const DRIVER_ASSIGNED: &str = "driver_assigned";
     pub const DELIVERY_CONFIRMED: &str = "delivery_confirmed";
+    pub const DELIVERY_METADATA_UPDATED: &str = "delivery_metadata_updated";
     pub const ESCROW_RELEASED: &str = "escrow_released";
     pub const DELIVERY_DISPUTED: &str = "delivery_disputed";
     pub const ESCROW_REFUNDED: &str = "escrow_refunded";
@@ -55,6 +56,10 @@ pub mod events {
 
     pub fn delivery_confirmed(env: &Env) -> Symbol {
         Symbol::new(env, DELIVERY_CONFIRMED)
+    }
+
+    pub fn delivery_metadata_updated(env: &Env) -> Symbol {
+        Symbol::new(env, DELIVERY_METADATA_UPDATED)
     }
 
     pub fn escrow_released(env: &Env) -> Symbol {

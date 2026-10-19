@@ -128,7 +128,7 @@ export class EscrowClient {
   async createEscrowsBatch(
     params: EscrowTypes.CreateEscrowBatchParams,
     options?: ContractInvokeOptions
-  ): Promise<bigint[]> {
+  ): Promise<number> {
     // `create_escrows_batch` takes a `Vec<(u64, Address, i128, Option<u64>)>`,
     // so each entry must be encoded as its own Vec ScVal, not a bare array.
     const entries = params.escrowList.map((entry) =>
@@ -139,8 +139,12 @@ export class EscrowClient {
         entry.fleetId === undefined ? xdrVoid() : u64(entry.fleetId),
       ])
     );
-    const result = await this.invoker.call('create_escrows_batch', [address(params.sender), address(params.recipient), address(params.token), u64(params.fleetId ?? 0), vec(entries)], options);
-    return decodeIds(result);
+    const result = await this.invoker.call(
+      'create_escrows_batch',
+      [address(params.sender), address(params.recipient), address(params.token), vec(entries)],
+      options
+    );
+    return Number(result);
   }
 
   /**

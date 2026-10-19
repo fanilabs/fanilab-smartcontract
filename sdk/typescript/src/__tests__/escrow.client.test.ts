@@ -152,6 +152,33 @@ describe('EscrowClient solvency and sweep bindings (issue #450)', () => {
   });
 });
 
+describe('EscrowClient batch creation binding', () => {
+  it('sends the four contract arguments and returns the created count', async () => {
+    const call = mockInvoker({
+      create_escrows_batch: [nativeToScVal(2, { type: 'u32' })],
+    });
+
+    const count = await client().createEscrowsBatch({
+      sender: ADMIN,
+      recipient: TREASURY,
+      token: TOKEN,
+      escrowList: [
+        { deliveryId: 10n, driver: ADMIN, amount: 500n },
+        { deliveryId: 11n, driver: TREASURY, amount: 750n, fleetId: 4n },
+      ],
+    });
+
+    expect(count).toBe(2);
+    const [fn, args] = call.mock.calls[0];
+    expect(fn).toBe('create_escrows_batch');
+    expect(args).toHaveLength(4);
+    expect(decodeAddress(args[0] as xdr.ScVal)).toBe(ADMIN);
+    expect(decodeAddress(args[1] as xdr.ScVal)).toBe(TREASURY);
+    expect(decodeAddress(args[2] as xdr.ScVal)).toBe(TOKEN);
+    expect(scValToNative(args[3] as xdr.ScVal)).toHaveLength(2);
+  });
+});
+
 describe('EscrowClient releaseExpiredHoldback binding (issue #452)', () => {
   it('targets release_expired_holdback with a u64 deliveryId', async () => {
     const call = mockInvoker({ release_expired_holdback: [undefined] });

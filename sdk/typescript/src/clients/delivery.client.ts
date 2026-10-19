@@ -225,14 +225,20 @@ export class DeliveryClient {
   }
 
   /**
-   * Get a paginated list of deliveries
+   * Get a paginated list of delivery IDs for an owner and index kind.
    */
   async getDeliveriesPage(
+    owner: string,
+    kind: DeliveryTypes.DeliveryIndexKind,
     offset: number,
     limit: number,
     options?: ContractInvokeOptions
-  ): Promise<DeliveryTypes.DeliveryPage> {
-    return decodeDeliveryPage(await this.invoker.call('get_deliveries_page', [u32(offset), u32(limit)], options));
+  ): Promise<bigint[]> {
+    return decodeIds(await this.invoker.call(
+      'get_deliveries_page',
+      [address(owner), u32(kind), u32(offset), u32(limit)],
+      options
+    ));
   }
 
   /**
@@ -334,17 +340,6 @@ function decodeDeliveryEscrow(value: unknown): DeliveryTypes.DeliveryEscrowState
       ? undefined
       : Number(record.holdback_started_at),
     fleetId: record.fleet_id == null ? undefined : BigInt(String(record.fleet_id)),
-  };
-}
-
-function decodeDeliveryPage(value: unknown): DeliveryTypes.DeliveryPage {
-  const record = value as Record<string, unknown>;
-  const items = (record.items as unknown[]) ?? [];
-  return {
-    items: items.map((item) => decodeDelivery(item)),
-    total: Number(record.total),
-    offset: Number(record.offset),
-    limit: Number(record.limit),
   };
 }
 

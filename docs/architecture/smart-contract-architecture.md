@@ -8,7 +8,7 @@ To ensure separation of concerns, the system is broken down into **6 deployable 
 Houses all shared Enums, Structs, and Data representations across the entire platform.
 - `DeliveryStatus` (Pending, Active, InTransit, Delivered, Disputed, Cancelled)
 - `EscrowState` (Locked, Holdback, Released, Refunded, Paused, Split)
-- `CargoCategory` (Documents, Electronics, Perishables, Clothing, General)
+- `CargoCategory` (Documents, Electronics, Perishables, Clothing, General, Hazardous, FragileSpecial, HighValue)
 - `FaniLabError` enum with authorization and validation errors
 - Core structs: `DeliveryRecord`, `EscrowRecord`, `CargoDescriptor`, `DeliveryMetadata`, `DriverProfile`, `UserProfile`, `ProtocolConfig`
 - Event structs: `DeliveryCreatedEvent`, `EscrowFundedEvent`, `DriverAssignedEvent`, `DeliveryConfirmedEvent`, `EscrowReleasedEvent`, `DeliveryDisputedEvent`, `EscrowRefundedEvent`, `DisputeResolvedEvent`

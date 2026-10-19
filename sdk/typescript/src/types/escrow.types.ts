@@ -51,7 +51,6 @@ export interface CreateEscrowBatchParams {
     amount: bigint;
     fleetId?: bigint;
   }>;
-  fleetId?: bigint;
 }
 
 export interface ReleaseEscrowParams {

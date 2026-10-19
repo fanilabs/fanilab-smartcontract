@@ -705,6 +705,8 @@ pub struct ProtocolConfig {
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum StorageKey {
+    // Contract storage must use typed StorageKey or contract-local DataKey
+    // variants; reserve bare Symbols for event topics and contract selectors.
     /// Instance storage for the shared admin address.
     Admin,
     /// Persistent storage for a delivery record.
@@ -820,6 +822,9 @@ pub enum CargoCategory {
     Perishables,
     Clothing,
     General,
+    Hazardous,
+    FragileSpecial,
+    HighValue,
 }
 
 #[contracttype]
@@ -855,7 +860,9 @@ mod test {
         EscrowRecord, EscrowRefundedEvent, EscrowReleasedEvent, EscrowState, FaniLabError,
         ProtocolConfig, StorageKey, UserProfile,
     };
-    use soroban_sdk::{contract, testutils::Address as _, Address, Env, String};
+    use soroban_sdk::{
+        contract, testutils::Address as _, Address, Env, IntoVal, String, TryFromVal, Val,
+    };
 
     // `is_admin` is a free function reading instance storage, which SDK 27
     // only allows from within a contract's execution context — this minimal
@@ -877,6 +884,27 @@ mod test {
         // StorageKey::Admin was never written — is_admin must return false.
         let result = env.as_contract(&contract_id, || super::is_admin(&env, &caller));
         assert!(!result, "is_admin should return false when uninitialized");
+    }
+
+    #[test]
+    fn storage_enum_keys_do_not_alias_symbol_keys() {
+        let env = Env::default();
+        let contract_id = env.register(TestContract, ());
+        let symbol_key = soroban_sdk::Symbol::new(&env, "Admin");
+
+        env.as_contract(&contract_id, || {
+            env.storage().instance().set(&StorageKey::Admin, &1u32);
+            env.storage().instance().set(&symbol_key, &2u32);
+
+            assert_eq!(
+                env.storage().instance().get::<_, u32>(&StorageKey::Admin),
+                Some(1)
+            );
+            assert_eq!(
+                env.storage().instance().get::<_, u32>(&symbol_key),
+                Some(2)
+            );
+        });
     }
 
     #[test]
@@ -1102,7 +1130,7 @@ mod test {
 
     #[test]
     fn test_cargo_descriptor() {
-        let _env = Env::default();
+        let env = Env::default();
         let desc = CargoDescriptor {
             weight_grams: 500,
             category: CargoCategory::Electronics,
@@ -1111,6 +1139,14 @@ mod test {
         assert_eq!(desc.weight_grams, 500);
         assert!(desc.fragile);
         assert_eq!(desc.category, CargoCategory::Electronics);
+        for category in [
+            CargoCategory::Hazardous,
+            CargoCategory::FragileSpecial,
+            CargoCategory::HighValue,
+        ] {
+            let value: Val = category.clone().into_val(&env);
+            assert_eq!(CargoCategory::try_from_val(&env, &value).unwrap(), category);
+        }
     }
 
     #[test]

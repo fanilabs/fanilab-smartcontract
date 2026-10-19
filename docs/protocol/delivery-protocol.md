@@ -188,7 +188,7 @@ pub struct DeliveryMetadata {
 
 pub struct CargoDescriptor {
     pub weight_grams: u32,           // Max 1,000,000g (1,000 kg)
-    pub category: CargoCategory,     // Documents, Electronics, Perishables, Clothing, General
+    pub     category: CargoCategory,     // Documents, Electronics, Perishables, Clothing, General, Hazardous, FragileSpecial, HighValue
     pub fragile: bool,
 }
 ```

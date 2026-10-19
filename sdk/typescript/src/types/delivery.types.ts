@@ -65,6 +65,9 @@ export enum CargoCategory {
   Perishables = 'Perishables',
   Clothing = 'Clothing',
   General = 'General',
+  Hazardous = 'Hazardous',
+  FragileSpecial = 'FragileSpecial',
+  HighValue = 'HighValue',
 }
 
 export interface CargoDescriptor {
@@ -117,6 +120,13 @@ export interface UpdateDeliveryMetadataParams {
 
 export interface GetDeliveryParams {
   deliveryId: bigint;
+}
+
+/** Owner index selected by `delivery_contract::get_deliveries_page`. */
+export enum DeliveryIndexKind {
+  Sender = 0,
+  Recipient = 1,
+  Driver = 2,
 }
 
 export interface DeliveryRecord {

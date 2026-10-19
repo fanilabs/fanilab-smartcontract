@@ -65,6 +65,9 @@ export enum CargoCategory {
   Perishables = 'Perishables',
   Clothing = 'Clothing',
   General = 'General',
+  Hazardous = 'Hazardous',
+  FragileSpecial = 'FragileSpecial',
+  HighValue = 'HighValue',
 }
 
 export interface CargoDescriptor {

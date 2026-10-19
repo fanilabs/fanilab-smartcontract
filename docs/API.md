@@ -2984,6 +2984,9 @@ pub enum CargoCategory {
     Perishables,
     Clothing,
     General,
+    Hazardous,
+    FragileSpecial,
+    HighValue,
 }
 ```
 

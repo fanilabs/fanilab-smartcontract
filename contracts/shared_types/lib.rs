@@ -820,6 +820,9 @@ pub enum CargoCategory {
     Perishables,
     Clothing,
     General,
+    Hazardous,
+    FragileSpecial,
+    HighValue,
 }
 
 #[contracttype]
@@ -855,7 +858,9 @@ mod test {
         EscrowRecord, EscrowRefundedEvent, EscrowReleasedEvent, EscrowState, FaniLabError,
         ProtocolConfig, StorageKey, UserProfile,
     };
-    use soroban_sdk::{contract, testutils::Address as _, Address, Env, String};
+    use soroban_sdk::{
+        contract, testutils::Address as _, Address, Env, IntoVal, String, TryFromVal, Val,
+    };
 
     // `is_admin` is a free function reading instance storage, which SDK 27
     // only allows from within a contract's execution context — this minimal
@@ -1102,7 +1107,7 @@ mod test {
 
     #[test]
     fn test_cargo_descriptor() {
-        let _env = Env::default();
+        let env = Env::default();
         let desc = CargoDescriptor {
             weight_grams: 500,
             category: CargoCategory::Electronics,
@@ -1111,6 +1116,14 @@ mod test {
         assert_eq!(desc.weight_grams, 500);
         assert!(desc.fragile);
         assert_eq!(desc.category, CargoCategory::Electronics);
+        for category in [
+            CargoCategory::Hazardous,
+            CargoCategory::FragileSpecial,
+            CargoCategory::HighValue,
+        ] {
+            let value: Val = category.clone().into_val(&env);
+            assert_eq!(CargoCategory::try_from_val(&env, &value).unwrap(), category);
+        }
     }
 
     #[test]

@@ -705,6 +705,8 @@ pub struct ProtocolConfig {
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum StorageKey {
+    // Contract storage must use typed StorageKey or contract-local DataKey
+    // variants; reserve bare Symbols for event topics and contract selectors.
     /// Instance storage for the shared admin address.
     Admin,
     /// Persistent storage for a delivery record.
@@ -882,6 +884,27 @@ mod test {
         // StorageKey::Admin was never written — is_admin must return false.
         let result = env.as_contract(&contract_id, || super::is_admin(&env, &caller));
         assert!(!result, "is_admin should return false when uninitialized");
+    }
+
+    #[test]
+    fn storage_enum_keys_do_not_alias_symbol_keys() {
+        let env = Env::default();
+        let contract_id = env.register(TestContract, ());
+        let symbol_key = soroban_sdk::Symbol::new(&env, "Admin");
+
+        env.as_contract(&contract_id, || {
+            env.storage().instance().set(&StorageKey::Admin, &1u32);
+            env.storage().instance().set(&symbol_key, &2u32);
+
+            assert_eq!(
+                env.storage().instance().get::<_, u32>(&StorageKey::Admin),
+                Some(1)
+            );
+            assert_eq!(
+                env.storage().instance().get::<_, u32>(&symbol_key),
+                Some(2)
+            );
+        });
     }
 
     #[test]

@@ -23,6 +23,14 @@ export interface PaginationOptions {
 const DEFAULT_OFFSET = 0;
 const DEFAULT_LIMIT = 100;
 
+/**
+ * Delivery query kind discriminants matching
+ * contracts/delivery_contract/lib.rs::get_deliveries_page(owner, kind, offset, limit).
+ */
+const DELIVERY_KIND_SENDER = 0;
+const DELIVERY_KIND_RECIPIENT = 1;
+const DELIVERY_KIND_DRIVER = 2;
+
 function resolvePagination(options?: PaginationOptions): { offset: number; limit: number } {
   return {
     offset: options?.offset ?? DEFAULT_OFFSET,
@@ -54,6 +62,7 @@ export class DeliveryClient {
     const args = hasPagination(options)
       ? [
           new Address(sender).toScVal(),
+          nativeToScVal(DELIVERY_KIND_SENDER, { type: 'u32' }),
           nativeToScVal(offset, { type: 'u32' }),
           nativeToScVal(limit, { type: 'u32' }),
         ]
@@ -70,6 +79,7 @@ export class DeliveryClient {
     const args = hasPagination(options)
       ? [
           new Address(recipient).toScVal(),
+          nativeToScVal(DELIVERY_KIND_RECIPIENT, { type: 'u32' }),
           nativeToScVal(offset, { type: 'u32' }),
           nativeToScVal(limit, { type: 'u32' }),
         ]
@@ -86,6 +96,7 @@ export class DeliveryClient {
     const args = hasPagination(options)
       ? [
           new Address(driver).toScVal(),
+          nativeToScVal(DELIVERY_KIND_DRIVER, { type: "u32" }),
           nativeToScVal(offset, { type: "u32" }),
           nativeToScVal(limit, { type: "u32" }),
         ]

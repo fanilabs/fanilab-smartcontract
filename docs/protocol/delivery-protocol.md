@@ -12,14 +12,20 @@ The delivery protocol is tightly coupled with the **escrow contract** for financ
 
 ## Delivery State Machine
 
-Every delivery follows a strict state machine enforced by `validate_transition()`. The implementation allows `Delivered → Disputed` for the post-confirmation dispute window, and the dispute window is bounded by `dispute_time_limit` in `dispute_resolution_contract`. `Cancelled` is the only terminal state in the delivery lifecycle.
+Every delivery follows a strict state machine enforced by `validate_transition()`. The implementation allows `Delivered → Disputed` for the post-confirmation dispute window, and the dispute window is bounded by `dispute_time_limit` in `dispute_resolution_contract`. `Cancelled` and `Resolved` are terminal states. `Resolved` records that a dispute outcome has been applied to escrow; it is distinct from `Delivered` and `Cancelled`.
 
 ```
-Pending ──► Active ──► InTransit ──► Delivered
-   │          │            │             │
-   │          └────────────► Disputed ──► Delivered
-   │                              │
-   └────────────► Cancelled        └────► Cancelled
+```mermaid
+flowchart LR
+    Pending --> Active --> InTransit --> Delivered
+    Active --> Disputed
+    InTransit --> Disputed
+    Delivered --> Disputed
+    Disputed --> Delivered
+    Disputed --> Resolved
+    Pending --> Cancelled
+    Active --> Cancelled
+    InTransit --> Cancelled
 ```
 
 ### Allowed Transitions
@@ -30,14 +36,15 @@ Pending ──► Active ──► InTransit ──► Delivered
 | `Pending`    | `Cancelled` | Sender cancels before funding                                    |
 | `Active`     | `InTransit` | Driver picks up the package and confirms                         |
 | `Active`     | `Disputed`  | Sender, recipient, or driver raises a dispute                    |
-| `Active`     | `Cancelled` | Sender or admin cancels the delivery                             |
+| `Active`     | `Cancelled` | Sender cancels the delivery                                      |
 | `InTransit`  | `Delivered` | Recipient confirms delivery (proof of delivery)                  |
 | `InTransit`  | `Disputed`  | Sender, recipient, or driver raises a dispute                    |
+| `InTransit`  | `Cancelled` | Sender cancels, or expired escrow is reclaimed                  |
 | `Delivered`  | `Disputed`  | Sender, recipient, or driver disputes within the configured window |
-| `Disputed`   | `Delivered` | Dispute resolved in driver's favor → delivery completes          |
-| `Disputed`   | `Cancelled` | Dispute resolved with refund → delivery cancelled                |
+| `Disputed`   | `Delivered` | Permitted by `validate_transition()`; current dispute resolution entry points finalize outcomes as `Resolved` |
+| `Disputed`   | `Resolved`  | Dispute-resolution contract applies a refund, payout, or split to escrow |
 
-Only `Cancelled` is terminal. `Delivered` remains valid as a pre-dispute state, and the `Delivered → Disputed` transition is constrained by the dispute window rather than being an unconditional terminal-state exit.
+`Cancelled` and `Resolved` are terminal. `Delivered` remains valid as a pre-dispute state, and the `Delivered → Disputed` transition is constrained by the dispute window rather than being an unconditional terminal-state exit. A resolved delivery synchronizes with `Refunded`, `Released`, or `Split` escrow; a delivery resolved in the driver's favor is represented by `Resolved` with `Released` escrow, not by `Delivered`.
 
 ### Delivery Record
 
@@ -102,11 +109,10 @@ This call does not pay the driver immediately. It transitions the delivery to `D
 Emits a `delivery_confirmed` event.
 
 ### `cancel_delivery(env, caller, delivery_id)`
-Cancels a delivery. Authorization:
-- The **sender** can cancel at any time
-- An **admin** can cancel if there's an active dispute
+Cancels a delivery. The sender is authorized when the current status permits
+the transition.
 
-Valid transitions: `Pending` → `Cancelled`, `Active` → `Cancelled`, `Disputed` → `Cancelled`.
+Valid transitions: `Pending` → `Cancelled`, `Active` → `Cancelled`, and `InTransit` → `Cancelled`. Disputed deliveries are finalized through dispute resolution and transition to `Resolved`, not `Cancelled`.
 Calls the escrow contract's `refund_escrow` to return funds to sender.
 Emits a `delivery_cancelled` event.
 
@@ -133,6 +139,7 @@ The delivery contract provides a `get_combined_state(delivery_id)` view that fet
 | `InTransit`     | `Locked`               |
 | `Delivered`     | `Holdback` or `Released` |
 | `Disputed`      | `Paused`               |
+| `Resolved`      | `Refunded`, `Released`, or `Split` |
 | `Cancelled`     | `Refunded`             |
 
 Returns `(DeliveryRecord, EscrowRecord, is_synchronized)`. The boolean `is_synchronized` is `false` if any mismatch is detected, enabling off-chain indexers and auditors to detect desynchronization.

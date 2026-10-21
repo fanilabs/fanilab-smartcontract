@@ -6,12 +6,31 @@ To ensure separation of concerns, the system is broken down into **6 deployable 
 
 ## 1. `shared_types` (Library)
 Houses all shared Enums, Structs, and Data representations across the entire platform.
-- `DeliveryStatus` (Pending, Active, InTransit, Delivered, Disputed, Cancelled)
+- `DeliveryStatus` (Pending, Active, InTransit, Delivered, Disputed, Cancelled, Resolved)
 - `EscrowState` (Locked, Holdback, Released, Refunded, Paused, Split)
 - `CargoCategory` (Documents, Electronics, Perishables, Clothing, General)
 - `FaniLabError` enum with authorization and validation errors
 - Core structs: `DeliveryRecord`, `EscrowRecord`, `CargoDescriptor`, `DeliveryMetadata`, `DriverProfile`, `UserProfile`, `ProtocolConfig`
 - Event structs: `DeliveryCreatedEvent`, `EscrowFundedEvent`, `DriverAssignedEvent`, `DeliveryConfirmedEvent`, `EscrowReleasedEvent`, `DeliveryDisputedEvent`, `EscrowRefundedEvent`, `DisputeResolvedEvent`
+
+### Delivery Lifecycle
+
+`Resolved` is reached from `Disputed` when dispute resolution applies a refund,
+payout, or split to escrow. It is terminal, as is `Cancelled`; a dispute
+resolved in the driver's favor uses `Resolved` with `Released` escrow.
+
+```mermaid
+flowchart LR
+  Pending --> Active --> InTransit --> Delivered
+  Active --> Disputed
+  InTransit --> Disputed
+  Delivered --> Disputed
+  Disputed --> Delivered
+  Disputed --> Resolved
+  Pending --> Cancelled
+  Active --> Cancelled
+  InTransit --> Cancelled
+```
 
 ## 2. `delivery_contract`
 Manages the lifecycle of a logistics package.

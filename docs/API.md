@@ -1459,7 +1459,8 @@ state-mutating functions.
 | `InTransit` | `Delivered`, `Disputed`, `Cancelled` |
 | `Delivered` | `Disputed` |
 | `Disputed` | `Delivered` (only via dispute resolution) |
-| `Cancelled` | none (terminal) |
+| `Disputed` | `Resolved` (dispute resolution applies a refund, payout, or split) |
+| `Cancelled`, `Resolved` | none (terminal) |
 
 **Example:**
 ```rust
@@ -1520,6 +1521,7 @@ Return the delivery record, escrow record, and a synchronization flag for the sa
 - `InTransit` ↔ `Locked`
 - `Delivered` ↔ `Holdback` or `Released`
 - `Disputed` ↔ `Paused`
+- `Resolved` ↔ `Refunded`, `Released`, or `Split`
 - `Cancelled` ↔ `Refunded`
 
 #### `create_deliveries_batch`
@@ -3132,15 +3134,17 @@ pub enum DeliveryStatus {
     Delivered,  // Recipient confirmed
     Disputed,   // Under dispute resolution
     Cancelled,  // Cancelled by sender
+    Resolved,   // Dispute outcome applied to escrow
 }
 ```
 
 **Valid Transitions:**
 - Pending → Active, Cancelled
 - Active → InTransit, Disputed, Cancelled
-- InTransit → Delivered, Disputed
-- Disputed → Delivered, Cancelled
-- Delivered, Cancelled → (terminal states)
+- InTransit → Delivered, Disputed, Cancelled
+- Delivered → Disputed
+- Disputed → Delivered (via dispute resolution), Resolved (via refund, payout, or split)
+- Cancelled, Resolved → (terminal states)
 
 #### `EscrowState`
 ```rust

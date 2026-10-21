@@ -5,6 +5,9 @@ all: test
 test: build
 	cargo test
 
+test-verbose: build
+	cargo test -- --nocapture
+
 build:
 	cargo build --target wasm32v1-none --release
 	@echo "Contracts built successfully in target/wasm32v1-none/release/"
@@ -36,8 +39,22 @@ build-settlement:
 clean:
 	cargo clean
 
-fmt:
+format:
 	cargo fmt --all
+
+fmt:
+	$(MAKE) format
+
+lint:
+	cargo clippy --all-targets --all-features -- -D warnings
+
+audit:
+	cargo audit
+
+coverage:
+	cargo tarpaulin --out Html --output-dir coverage
 
 check:
 	cargo check
+
+.PHONY: default all test test-verbose build build-escrow build-delivery build-dispute build-fleet build-identity build-settlement clean format fmt lint audit coverage check

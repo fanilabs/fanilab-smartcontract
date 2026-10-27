@@ -21,7 +21,7 @@
   "author": "FaniLab",
   "license": "MIT",
   "dependencies": {
-    "@stellar/stellar-sdk": "^17.2.1"
+    "@stellar/stellar-sdk": "^17.3.0"
   },
   "devDependencies": {
     "@types/jest": "^30.0.0",

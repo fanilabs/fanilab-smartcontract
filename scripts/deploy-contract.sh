@@ -102,6 +102,15 @@ if [ ! -f "$WASM_PATH" ]; then
     exit 1
 fi
 
+# Record the exact artifact being deployed so the manifest can later prove
+# which WASM (and which source revision) produced each contract ID.
+WASM_SHA256=$(sha256sum "$WASM_PATH" | awk '{print $1}')
+SOURCE_REVISION=$(git -C "$PROJECT_ROOT" rev-parse HEAD 2>/dev/null || echo "unknown")
+
+echo "${BLUE}Artifact SHA-256: $WASM_SHA256${NC}" >&2
+echo "${BLUE}Source revision: $SOURCE_REVISION${NC}" >&2
+echo "" >&2
+
 # Deploy the contract
 echo "${YELLOW}Deploying $CONTRACT_NAME...${NC}" >&2
 
@@ -127,6 +136,8 @@ echo "" >&2
 update_manifest() {
     declare -A DEPLOYED_IDS
     declare -A DEPLOYED_AT
+    declare -A DEPLOYED_HASH
+    declare -A DEPLOYED_REV
     if [ -f "$OUTPUT_FILE" ]; then
         for c in "${CONTRACTS[@]}"; do
             existing_id=$(grep -o "\"$c\": *\"[^\"]*\"" "$OUTPUT_FILE" | grep -o '"[^"]*"$' | tr -d '"')
@@ -139,10 +150,22 @@ update_manifest() {
             if [ -n "$existing_ts" ]; then
                 DEPLOYED_AT["$c"]="$existing_ts"
             fi
+            # Preserve previously recorded artifact hash / source revision so
+            # only the contract being deployed now gets fresh values.
+            existing_hash=$(grep -o "\"$c\": *\"[^\"]*\"" "$OUTPUT_FILE" | grep -o '"[^"]*"$' | tr -d '"')
+            if [ -n "$existing_hash" ]; then
+                DEPLOYED_HASH["$c"]="$existing_hash"
+            fi
+            existing_rev=$(grep -o "\"$c\": *\"[^\"]*\"" "$OUTPUT_FILE" | grep -o '"[^"]*"$' | tr -d '"')
+            if [ -n "$existing_rev" ]; then
+                DEPLOYED_REV["$c"]="$existing_rev"
+            fi
         done
     fi
     DEPLOYED_IDS["$CONTRACT_NAME"]="$CONTRACT_ID"
     DEPLOYED_AT["$CONTRACT_NAME"]="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+    DEPLOYED_HASH["$CONTRACT_NAME"]="$WASM_SHA256"
+    DEPLOYED_REV["$CONTRACT_NAME"]="$SOURCE_REVISION"
 
     {
         echo "{"
@@ -175,6 +198,25 @@ update_manifest() {
                     echo ","
                 fi
                 printf '    "%s": "%s"' "$c" "${DEPLOYED_IDS[$c]}"
+            fi
+        done
+        echo ""
+        echo "  },"
+        # Artifact association: for each deployed contract, record the SHA-256
+        # of the WASM that was deployed and the git revision it was built from.
+        # Anyone can independently verify by rebuilding at the recorded
+        # revision and comparing the resulting WASM hash.
+        echo "  \"artifacts\": {"
+        first_art=true
+        for c in "${CONTRACTS[@]}"; do
+            if [ -n "${DEPLOYED_IDS[$c]:-}" ]; then
+                if [ "$first_art" = true ]; then
+                    first_art=false
+                else
+                    echo ","
+                fi
+                printf '    "%s": {"sha256": "%s", "source_revision": "%s"}' \
+                    "$c" "${DEPLOYED_HASH[$c]:-}" "${DEPLOYED_REV[$c]:-}"
             fi
         done
         echo ""

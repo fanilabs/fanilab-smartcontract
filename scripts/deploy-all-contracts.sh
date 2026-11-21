@@ -72,6 +72,23 @@ fi
 echo "${GREEN}✓ Build successful${NC}"
 echo ""
 
+# Capture the source revision once so every deployment entry references the
+# exact commit the artifacts were built from (independently verifiable).
+SOURCE_REVISION=$(git -C "$PROJECT_ROOT" rev-parse HEAD 2>/dev/null || echo "unknown")
+
+# Compute the SHA-256 of a WASM artifact so the manifest can bind the deployed
+# contract ID to the exact bytes that were deployed.
+wasm_sha256() {
+    local wasm_path=$1
+    if command -v sha256sum &> /dev/null; then
+        sha256sum "$wasm_path" | awk '{print $1}'
+    elif command -v shasum &> /dev/null; then
+        shasum -a 256 "$wasm_path" | awk '{print $1}'
+    else
+        echo ""
+    fi
+}
+
 # Deploy function
 deploy_contract() {
     local contract_name=$1
@@ -104,6 +121,7 @@ deploy_contract() {
 echo "{" > "$OUTPUT_FILE"
 echo "  \"network\": \"$NETWORK\"," >> "$OUTPUT_FILE"
 echo "  \"deployed_at\": \"$(date -u +"%Y-%m-%dT%H:%M:%SZ")\"," >> "$OUTPUT_FILE"
+echo "  \"source_revision\": \"$SOURCE_REVISION\"," >> "$OUTPUT_FILE"
 echo "  \"contracts\": {" >> "$OUTPUT_FILE"
 
 # Deploy contracts in order
@@ -112,6 +130,7 @@ DEPLOYED_IDS=()
 
 for i in "${!CONTRACTS[@]}"; do
     contract="${CONTRACTS[$i]}"
+    wasm_path="$PROJECT_ROOT/target/wasm32v1-none/release/${contract}.wasm"
     contract_id=$(deploy_contract "$contract")
     
     if [ $? -ne 0 ]; then
@@ -121,11 +140,19 @@ for i in "${!CONTRACTS[@]}"; do
     
     DEPLOYED_IDS+=("$contract_id")
     
+    # Record the artifact hash and source revision alongside the contract ID so
+    # the deployed bytes can be independently verified against the manifest.
+    wasm_hash=$(wasm_sha256 "$wasm_path")
+    if [ -z "$wasm_hash" ]; then
+        echo "${RED}❌ Could not compute SHA-256 for $wasm_path${NC}"
+        exit 1
+    fi
+    
     # Add to JSON (with comma except for last)
     if [ $i -lt $((${#CONTRACTS[@]} - 1)) ]; then
-        echo "    \"$contract\": \"$contract_id\"," >> "$OUTPUT_FILE"
+        echo "    \"$contract\": {\"contract_id\": \"$contract_id\", \"wasm_sha256\": \"$wasm_hash\", \"source_revision\": \"$SOURCE_REVISION\"}," >> "$OUTPUT_FILE"
     else
-        echo "    \"$contract\": \"$contract_id\"" >> "$OUTPUT_FILE"
+        echo "    \"$contract\": {\"contract_id\": \"$contract_id\", \"wasm_sha256\": \"$wasm_hash\", \"source_revision\": \"$SOURCE_REVISION\"}" >> "$OUTPUT_FILE"
     fi
     
     echo ""

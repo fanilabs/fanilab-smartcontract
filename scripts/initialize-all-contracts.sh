@@ -10,6 +10,10 @@ NETWORK=${1:-testnet}
 # Overridable, but the default must match the identity provisioned by
 # .github/workflows/deploy-testnet.yml and documented in docs/DEPLOYMENT.md.
 DEPLOYER_IDENTITY="${DEPLOYER_IDENTITY:-deployer}"
+# Opt-in escape hatch for cases where ADMIN_ADDRESS is intentionally a
+# multisig (or otherwise differs from the local signing identity). When set
+# to a truthy value the signer/admin compatibility preflight is skipped.
+ALLOW_MULTISIGNER_ADMIN="${ALLOW_MULTISIGNER_ADMIN:-false}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 CONTRACT_IDS_FILE="$PROJECT_ROOT/contract-ids-$NETWORK.json"
@@ -77,6 +81,39 @@ if [ -z "$ADMIN_ADDRESS" ] || [ -z "$TOKEN_ADDRESS" ]; then
     echo "❌ ADMIN_ADDRESS and TOKEN_ADDRESS must be set (in .env or the environment)"
     exit 1
 fi
+
+# Preflight: the signing identity must be able to authenticate as the
+# configured admin, otherwise every admin-gated invoke below fails after
+# partial setup. Fail before any mutation.
+case "$(printf '%s' "$ALLOW_MULTISIGNER_ADMIN" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes)
+        echo "⚠️  ALLOW_MULTISIGNER_ADMIN set: skipping signer/admin compatibility check."
+        echo "   Ensure ADMIN_ADDRESS ($ADMIN_ADDRESS) can authorize the calls below."
+        ;;
+    *)
+        SIGNER_ADDRESS=$(stellar keys address "$DEPLOYER_IDENTITY" 2>/dev/null | tr -d '[:space:]')
+        if [ -z "$SIGNER_ADDRESS" ]; then
+            echo "❌ Could not resolve the address for identity '$DEPLOYER_IDENTITY'."
+            echo "   Run 'stellar keys address $DEPLOYER_IDENTITY' to diagnose."
+            exit 1
+        fi
+        if [ "$SIGNER_ADDRESS" != "$ADMIN_ADDRESS" ]; then
+            echo "❌ Signer/admin mismatch: the CLI identity '$DEPLOYER_IDENTITY'"
+            echo "   resolves to $SIGNER_ADDRESS, but ADMIN_ADDRESS is $ADMIN_ADDRESS."
+            echo "   Admin-gated invokes would fail after partial setup."
+            echo "   To proceed, either:"
+            echo "     • set ADMIN_ADDRESS=$SIGNER_ADDRESS (or point DEPLOYER_IDENTITY"
+            echo "       at the identity that controls ADMIN_ADDRESS), or"
+            echo "     • if the admin is intentionally a multisig, re-run with"
+            echo "       ALLOW_MULTISIGNER_ADMIN=true and complete the multisig"
+            echo "       authorization out of band."
+            exit 1
+        fi
+        echo "✓ Signer '$DEPLOYER_IDENTITY' matches ADMIN_ADDRESS"
+        ;;
+esac
+
+echo ""
 
 invoke_contract() {
     local contract_id=$1

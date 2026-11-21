@@ -8,5 +8,12 @@
     "fleet_management_contract": "CCZLFXOWEPDE2MX6DNN7DWA3DFSYEPTK45NNAGYFATNZ7EKJPUAFSQZ7",
     "dispute_resolution_contract": "CALP2KTRQ5NTDDM7SC7QMJEVTYXTQS2ZC5LQVN6VCB5HDSPBWEUBXYXH",
     "identity_reputation_contract": "CBZ5BZSOAZUBGA2O5ZY2STGXAXR77DSVLV22WSQ6N4MO6P6GN6QZVDAB"
+  },
+  "expected_wasm_hashes": {
+    "escrow_contract": "",
+    "delivery_contract": "",
+    "fleet_management_contract": "",
+    "dispute_resolution_contract": "",
+    "identity_reputation_contract": ""
   }
 }

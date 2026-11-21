@@ -130,6 +130,56 @@ case "$(printf '%s' "$ALLOW_MULTISIGNER_ADMIN" | tr '[:upper:]' '[:lower:]')" in
         ;;
 esac
 
+# Preflight: verify each deployed contract actually exists on-chain and that
+# its WASM identity matches the expected value recorded in the manifest.
+# IDs are otherwise trusted blindly, so a stale/typo'd manifest entry would
+# send init calls to a missing or wrong contract. Abort before any mutation.
+#
+# Expected identity is read from an optional "<name>_wasm_hash" field in the
+# manifest (populated by deploy-all-contracts.sh). When absent, the check
+# falls back to confirming the contract exists on-chain.
+verify_deployed_contract() {
+    local name=$1
+    local contract_id=$2
+    local expected_hash
+    expected_hash=$(get_contract_id "${name}_wasm_hash")
+
+    local on_chain
+    if ! on_chain=$(stellar contract info wasm-hash \
+            --id "$contract_id" \
+            --network "$NETWORK" 2>/dev/null | tr -d '[:space:]'); then
+        echo "❌ Contract '$name' ($contract_id) was not found on network '$NETWORK'."
+        echo "   The manifest may be stale; redeploy before initializing."
+        exit 1
+    fi
+    if [ -z "$on_chain" ]; then
+        echo "❌ Could not read the WASM hash for '$name' ($contract_id) on '$NETWORK'."
+        exit 1
+    fi
+
+    if [ -n "$expected_hash" ]; then
+        if [ "$on_chain" != "$expected_hash" ]; then
+            echo "❌ Contract '$name' identity mismatch on '$NETWORK'."
+            echo "   Expected WASM hash: $expected_hash"
+            echo "   Deployed WASM hash: $on_chain"
+            echo "   Refusing to initialize a contract that does not match the manifest."
+            exit 1
+        fi
+        echo "✓ $name ($contract_id) verified (wasm $on_chain)"
+    else
+        echo "✓ $name ($contract_id) exists on-chain (wasm $on_chain; no expected hash in manifest)"
+    fi
+}
+
+echo ""
+echo "Verifying deployed contracts..."
+verify_deployed_contract "escrow_contract" "$ESCROW_ID"
+verify_deployed_contract "delivery_contract" "$DELIVERY_ID"
+verify_deployed_contract "dispute_resolution_contract" "$DISPUTE_ID"
+verify_deployed_contract "fleet_management_contract" "$FLEET_ID"
+verify_deployed_contract "identity_reputation_contract" "$IDENTITY_ID"
+verify_deployed_contract "settlement_contract" "$SETTLEMENT_ID"
+
 echo ""
 
 invoke_contract() {
@@ -201,30 +251,4 @@ invoke_contract "$DELIVERY_ID" set_escrow_contract \
 invoke_contract "$DELIVERY_ID" set_dispute_resolution_contract \
     --admin "$ADMIN_ADDRESS" \
     --dispute_contract "$DISPUTE_ID"
-invoke_contract "$DELIVERY_ID" set_identity_reputation_contract \
-    --admin "$ADMIN_ADDRESS" \
-    --identity_contract "$IDENTITY_ID"
-
-invoke_contract "$DISPUTE_ID" set_delivery_contract \
-    --caller "$ADMIN_ADDRESS" \
-    --delivery_contract "$DELIVERY_ID"
-invoke_contract "$DISPUTE_ID" set_escrow_contract \
-    --caller "$ADMIN_ADDRESS" \
-    --escrow_contract "$ESCROW_ID"
-invoke_contract "$DISPUTE_ID" set_identity_reputation_contract \
-    --caller "$ADMIN_ADDRESS" \
-    --reputation_contract "$IDENTITY_ID"
-
-invoke_contract "$FLEET_ID" set_escrow_contract \
-    --admin "$ADMIN_ADDRESS" \
-    --escrow_contract "$ESCROW_ID"
-invoke_contract "$FLEET_ID" set_identity_contract \
-    --admin "$ADMIN_ADDRESS" \
-    --identity_contract "$IDENTITY_ID"
-
-invoke_contract "$IDENTITY_ID" set_delivery_contract \
-    --admin "$ADMIN_ADDRESS" \
-    --delivery_contract "$DELIVERY_ID"
-invoke_contract "$IDENTITY_ID" set_dispute_contr
-
-/* … truncated 812 chars — edit only what you need near the top … */
+invoke_contract "$DELIVERY_ID" set_identity_rep

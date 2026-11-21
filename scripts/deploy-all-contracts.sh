@@ -72,6 +72,29 @@ fi
 echo "${GREEN}✓ Build successful${NC}"
 echo ""
 
+# Compute the expected WASM hash for a built contract artifact.
+# The hash is the sha256 of the compiled wasm, which is what the network
+# records as the contract's executable identity. Initialization scripts
+# compare this against the on-chain hash before sending init calls.
+expected_wasm_hash() {
+    local contract_name=$1
+    local wasm_path="$PROJECT_ROOT/target/wasm32v1-none/release/${contract_name}.wasm"
+
+    if [ ! -f "$wasm_path" ]; then
+        echo "${RED}❌ WASM file not found: $wasm_path${NC}" >&2
+        return 1
+    fi
+
+    if command -v sha256sum &> /dev/null; then
+        sha256sum "$wasm_path" | awk '{print $1}'
+    elif command -v shasum &> /dev/null; then
+        shasum -a 256 "$wasm_path" | awk '{print $1}'
+    else
+        echo "${RED}❌ No sha256 tool found (sha256sum or shasum)${NC}" >&2
+        return 1
+    fi
+}
+
 # Deploy function
 deploy_contract() {
     local contract_name=$1
@@ -134,6 +157,31 @@ done
 # Close JSON
 echo "  }" >> "$OUTPUT_FILE"
 echo "}" >> "$OUTPUT_FILE"
+
+# Record the expected WASM hash for each deployed contract so that
+# initialize-all-contracts.sh can verify on-chain identity before init.
+echo ""
+echo "${BLUE}Recording expected WASM hashes...${NC}"
+HASH_FILE="$PROJECT_ROOT/contract-hashes-$NETWORK.json"
+echo "{" > "$HASH_FILE"
+echo "  \"network\": \"$NETWORK\"," >> "$HASH_FILE"
+echo "  \"contracts\": {" >> "$HASH_FILE"
+for i in "${!CONTRACTS[@]}"; do
+    contract="${CONTRACTS[$i]}"
+    expected_hash=$(expected_wasm_hash "$contract")
+    if [ $? -ne 0 ] || [ -z "$expected_hash" ]; then
+        echo "${RED}❌ Could not compute expected WASM hash for $contract${NC}"
+        exit 1
+    fi
+    if [ $i -lt $((${#CONTRACTS[@]} - 1)) ]; then
+        echo "    \"$contract\": \"$expected_hash\"," >> "$HASH_FILE"
+    else
+        echo "    \"$contract\": \"$expected_hash\"" >> "$HASH_FILE"
+    fi
+done
+echo "  }" >> "$HASH_FILE"
+echo "}" >> "$HASH_FILE"
+echo "${GREEN}✓ Expected hashes saved to: $HASH_FILE${NC}"
 
 echo ""
 echo "${GREEN}=================================="

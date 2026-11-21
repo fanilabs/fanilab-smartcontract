@@ -19,8 +19,24 @@ export function address(value: string): ScVal {
   return new Address(value).toScVal();
 }
 
+const U64_MAX = (1n << 64n) - 1n;
+
 export function u64(value: bigint | number): ScVal {
-  return nativeToScVal(BigInt(value), { type: 'u64' });
+  let big: bigint;
+  if (typeof value === 'number') {
+    if (!Number.isSafeInteger(value)) {
+      throw new RangeError(
+        'u64 number input must be a safe integer; use bigint for values outside the safe integer range'
+      );
+    }
+    big = BigInt(value);
+  } else {
+    big = value;
+  }
+  if (big < 0n || big > U64_MAX) {
+    throw new RangeError('u64 value must be between 0 and 2^64-1');
+  }
+  return nativeToScVal(big, { type: 'u64' });
 }
 
 export function u32(value: number): ScVal {
@@ -269,34 +285,32 @@ export class ContractInvoker {
     config: ContractInvokeOptions
   ): Promise<void> {
     const extendTo = config.ttlExtendToLedgers ?? DEFAULT_TTL_EXTEND_TO_LEDGERS;
-    throwIfAborted(config.signal);
     const account = await server.getAccount(accountId);
     throwIfAborted(config.signal);
-    const ttlTransaction = new TransactionBuilder(account, {
+    const operation = Operation.extendFootprintTtl({ extendTo });
+    const transaction = new TransactionBuilder(account, {
       fee: config.fee ?? '100000',
       networkPassphrase,
     })
       .setTimeout(config.timeoutSeconds ?? 30)
-      .addOperation(Operation.extendFootprintTtl({ extendTo }))
-      .setSorobanData(
-        new SorobanDataBuilder(transactionData.build())
-          .setFootprint(keys, [])
-          .build()
-      )
+      .addOperation(operation)
+      .setSorobanData(transactionData.build())
       .build();
-    const ttlSimulation = await server.simulateTransaction(ttlTransaction);
+    const simulation = await server.simulateTransaction(transaction);
     throwIfAborted(config.signal);
-    if (SorobanRpc.Api.isSimulationError(ttlSimulation)) {
-      throw new Error(formatSorobanError('TTL extension simulation failed', ttlSimulation.error));
+    if (SorobanRpc.Api.isSimulationError(simulation)) {
+      throw new Error(formatSorobanError('Soroban TTL extension failed', simulation.error));
     }
-    const prepared = SorobanRpc.assembleTransaction(ttlTransaction, ttlSimulation).build();
-    prepared.sign(config.signer as Keypair);
+    const prepared = SorobanRpc.assembleTransaction(transaction, simulation).build();
+    if (config.signer) {
+      prepared.sign(config.signer);
+    }
     throwIfAborted(config.signal);
     const submitted = await server.sendTransaction(prepared);
     if (submitted.status === 'ERROR') {
       throw new Error(
         formatSorobanError(
-          'TTL extension submission failed',
+          'Soroban TTL extension submission failed',
           submitted.errorResult?.toString() ?? 'unknown error'
         )
       );
@@ -311,31 +325,31 @@ export class ContractInvoker {
     hash: string,
     config: ContractInvokeOptions
   ): Promise<unknown> {
-    const signal = config.signal;
-    const timeoutMs = config.pollTimeoutMs ?? 30_000;
-    const intervalMs = config.pollIntervalMs ?? 1_000;
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-      throwIfAborted(signal);
-      const response = await awaitPollResult(
+    const pollIntervalMs = config.pollIntervalMs ?? 1000;
+    const maxPollAttempts = config.maxPollAttempts ?? 30;
+    for (let attempt = 0; attempt < maxPollAttempts; attempt++) {
+      throwIfAborted(config.signal);
+      const result = await awaitPollResult(
         server.getTransaction(hash),
-        Math.max(0, deadline - Date.now()),
+        config.pollTimeoutMs ?? 30_000,
         'Timed out waiting for transaction result',
-        signal
+        config.signal
       );
-      if (response.status === SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
-        return response.returnValue ? native(response.returnValue) : undefined;
+      throwIfAborted(config.signal);
+      if (result.status === SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
+        return result.returnValue ? native(result.returnValue) : undefined;
       }
-      if (response.status === SorobanRpc.Api.GetTransactionStatus.FAILED) {
-        throw new Error('Soroban transaction failed');
+      if (result.status === SorobanRpc.Api.GetTransactionStatus.FAILED) {
+        throw new Error(formatSorobanError('Soroban transaction failed', result.resultXdr?.toString()));
       }
-      await delay(intervalMs, signal);
+      await delay(pollIntervalMs, config.signal);
     }
     throw new Error('Timed out waiting for transaction result');
   }
 
   private server(config: ContractInvokeOptions): SorobanRpc.Server {
-    return config.server ?? new SorobanRpc.Server(this.require(config.rpcUrl, 'rpcUrl'));
+    const rpcUrl = this.require(config.rpcUrl, 'rpcUrl');
+    return new SorobanRpc.Server(rpcUrl, { allowHttp: rpcUrl.startsWith('http://') });
   }
 
   private require<T>(value: T | undefined, name: string): T {

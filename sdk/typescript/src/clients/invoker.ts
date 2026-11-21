@@ -146,7 +146,7 @@ export class ContractInvoker {
 
   constructor(contractId: string, defaults: ContractInvokeOptions = {}) {
     this.contract = new Contract(contractId);
-    this.defaults = defaults;
+    this.defaults = { ...defaults };
   }
 
   async call(

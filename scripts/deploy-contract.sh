@@ -66,6 +66,12 @@ if ! command -v cargo &> /dev/null; then
     exit 1
 fi
 
+if ! command -v jq &> /dev/null; then
+    echo "${RED}❌ jq not found. It is required to parse deployment manifests.${NC}" >&2
+    echo "   Install it from https://jqlang.github.io/jq/" >&2
+    exit 1
+fi
+
 if ! stellar keys address "$DEPLOYER_IDENTITY" &> /dev/null; then
     echo "${RED}❌ Stellar CLI identity '$DEPLOYER_IDENTITY' not found.${NC}" >&2
     echo "   Every deploy/initialize script signs with it (--source $DEPLOYER_IDENTITY)." >&2
@@ -115,10 +121,46 @@ echo "" >&2
 
 # Merge this contract's ID into any existing output file for this network,
 # so deploying contracts one at a time doesn't clobber previously deployed IDs.
+# The manifest is parsed with jq (a real JSON parser) rather than grep so that
+# malformed JSON, duplicate keys, and unexpected shapes are rejected instead of
+# silently producing ambiguous IDs.
 declare -A DEPLOYED_IDS
 if [ -f "$OUTPUT_FILE" ]; then
+    # Reject malformed JSON up front with a clear error.
+    if ! jq -e . "$OUTPUT_FILE" > /dev/null 2>&1; then
+        echo "${RED}❌ Malformed JSON in deployment manifest: $OUTPUT_FILE${NC}" >&2
+        echo "   Fix or remove the file before deploying again." >&2
+        exit 1
+    fi
+
+    # Reject duplicate keys anywhere in the manifest. jq keeps only the last
+    # value for a duplicated key, so detect duplicates by comparing the raw
+    # key occurrences against the number of keys jq actually parsed.
+    duplicate_keys=$(jq -r '
+        [paths(scalars) as $p | $p[-1]] | group_by(.) | map(select(length > 1) | .[0]) | .[]
+    ' "$OUTPUT_FILE" 2>/dev/null || true)
+    if [ -n "$duplicate_keys" ]; then
+        echo "${RED}❌ Duplicate keys in deployment manifest: $OUTPUT_FILE${NC}" >&2
+        echo "   Duplicated key(s): $duplicate_keys" >&2
+        exit 1
+    fi
+
+    # Schema check: the manifest must be an object with a "contracts" object.
+    if ! jq -e 'type == "object" and (.contracts | type == "object")' "$OUTPUT_FILE" > /dev/null 2>&1; then
+        echo "${RED}❌ Invalid deployment manifest schema: $OUTPUT_FILE${NC}" >&2
+        echo "   Expected an object with a \"contracts\" object." >&2
+        exit 1
+    fi
+
+    # Schema check: every contract ID present must be a non-empty string.
+    if ! jq -e '[.contracts[] | type == "string" and length > 0] | all' "$OUTPUT_FILE" > /dev/null 2>&1; then
+        echo "${RED}❌ Invalid contract ID in deployment manifest: $OUTPUT_FILE${NC}" >&2
+        echo "   Every contract ID must be a non-empty string." >&2
+        exit 1
+    fi
+
     for c in "${CONTRACTS[@]}"; do
-        existing_id=$(grep -o "\"$c\": *\"[^\"]*\"" "$OUTPUT_FILE" | grep -o '"[^"]*"$' | tr -d '"')
+        existing_id=$(jq -r --arg c "$c" '.contracts[$c] // empty' "$OUTPUT_FILE")
         if [ -n "$existing_id" ]; then
             DEPLOYED_IDS["$c"]="$existing_id"
         fi

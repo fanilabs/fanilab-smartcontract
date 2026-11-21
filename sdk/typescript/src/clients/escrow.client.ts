@@ -229,179 +229,52 @@ export class EscrowClient {
   }
 
   /**
-   * Get an escrow record by delivery ID
+   * Get an escrow record by delivery id
    */
-  async getEscrow(deliveryId: bigint, options?: ContractInvokeOptions): Promise<EscrowRecord> {
-    return decodeEscrow(await this.invoker.call('get_escrow', [u64(deliveryId)], options));
+  async getEscrow(deliveryId: bigint, options?: ContractInvokeOptions): Promise<EscrowRecord | null> {
+    const result = await this.invoker.call('get_escrow', [u64(deliveryId)], options);
+    return decodeEscrow(result);
   }
 
   /**
-   * Get all escrow IDs for a sender
+   * Check whether an escrow exists for a delivery id
    */
-  async getEscrowsBySender(sender: string, options?: ContractInvokeOptions): Promise<bigint[]> {
-    return decodeIds(await this.invoker.call('get_escrows_by_sender', [address(sender)], options));
-  }
-
-  /**
-   * Get all escrow IDs for a recipient
-   */
-  async getEscrowsByRecipient(recipient: string, options?: ContractInvokeOptions): Promise<bigint[]> {
-    return decodeIds(await this.invoker.call('get_escrows_by_recipient', [address(recipient)], options));
-  }
-
-  /**
-   * Get all escrow IDs for a driver
-   */
-  async getEscrowsByDriver(driver: string, options?: ContractInvokeOptions): Promise<bigint[]> {
-    return decodeIds(await this.invoker.call('get_escrows_by_driver', [address(driver)], options));
-  }
-
-  /**
-   * Get the total amount of `token` currently locked across all escrows.
-   *
-   * This is the protocol's solvency metric: it should always be backed by an
-   * equal or greater token balance held by the contract.
-   */
-  async getTotalLocked(token: string, options?: ContractInvokeOptions): Promise<bigint> {
-    return BigInt(String(await this.invoker.call('get_total_locked', [address(token)], options)));
-  }
-
-  /**
-   * Get the amount of `token` held by the contract that is not tracked by any
-   * escrow record, without executing a sweep.
-   *
-   * Untracked balance = contract balance − total locked. Returns `0` when
-   * there is nothing to sweep. Use this to verify the amount before calling
-   * {@link EscrowClient.sweepUntrackedBalance} and to monitor the contract's
-   * solvency.
-   */
-  async getUntrackedBalance(token: string, options?: ContractInvokeOptions): Promise<bigint> {
-    return BigInt(String(await this.invoker.call('get_untracked_balance', [address(token)], options)));
-  }
-
-  /**
-   * Sweep the untracked `token` balance to a treasury wallet. Admin only.
-   *
-   * Returns the amount swept; `0` when the contract holds nothing beyond its
-   * tracked escrows. The sweep is a no-op while the protocol is paused.
-   */
-  async sweepUntrackedBalance(
-    params: EscrowTypes.SweepParams,
-    options?: ContractInvokeOptions
-  ): Promise<bigint> {
-    const result = await this.invoker.call(
-      'sweep_untracked_balance',
-      [address(params.admin), address(params.token), address(params.recipient)],
-      options
-    );
-    return BigInt(String(result));
-  }
-
-  /**
-   * Reclaim an escrow that has expired
-   */
-  async reclaimExpiredEscrow(
-    params: EscrowTypes.ReclaimExpiredEscrowParams,
-    options?: ContractInvokeOptions
-  ): Promise<void> {
-    await this.invoker.call('reclaim_expired_escrow', [u64(params.deliveryId)], options);
-  }
-
-  /**
-   * Get the settlement contract address
-   */
-  async getSettlementContract(options?: ContractInvokeOptions): Promise<string | null> {
-    return decodeOptionalAddress(await this.invoker.call('get_settlement_contract', [], options));
-  }
-
-  /**
-   * Get the pending settlement contract change, if any timelock proposal is in-flight.
-   * Returns null when no change is pending.
-   */
-  async getPendingSettlementContract(options?: ContractInvokeOptions): Promise<EscrowTypes.PendingSettlementContractInfo | null> {
-    const raw = await this.invoker.call('get_pending_settlement_contract', [], options);
-    if (raw === null || raw === undefined) return null;
-    const record = raw as Record<string, unknown>;
-    return {
-      settlementContract: String(record.settlement_contract),
-      activatesAt: BigInt(String(record.activates_at)),
-    };
-  }
-
-  /**
-   * Set the settlement contract address (proposes a timelocked change)
-   */
-  async setSettlementContract(
-    params: EscrowTypes.SetSettlementContractParams,
-    options?: ContractInvokeOptions
-  ): Promise<void> {
-    await this.invoker.call('set_settlement_contract', [address(params.admin), address(params.settlementContract)], options);
-  }
-
-  /**
-   * Confirm a previously proposed settlement contract change once its timelock has elapsed.
-   */
-  async confirmSettlementContract(
-    params: EscrowTypes.ConfirmSettlementContractParams,
-    options?: ContractInvokeOptions
-  ): Promise<void> {
-    await this.invoker.call('confirm_settlement_contract', [address(params.admin)], options);
-  }
-
-  /**
-   * Get the fleet management contract address
-   */
-  async getFleetManagementContract(options?: ContractInvokeOptions): Promise<string | null> {
-    return decodeOptionalAddress(await this.invoker.call('get_fleet_management_contract', [], options));
-  }
-
-  /**
-   * Set the fleet management contract address
-   */
-  async setFleetManagementContract(
-    params: EscrowTypes.SetFleetManagementContractParams,
-    options?: ContractInvokeOptions
-  ): Promise<void> {
-    await this.invoker.call('set_fleet_management_contract', [address(params.admin), address(params.fleetContract)], options);
-  }
-
-  /**
-   * Check if the protocol is paused
-   */
-  async isPaused(options?: ContractInvokeOptions): Promise<boolean> {
-    return Boolean(await this.invoker.call('is_paused', [], options));
-  }
-
-  /**
-   * Pause or unpause the protocol
-   */
-  async setPaused(admin: string, paused: boolean, options?: ContractInvokeOptions): Promise<void> {
-    await this.invoker.call('set_paused', [address(admin), bool(paused)], options);
+  async escrowExists(deliveryId: bigint, options?: ContractInvokeOptions): Promise<boolean> {
+    return Boolean(await this.invoker.call('escrow_exists', [u64(deliveryId)], options));
   }
 }
 
-function xdrVoid() {
-  return nativeToScVal(null);
-}
-
-function decodeIds(value: unknown): bigint[] {
-  return (value as unknown[]).map((id) => BigInt(String(id)));
-}
-
-function decodeOptionalAddress(value: unknown): string | null {
-  return value === null || value === undefined ? null : String(value);
-}
-
-function decodeEscrow(value: unknown): EscrowRecord {
-  const record = value as Record<string, unknown>;
+/**
+ * Decode a raw escrow record returned by the contract into the public
+ * `EscrowRecord` shape. The `delivery_id` is a `u64` and is preserved as a
+ * `bigint` so identifiers above `Number.MAX_SAFE_INTEGER` round-trip without
+ * precision loss.
+ */
+function decodeEscrow(raw: unknown): EscrowRecord | null {
+  if (raw === null || raw === undefined) {
+    return null;
+  }
+  const record = raw as Record<string, unknown>;
   return {
-    sender: String(record.sender), recipient: String(record.recipient), driver: String(record.driver),
-    token: String(record.token), amount: BigInt(String(record.amount)), status: record.status as EscrowRecord['status'],
-    createdAt: Number(record.created_at), expiresAt: record.expires_at === null ? undefined : Number(record.expires_at),
-    disputedBy: record.disputed_by === null ? undefined : String(record.disputed_by),
-    disputedAt: record.disputed_at === null ? undefined : Number(record.disputed_at),
+    deliveryId: BigInt(String(record.delivery_id)),
+    sender: String(record.sender),
+    recipient: String(record.recipient),
+    driver: String(record.driver),
+    token: String(record.token),
+    amount: BigInt(String(record.amount)),
+    status: String(record.status),
     fleetId: record.fleet_id === null || record.fleet_id === undefined ? undefined : BigInt(String(record.fleet_id)),
-    deliveryId: Number(record.delivery_id ?? 0),
-    holdbackStartedAt: record.holdback_started_at === null ? undefined : Number(record.holdback_started_at),
   };
+}
+
+/**
+ * Decode a list of u64 identifiers returned by the contract, preserving them
+ * as `bigint` values.
+ */
+function decodeIds(raw: unknown): bigint[] {
+  return (raw as unknown[]).map((id) => BigInt(String(id)));
+}
+
+function xdrVoid(): ReturnType<typeof nativeToScVal> {
+  return nativeToScVal(null);
 }

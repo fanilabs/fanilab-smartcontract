@@ -30,6 +30,23 @@ if [ ! -f "$CONTRACT_IDS_FILE" ]; then
     exit 1
 fi
 
+# Verify the manifest's declared network matches the selected network before
+# any contract invocation. A mismatch means the IDs belong to a different
+# network and every invoke below would target the wrong deployment.
+MANIFEST_NETWORK=$(grep -o '"network": *"[^"]*"' "$CONTRACT_IDS_FILE" | head -n 1 | grep -o '"[^"]*"$' | tr -d '"')
+if [ -z "$MANIFEST_NETWORK" ]; then
+    echo "❌ Could not read the 'network' field from $CONTRACT_IDS_FILE"
+    echo "   Expected a \"network\": \"<name>\" entry in the manifest."
+    exit 1
+fi
+if [ "$MANIFEST_NETWORK" != "$NETWORK" ]; then
+    echo "❌ Network mismatch: selected network is '$NETWORK', but"
+    echo "   $CONTRACT_IDS_FILE declares network '$MANIFEST_NETWORK'."
+    echo "   Refusing to initialize contracts against the wrong network."
+    exit 1
+fi
+echo "✓ Manifest network '$MANIFEST_NETWORK' matches selected network '$NETWORK'"
+
 # Load environment variables
 if [ -f "$PROJECT_ROOT/.env" ]; then
     source "$PROJECT_ROOT/.env"
@@ -208,28 +225,6 @@ invoke_contract "$FLEET_ID" set_identity_contract \
 invoke_contract "$IDENTITY_ID" set_delivery_contract \
     --admin "$ADMIN_ADDRESS" \
     --delivery_contract "$DELIVERY_ID"
-invoke_contract "$IDENTITY_ID" set_dispute_contract \
-    --admin "$ADMIN_ADDRESS" \
-    --dispute_contract "$DISPUTE_ID"
+invoke_contract "$IDENTITY_ID" set_dispute_contr
 
-invoke_contract "$SETTLEMENT_ID" set_escrow_contract \
-    --admin "$ADMIN_ADDRESS" \
-    --new_escrow "$ESCROW_ID"
-
-invoke_contract "$ESCROW_ID" set_delivery_contract \
-    --admin "$ADMIN_ADDRESS" \
-    --delivery_contract "$DELIVERY_ID"
-invoke_contract "$ESCROW_ID" set_dispute_resolution_contract \
-    --admin "$ADMIN_ADDRESS" \
-    --dispute_contract "$DISPUTE_ID"
-invoke_contract "$ESCROW_ID" set_identity_reputation_contract \
-    --admin "$ADMIN_ADDRESS" \
-    --identity_contract "$IDENTITY_ID"
-invoke_contract "$ESCROW_ID" set_fleet_management_contract \
-    --admin "$ADMIN_ADDRESS" \
-    --fleet_contract "$FLEET_ID"
-
-echo "✓ Contract integrations configured"
-echo ""
-echo "✅ All contracts initialized successfully!"
-exit 0
+/* … truncated 812 chars — edit only what you need near the top … */

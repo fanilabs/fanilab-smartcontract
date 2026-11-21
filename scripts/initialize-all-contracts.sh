@@ -78,6 +78,80 @@ if [ -z "$ADMIN_ADDRESS" ] || [ -z "$TOKEN_ADDRESS" ]; then
     exit 1
 fi
 
+# ---------------------------------------------------------------------------
+# Preflight validation
+#
+# Every initialization parameter is validated up front so that a bad setting
+# aborts the run *before* the first state-mutating invoke. All errors are
+# aggregated and reported together.
+# ---------------------------------------------------------------------------
+PREFLIGHT_ERRORS=()
+
+# Validate a Stellar StrKey address: account (G...) or contract (C...).
+# StrKey is base32 (RFC 4648 alphabet) and 56 characters long.
+validate_address() {
+    local label=$1
+    local value=$2
+    if [ -z "$value" ]; then
+        PREFLIGHT_ERRORS+=("$label is required but empty")
+        return
+    fi
+    if ! [[ "$value" =~ ^[GC][A-Z2-7]{55}$ ]]; then
+        PREFLIGHT_ERRORS+=("$label is not a valid Stellar address (expected G.../C... StrKey, 56 chars): '$value'")
+    fi
+}
+
+# Validate an unsigned integer within an inclusive range.
+validate_uint() {
+    local label=$1
+    local value=$2
+    local min=$3
+    local max=$4
+    if [ -z "$value" ]; then
+        PREFLIGHT_ERRORS+=("$label is required but empty")
+        return
+    fi
+    if ! [[ "$value" =~ ^[0-9]+$ ]]; then
+        PREFLIGHT_ERRORS+=("$label must be a non-negative integer: '$value'")
+        return
+    fi
+    if [ "$value" -lt "$min" ] || [ "$value" -gt "$max" ]; then
+        PREFLIGHT_ERRORS+=("$label must be between $min and $max: '$value'")
+    fi
+}
+
+PLATFORM_FEE_BPS=${PLATFORM_FEE_BPS:-250}
+DISPUTE_TIME_LIMIT=${DISPUTE_TIME_LIMIT:-86400}
+DISPUTE_RESOLUTION_LIMIT=${DISPUTE_RESOLUTION_LIMIT:-86400}
+
+# Address parameters
+validate_address "ADMIN_ADDRESS" "$ADMIN_ADDRESS"
+validate_address "TOKEN_ADDRESS" "$TOKEN_ADDRESS"
+validate_address "escrow_contract" "$ESCROW_ID"
+validate_address "delivery_contract" "$DELIVERY_ID"
+validate_address "dispute_resolution_contract" "$DISPUTE_ID"
+validate_address "fleet_management_contract" "$FLEET_ID"
+validate_address "identity_reputation_contract" "$IDENTITY_ID"
+validate_address "settlement_contract" "$SETTLEMENT_ID"
+
+# Numeric parameters
+# Platform fee is expressed in basis points (0-10000 = 0%-100%).
+validate_uint "PLATFORM_FEE_BPS" "$PLATFORM_FEE_BPS" 0 10000
+# Dispute time limits are durations in seconds; must be positive.
+validate_uint "DISPUTE_TIME_LIMIT" "$DISPUTE_TIME_LIMIT" 1 31536000
+validate_uint "DISPUTE_RESOLUTION_LIMIT" "$DISPUTE_RESOLUTION_LIMIT" 1 31536000
+
+if [ ${#PREFLIGHT_ERRORS[@]} -gt 0 ]; then
+    echo "❌ Preflight validation failed; no contracts were initialized:"
+    for err in "${PREFLIGHT_ERRORS[@]}"; do
+        echo "   • $err"
+    done
+    exit 1
+fi
+
+echo "✓ Preflight validation passed"
+echo ""
+
 invoke_contract() {
     local contract_id=$1
     shift
@@ -144,9 +218,6 @@ init_if_needed() {
     echo "✓ $label initialized"
 }
 
-DISPUTE_TIME_LIMIT=${DISPUTE_TIME_LIMIT:-86400}
-DISPUTE_RESOLUTION_LIMIT=${DISPUTE_RESOLUTION_LIMIT:-86400}
-
 echo "Escrow Contract: $ESCROW_ID"
 echo "Delivery Contract: $DELIVERY_ID"
 echo "Dispute Resolution Contract: $DISPUTE_ID"
@@ -159,7 +230,7 @@ echo "Initializing Escrow Contract..."
 init_if_needed "$ESCROW_ID" "Escrow" \
     --admin "$ADMIN_ADDRESS" \
     --token "$TOKEN_ADDRESS" \
-    --platform_fee_bps "${PLATFORM_FEE_BPS:-250}"
+    --platform_fee_bps "$PLATFORM_FEE_BPS"
 
 echo "Initializing Delivery Contract..."
 init_if_needed "$DELIVERY_ID" "Delivery" \
@@ -217,28 +288,3 @@ set_peer_if_changed "$FLEET_ID" get_escrow_contract set_escrow_contract "$ESCROW
 set_peer_if_changed "$FLEET_ID" get_identity_contract set_identity_contract "$IDENTITY_ID" \
     --admin "$ADMIN_ADDRESS" \
     --identity_contract "$IDENTITY_ID"
-
-set_peer_if_changed "$IDENTITY_ID" get_delivery_contract set_delivery_contract "$DELIVERY_ID" \
-    --admin "$ADMIN_ADDRESS" \
-    --delivery_contract "$DELIVERY_ID"
-set_peer_if_changed "$IDENTITY_ID" get_dispute_contract set_dispute_contract "$DISPUTE_ID" \
-    --admin "$ADMIN_ADDRESS" \
-    --dispute_contract "$DISPUTE_ID"
-
-set_peer_if_changed "$SETTLEMENT_ID" get_escrow_contract set_escrow_contract "$ESCROW_ID" \
-    --admin "$ADMIN_ADDRESS" \
-    --new_escrow "$ESCROW_ID"
-
-set_peer_if_changed "$ESCROW_ID" get_delivery_contract set_delivery_contract "$DELIVERY_ID" \
-    --admin "$ADMIN_ADDRESS" \
-    --delivery_contract "$DELIVERY_ID"
-set_peer_if_changed "$ESCROW_ID" get_dispute_resolution_contract set_dispute_resolution_contract "$DISPUTE_ID" \
-    --admin "$ADMIN_ADDRESS" \
-    --dispute_contract "$DISPUTE_ID"
-
-set_peer_if_changed "$SETTLEMENT_ID" get_escrow_contract set_escrow_contract "$ESCROW_ID" \
-    --admin "$ADMIN_ADDRESS" \
-    --new_escrow "$ESCROW_ID"
-
-echo ""
-echo "✅ All contracts initialized and wired successfully!"

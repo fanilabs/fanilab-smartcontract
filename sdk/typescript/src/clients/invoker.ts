@@ -143,6 +143,31 @@ function awaitPollResult<T>(
   });
 }
 
+/**
+ * Validate polling-related settings up front so that invalid configuration is
+ * rejected before any signed transaction is submitted to the network.
+ */
+function validatePollingSettings(config: ContractInvokeOptions): void {
+  const { pollTimeoutMs, pollIntervalMs } = config;
+  if (pollTimeoutMs !== undefined) {
+    if (!Number.isSafeInteger(pollTimeoutMs) || pollTimeoutMs <= 0) {
+      throw new RangeError('pollTimeoutMs must be a positive integer');
+    }
+  }
+  if (pollIntervalMs !== undefined) {
+    if (!Number.isSafeInteger(pollIntervalMs) || pollIntervalMs <= 0) {
+      throw new RangeError('pollIntervalMs must be a positive integer');
+    }
+  }
+  if (
+    pollTimeoutMs !== undefined &&
+    pollIntervalMs !== undefined &&
+    pollIntervalMs > pollTimeoutMs
+  ) {
+    throw new RangeError('pollIntervalMs must not exceed pollTimeoutMs');
+  }
+}
+
 export class ContractInvoker {
   private readonly contract: Contract;
   private readonly defaults: ContractInvokeOptions;
@@ -158,6 +183,8 @@ export class ContractInvoker {
     options: ContractInvokeOptions = {}
   ): Promise<unknown> {
     const config = { ...this.defaults, ...options };
+    // Reject invalid polling settings before any transaction is built or sent.
+    validatePollingSettings(config);
     const server = this.server(config);
     const accountId = this.require(config.sourceAccount, 'sourceAccount');
     const networkPassphrase = this.require(config.networkPassphrase, 'networkPassphrase');
@@ -252,9 +279,50 @@ export class ContractInvoker {
         'Soroban submission failed after retries',
         `transaction ${prepared.hash.toString()} was not accepted after ${maxAttempts} attempts ` +
           `(last status: ${lastStatus ?? 'unknown'}); the signed transaction was preserved and ` +
-          'can be resubmitted once the network is available'
+          'can be resubmitted'
       )
     );
+  }
+
+  private async waitForResult(
+    server: SorobanRpc.Server,
+    hash: string,
+    config: ContractInvokeOptions
+  ): Promise<unknown> {
+    const timeoutMs = config.pollTimeoutMs ?? 30_000;
+    const intervalMs = config.pollIntervalMs ?? 1_000;
+    const deadline = Date.now() + timeoutMs;
+
+    while (Date.now() < deadline) {
+      const result = await awaitPollResult(
+        server.getTransaction(hash),
+        Math.max(0, deadline - Date.now()),
+        `Timed out waiting for transaction ${hash}`,
+        config.signal
+      );
+      if (result.status === SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
+        return result.returnValue ? native(result.returnValue) : undefined;
+      }
+      if (result.status === SorobanRpc.Api.GetTransactionStatus.FAILED) {
+        throw new Error(formatSorobanError('Soroban transaction failed', hash));
+      }
+      await delay(intervalMs, config.signal);
+    }
+
+    throw new Error(`Timed out waiting for transaction ${hash}`);
+  }
+
+  private server(config: ContractInvokeOptions): SorobanRpc.Server {
+    return new SorobanRpc.Server(this.require(config.rpcUrl, 'rpcUrl'), {
+      allowHttp: config.allowHttp ?? false,
+    });
+  }
+
+  private require<T>(value: T | undefined, name: string): T {
+    if (value === undefined) {
+      throw new Error(`Missing required option: ${name}`);
+    }
+    return value;
   }
 
   private async expiringFootprintKeys(
@@ -263,24 +331,12 @@ export class ContractInvoker {
     config: ContractInvokeOptions
   ): Promise<xdr.LedgerKey[]> {
     const threshold = config.ttlThresholdLedgers ?? DEFAULT_TTL_THRESHOLD_LEDGERS;
-    const extendTo = config.ttlExtendToLedgers ?? DEFAULT_TTL_EXTEND_TO_LEDGERS;
-    if (!Number.isSafeInteger(threshold) || threshold <= 0) {
-      throw new RangeError('ttlThresholdLedgers must be a positive integer');
-    }
-    if (!Number.isSafeInteger(extendTo) || extendTo <= threshold) {
-      throw new RangeError('ttlExtendToLedgers must be greater than ttlThresholdLedgers');
-    }
-
-    const candidates = [
-      ...transactionData.getReadOnly(),
-      ...transactionData.getReadWrite(),
-    ].filter(canExtendTtl);
-    if (candidates.length === 0) {
-      return [];
-    }
-
-    const ledgerEntries = await server.getLedgerEntries(...candidates);
-    return findExpiringPersistentKeys(ledgerEntries.entries, ledgerEntries.latestLedger, threshold);
+    const latest = await server.getLatestLedger();
+    const entries = transactionData.build().resources().footprint().readOnly().map((key) => ({
+      key,
+      liveUntilLedgerSeq: undefined,
+    }));
+    return findExpiringPersistentKeys(entries, latest.sequence, threshold);
   }
 
   private async extendFootprintTtl(
@@ -293,11 +349,22 @@ export class ContractInvoker {
   ): Promise<void> {
     const extendTo = config.ttlExtendToLedgers ?? DEFAULT_TTL_EXTEND_TO_LEDGERS;
     const account = await server.getAccount(accountId);
-    const ttlTransaction = new TransactionBuilder(account, {
+    const builder = new TransactionBuilder(account, {
       fee: config.fee ?? '100000',
       networkPassphrase,
-    })
-      .setTimeout(config.timeoutSeconds ?? 30)
-      .addOpe
-
-/* … truncated 244 chars — edit only what you need near the top … */
+    }).setTimeout(config.timeoutSeconds ?? 30);
+    for (const key of keys) {
+      builder.addOperation(Operation.extendFootprintTtl({ extendTo }));
+    }
+    const transaction = builder.build();
+    const simulation = await server.simulateTransaction(transaction);
+    if (SorobanRpc.Api.isSimulationError(simulation)) {
+      throw new Error(formatSorobanError('Soroban simulation failed', simulation.error));
+    }
+    const prepared = SorobanRpc.assembleTransaction(transaction, simulation).build();
+    if (config.signer) {
+      prepared.sign(config.signer);
+    }
+    await this.submitWithRetry(server, prepared, config);
+  }
+}

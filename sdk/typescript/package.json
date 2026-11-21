@@ -14,7 +14,12 @@
     ".": {
       "types": "./dist/index.d.ts",
       "browser": "./dist/index.js",
-      "node": "./dist/index.js",
+      "node": {
+        "import": "./dist/index.js",
+        "require": "./dist/index.js"
+      },
+      "import": "./dist/index.js",
+      "require": "./dist/index.js",
       "default": "./dist/index.js"
     },
     "./package.json": "./package.json"

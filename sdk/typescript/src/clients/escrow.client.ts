@@ -7,6 +7,20 @@ import { nativeToScVal } from '@stellar/stellar-sdk';
 import { EscrowRecord, ContractInvokeOptions } from '../types/common.types';
 import { ContractInvoker, address, bool, i128, map, u32, u64, vec } from './invoker';
 
+/**
+ * Normalize an optional escrow field: treat `null` and `undefined` alike as
+ * absent, and reject malformed present values with a field-specific error.
+ */
+function optionalField<T>(value: T | null | undefined, field: string, isValid: (v: T) => boolean): T | undefined {
+  if (value === null || value === undefined) {
+    return undefined;
+  }
+  if (!isValid(value)) {
+    throw new Error(`Invalid escrow field \`${field}\`: ${String(value)}`);
+  }
+  return value;
+}
+
 export class EscrowClient {
   private readonly invoker: ContractInvoker;
 
@@ -126,7 +140,8 @@ export class EscrowClient {
    * Create a new escrow for a delivery
    */
   async createEscrow(params: EscrowTypes.CreateEscrowParams, options?: ContractInvokeOptions): Promise<bigint> {
-    const result = await this.invoker.call('create_escrow', [address(params.sender), address(params.recipient), address(params.driver), u64(params.deliveryId), address(params.token), i128(params.amount), params.fleetId === undefined ? xdrVoid() : u64(params.fleetId)], options);
+    const fleetId = optionalField(params.fleetId, 'fleetId', (v) => typeof v === 'bigint' || typeof v === 'number' || typeof v === 'string');
+    const result = await this.invoker.call('create_escrow', [address(params.sender), address(params.recipient), address(params.driver), u64(params.deliveryId), address(params.token), i128(params.amount), fleetId === undefined ? xdrVoid() : u64(fleetId)], options);
     return BigInt(String(result));
   }
 
@@ -139,14 +154,15 @@ export class EscrowClient {
   ): Promise<bigint[]> {
     // `create_escrows_batch` takes a `Vec<(u64, Address, i128, Option<u64>)>`,
     // so each entry must be encoded as its own Vec ScVal, not a bare array.
-    const entries = params.escrowList.map((entry) =>
-      vec([
+    const entries = params.escrowList.map((entry) => {
+      const fleetId = optionalField(entry.fleetId, 'fleetId', (v) => typeof v === 'bigint' || typeof v === 'number' || typeof v === 'string');
+      return vec([
         u64(entry.deliveryId),
         address(entry.driver),
         i128(entry.amount),
-        entry.fleetId === undefined ? xdrVoid() : u64(entry.fleetId),
-      ])
-    );
+        fleetId === undefined ? xdrVoid() : u64(fleetId),
+      ]);
+    });
     const result = await this.invoker.call('create_escrows_batch', [address(params.sender), address(params.recipient), address(params.token), u64(params.fleetId ?? 0), vec(entries)], options);
     return decodeIds(result);
   }
@@ -223,16 +239,40 @@ export class EscrowClient {
     params: EscrowTypes.ReleaseExpiredHoldbackParams,
     options?: ContractInvokeOptions
   ): Promise<void> {
-    await this.invoker.call('release_expired_holdback', [u64(params.deliveryId)], options);
+    await this.invoker.call('release_expired_holdback', [address(params.caller), u64(params.deliveryId)], options);
   }
 
   /**
-   * Mark an escrow as holdback
+   * Decode an on-chain escrow record into a typed `EscrowRecord`.
+   *
+   * Optional fields are normalized so that `null` and `undefined` are treated
+   * identically (both become `undefined`), and malformed present values are
+   * rejected with field-specific errors instead of silently becoming `NaN`.
    */
-  async markHoldbackEscrow(
-    params: EscrowTypes.MarkHoldbackEscrowParams,
-    options?: ContractInvokeOptions
-  ): Promise<void> {
-    await this.invoker.call('mark_holdback_escrow', [address(params.caller), u64(params.deliveryId)], option
+  decodeEscrow(raw: Record<string, unknown>): EscrowRecord {
+    const fleetId = optionalField(raw.fleet_id, 'fleet_id', (v) => typeof v === 'bigint' || typeof v === 'number' || typeof v === 'string');
+    const disputeReason = optionalField(raw.dispute_reason, 'dispute_reason', (v) => typeof v === 'string');
+    const resolvedAt = optionalField(raw.resolved_at, 'resolved_at', (v) => typeof v === 'bigint' || typeof v === 'number' || typeof v === 'string');
 
-/* … truncated 1686 chars — edit only what you need near the top … */
+    return {
+      deliveryId: BigInt(String(raw.delivery_id)),
+      sender: String(raw.sender),
+      recipient: String(raw.recipient),
+      driver: String(raw.driver),
+      token: String(raw.token),
+      amount: BigInt(String(raw.amount)),
+      status: String(raw.status),
+      fleetId: fleetId === undefined ? undefined : BigInt(String(fleetId)),
+      disputeReason,
+      resolvedAt: resolvedAt === undefined ? undefined : BigInt(String(resolvedAt)),
+    } as EscrowRecord;
+  }
+}
+
+function decodeIds(result: unknown): bigint[] {
+  return (result as Array<unknown>).map((id) => BigInt(String(id)));
+}
+
+function xdrVoid(): ReturnType<typeof nativeToScVal> {
+  return nativeToScVal(null);
+}

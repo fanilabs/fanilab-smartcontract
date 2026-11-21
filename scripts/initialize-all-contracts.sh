@@ -117,6 +117,33 @@ set_peer_if_changed() {
     invoke_contract "$contract_id" "$setter_fn" "$@"
 }
 
+# Determine whether a contract has already been initialized by querying its
+# admin view. Returns 0 (initialized) when the view yields a non-empty address,
+# 1 (not initialized) otherwise. This lets a rerun after a partial failure
+# resume without re-invoking init on contracts that are already configured.
+is_initialized() {
+    local contract_id=$1
+    local admin
+    admin=$(read_active_address "$contract_id" get_admin)
+    [ -n "$admin" ]
+}
+
+# Run a contract's init only when it has not been initialized yet. Existing
+# configuration is preserved on resume; uninitialized contracts still get
+# initialized exactly as before.
+init_if_needed() {
+    local contract_id=$1
+    local label=$2
+    shift 2
+
+    if is_initialized "$contract_id"; then
+        echo "  ↷ $label already initialized (skipping)"
+        return 0
+    fi
+    invoke_contract "$contract_id" init "$@"
+    echo "✓ $label initialized"
+}
+
 DISPUTE_TIME_LIMIT=${DISPUTE_TIME_LIMIT:-86400}
 DISPUTE_RESOLUTION_LIMIT=${DISPUTE_RESOLUTION_LIMIT:-86400}
 
@@ -129,44 +156,38 @@ echo "Settlement Contract: $SETTLEMENT_ID"
 echo ""
 
 echo "Initializing Escrow Contract..."
-invoke_contract "$ESCROW_ID" init \
+init_if_needed "$ESCROW_ID" "Escrow" \
     --admin "$ADMIN_ADDRESS" \
     --token "$TOKEN_ADDRESS" \
     --platform_fee_bps "${PLATFORM_FEE_BPS:-250}"
-echo "✓ Escrow initialized"
 
 echo "Initializing Delivery Contract..."
-invoke_contract "$DELIVERY_ID" init \
+init_if_needed "$DELIVERY_ID" "Delivery" \
     --admin "$ADMIN_ADDRESS" \
     --escrow_contract "$ESCROW_ID"
-echo "✓ Delivery initialized"
 
 echo "Initializing Dispute Resolution Contract..."
-invoke_contract "$DISPUTE_ID" init \
+init_if_needed "$DISPUTE_ID" "Dispute resolution" \
     --admin "$ADMIN_ADDRESS" \
     --delivery_contract "$DELIVERY_ID" \
     --escrow_contract "$ESCROW_ID" \
     --dispute_time_limit "$DISPUTE_TIME_LIMIT" \
     --dispute_resolution_limit "$DISPUTE_RESOLUTION_LIMIT"
-echo "✓ Dispute resolution initialized"
 
 echo "Initializing Fleet Management Contract..."
-invoke_contract "$FLEET_ID" init \
+init_if_needed "$FLEET_ID" "Fleet management" \
     --admin "$ADMIN_ADDRESS"
-echo "✓ Fleet management initialized"
 
 echo "Initializing Identity Reputation Contract..."
-invoke_contract "$IDENTITY_ID" init \
+init_if_needed "$IDENTITY_ID" "Identity reputation" \
     --admin "$ADMIN_ADDRESS" \
     --delivery_contract "$DELIVERY_ID" \
     --dispute_contract "$DISPUTE_ID"
-echo "✓ Identity reputation initialized"
 
 echo "Initializing Settlement Contract..."
-invoke_contract "$SETTLEMENT_ID" init \
+init_if_needed "$SETTLEMENT_ID" "Settlement" \
     --admin "$ADMIN_ADDRESS" \
     --escrow_contract "$ESCROW_ID"
-echo "✓ Settlement initialized"
 echo ""
 
 echo "Wiring contract integrations..."
@@ -214,14 +235,10 @@ set_peer_if_changed "$ESCROW_ID" get_delivery_contract set_delivery_contract "$D
 set_peer_if_changed "$ESCROW_ID" get_dispute_resolution_contract set_dispute_resolution_contract "$DISPUTE_ID" \
     --admin "$ADMIN_ADDRESS" \
     --dispute_contract "$DISPUTE_ID"
-set_peer_if_changed "$ESCROW_ID" get_identity_reputation_contract set_identity_reputation_contract "$IDENTITY_ID" \
-    --admin "$ADMIN_ADDRESS" \
-    --identity_contract "$IDENTITY_ID"
-set_peer_if_changed "$ESCROW_ID" get_fleet_management_contract set_fleet_management_contract "$FLEET_ID" \
-    --admin "$ADMIN_ADDRESS" \
-    --fleet_contract "$FLEET_ID"
 
-echo "✓ Contract integrations configured"
+set_peer_if_changed "$SETTLEMENT_ID" get_escrow_contract set_escrow_contract "$ESCROW_ID" \
+    --admin "$ADMIN_ADDRESS" \
+    --new_escrow "$ESCROW_ID"
+
 echo ""
-echo "✅ All contracts initialized successfully!"
-exit 0
+echo "✅ All contracts initialized and wired successfully!"

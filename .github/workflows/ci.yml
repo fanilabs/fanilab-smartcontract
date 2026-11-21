@@ -18,6 +18,7 @@ jobs:
   build_and_test:
     name: Build and Test Contracts
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
     - name: Checkout repository
@@ -82,6 +83,7 @@ jobs:
   wasm_target_drift_check:
     name: Prevent wasm32-unknown-unknown Target Drift
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     steps:
     - name: Checkout repository
@@ -102,6 +104,7 @@ jobs:
   typescript_sdk:
     name: Build TypeScript SDK
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
     - name: Checkout repository

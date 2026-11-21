@@ -82,9 +82,7 @@ echo ""
 # Build contracts
 echo "${BLUE}Building contracts...${NC}"
 cd "$PROJECT_ROOT"
-cargo build --target wasm32v1-none --release
-
-if [ $? -ne 0 ]; then
+if ! cargo build --target wasm32v1-none --release; then
     echo "${RED}❌ Build failed${NC}"
     exit 1
 fi
@@ -96,20 +94,19 @@ echo ""
 deploy_contract() {
     local contract_name=$1
     local wasm_path="$PROJECT_ROOT/target/wasm32v1-none/release/${contract_name}.wasm"
-    
+    local contract_id
+
     echo "${YELLOW}Deploying $contract_name...${NC}"
-    
+
     if [ ! -f "$wasm_path" ]; then
         echo "${RED}❌ WASM file not found: $wasm_path${NC}"
         return 1
     fi
-    
-    local contract_id=$(stellar contract deploy \
+
+    if contract_id=$(stellar contract deploy \
         --wasm "$wasm_path" \
         --source "$DEPLOYER_IDENTITY" \
-        --network "$NETWORK" 2>&1)
-    
-    if [ $? -eq 0 ]; then
+        --network "$NETWORK" 2>&1); then
         echo "${GREEN}✓ $contract_name deployed: $contract_id${NC}"
         echo "$contract_id"
         return 0
@@ -132,22 +129,21 @@ DEPLOYED_IDS=()
 
 for i in "${!CONTRACTS[@]}"; do
     contract="${CONTRACTS[$i]}"
-    contract_id=$(deploy_contract "$contract")
-    
-    if [ $? -ne 0 ]; then
+
+    if ! contract_id=$(deploy_contract "$contract"); then
         echo "${RED}❌ Deployment failed for $contract${NC}"
         exit 1
     fi
-    
+
     DEPLOYED_IDS+=("$contract_id")
-    
+
     # Add to JSON (with comma except for last)
-    if [ $i -lt $((${#CONTRACTS[@]} - 1)) ]; then
+    if [ "$i" -lt $((${#CONTRACTS[@]} - 1)) ]; then
         echo "    \"$contract\": \"$contract_id\"," >> "$OUTPUT_FILE"
     else
         echo "    \"$contract\": \"$contract_id\"" >> "$OUTPUT_FILE"
     fi
-    
+
     echo ""
 done
 

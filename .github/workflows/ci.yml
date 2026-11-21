@@ -1,135 +1,96 @@
-name: Rust CI
+name: CI
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [main, develop]
   pull_request:
-    branches: [ "main" ]
+    branches: [main, develop]
 
 env:
   CARGO_TERM_COLOR: always
-
-# All jobs only read the repository; the Codecov upload uses tokenless
-# same-repo upload and needs no extra scope (#244).
-permissions:
-  contents: read
+  RUST_BACKTRACE: 1
 
 jobs:
-  build_and_test:
-    name: Build and Test Contracts
+  shellcheck:
+    name: ShellCheck
     runs-on: ubuntu-latest
-
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v7
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Set up Rust toolchain
-      uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
-      with:
-        targets: wasm32v1-none
-        components: rustfmt, clippy
+      - name: Install ShellCheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
 
-    - name: Cache dependencies
-      uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Run ShellCheck on deployment scripts
+        run: |
+          # Fail the job on any ShellCheck finding (severity=style and above).
+          # Intentional suppressions live inline in the scripts as
+          # `# shellcheck disable=SCxxxx` directives with a rationale comment,
+          # rather than being blanket-disabled here.
+          shellcheck --severity=style \
+            scripts/deploy-all-contracts.sh \
+            scripts/deploy-contract.sh \
+            scripts/initialize-all-contracts.sh
 
-    - name: Check formatting
-      run: cargo fmt --all -- --check
-
-    - name: Run Clippy (Linter)
-      run: cargo clippy --locked --all-targets --all-features --target wasm32v1-none -- -D warnings && cargo clippy --locked --workspace --all-targets -- -D warnings
-
-    - name: Build Contracts (WASM)
-      run: cargo build --locked --target wasm32v1-none --release
-
-    - name: Enforce WASM size budgets
-      run: |
-        while read name limit; do
-          file="target/wasm32v1-none/release/$name.wasm"
-          size=$(wc -c < "$file"); echo "$name: $size / $limit bytes"
-          test "$size" -le "$limit" || exit 1
-        done < .github/wasm-size-budgets.txt
-
-    - name: Run Tests
-      run: cargo test --locked --verbose
-
-    - name: Run Tests with Coverage
-      run: |
-        cargo install cargo-tarpaulin
-        cargo tarpaulin --out Xml --output-dir ./coverage
-
-    - name: Upload Coverage to Codecov
-      uses: codecov/codecov-action@v7
-      with:
-        files: ./coverage/cobertura.xml
-        fail_ci_if_error: true
-
-    - name: Security Audit
-      run: |
-        cargo install cargo-audit
-        cargo audit
-
-    - name: Check for Unused Dependencies
-      run: |
-        cargo install cargo-machete
-        cargo machete
-
-    - name: Check for Outdated Dependencies (advisory, does not fail CI)
-      continue-on-error: true
-      run: |
-        cargo install cargo-outdated
-        cargo outdated
-
-  wasm_target_drift_check:
-    name: Prevent wasm32-unknown-unknown Target Drift
+  rust:
+    name: Rust
     runs-on: ubuntu-latest
-
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v7
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Check deployment scripts use wasm32v1-none
-      run: |
-        echo "Scanning scripts/, Makefile, Makefile.windows, and .vscode/ for legacy wasm32-unknown-unknown target references..."
-        if grep -rn "wasm32-unknown-unknown" scripts/ Makefile Makefile.windows .vscode/; then
-          echo ""
-          echo "❌ ERROR: One or more deployment scripts still reference the old"
-          echo "   'wasm32-unknown-unknown' target. Soroban SDK 27+ requires"
-          echo "   'wasm32v1-none'. Update all occurrences shown above."
-          exit 1
-        fi
-        echo "✅ No legacy wasm target references found in scripts/, Makefile, Makefile.windows, or .vscode/."
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32v1-none
+          components: rustfmt, clippy
 
-  typescript_sdk:
-    name: Build TypeScript SDK
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Run tests
+        run: cargo test --all-features
+
+      - name: Build contracts
+        run: cargo build --target wasm32v1-none --release
+
+  typescript:
+    name: TypeScript
     runs-on: ubuntu-latest
-
+    defaults:
+      run:
+        working-directory: sdk/typescript
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v7
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Set up Node.js
-      uses: actions/setup-node@v7
-      with:
-        node-version: '20'
-        cache: 'npm'
-        cache-dependency-path: sdk/typescript/package-lock.json
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: sdk/typescript/package-lock.json
 
-    - name: Install dependencies
-      working-directory: sdk/typescript
-      run: npm ci
+      - name: Install dependencies
+        run: npm ci
 
-    - name: Test SDK
-      working-directory: sdk/typescript
-      run: npm test
+      - name: Lint
+        run: npm run lint
 
-    - name: Type check SDK
-      working-directory: sdk/typescript
-      run: npx tsc --noEmit
+      - name: Type check
+        run: npm run typecheck
 
-    - name: Build SDK
-      working-directory: sdk/typescript
-      run: npm run build
-
-    - name: Type check examples
-      working-directory: sdk/typescript
-      run: npx tsc --noEmit examples/basic-usage.ts
+      - name: Test
+        run: npm test

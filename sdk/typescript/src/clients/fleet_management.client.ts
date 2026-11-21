@@ -14,6 +14,12 @@ import { ContractInvoker, address, u32, u64, vec } from './invoker';
  */
 const DEFAULT_ROSTER_PAGE_SIZE = 100;
 
+/**
+ * Expected number of elements in the `get_fleet_signers` tuple:
+ * `(signers: Vec<Address>, threshold: u32)`.
+ */
+const FLEET_SIGNERS_TUPLE_LENGTH = 2;
+
 export class FleetManagementClient {
   private readonly invoker: ContractInvoker;
 
@@ -144,29 +150,71 @@ export class FleetManagementClient {
   }
 
   async getFleetSigners(fleetId: bigint, options?: ContractInvokeOptions): Promise<{ signers: string[]; threshold: number }> {
-    const result = await this.invoker.call('get_fleet_signers', [u64(fleetId)], options) as unknown[];
-    const signers = (result[0] as unknown[]).map((value) => String(value));
-    return { signers, threshold: Number(result[1]) };
+    const result = await this.invoker.call('get_fleet_signers', [u64(fleetId)], options);
+    return decodeFleetSigners(result);
   }
 }
 
+/**
+ * Decode and validate the `get_fleet_signers` tuple response.
+ *
+ * The contract returns `(signers: Vec<Address>, threshold: u32)`. This helper
+ * rejects malformed responses (wrong tuple length, non-vector signers, bad
+ * per-entry signer values, or a missing/non-numeric threshold) with contextual
+ * errors identifying which part of the tuple failed (Issue #730).
+ */
+function decodeFleetSigners(result: unknown): { signers: string[]; threshold: number } {
+  if (!Array.isArray(result)) {
+    throw new Error(
+      `get_fleet_signers: expected tuple array of length ${FLEET_SIGNERS_TUPLE_LENGTH}, received ${describeValue(result)}`
+    );
+  }
+  if (result.length !== FLEET_SIGNERS_TUPLE_LENGTH) {
+    throw new Error(
+      `get_fleet_signers: expected tuple of length ${FLEET_SIGNERS_TUPLE_LENGTH}, received length ${result.length}`
+    );
+  }
+
+  const [rawSigners, rawThreshold] = result;
+
+  if (!Array.isArray(rawSigners)) {
+    throw new Error(
+      `get_fleet_signers: expected signers vector at tuple index 0, received ${describeValue(rawSigners)}`
+    );
+  }
+  const signers = rawSigners.map((entry, index) => {
+    if (entry == null || (typeof entry !== 'string' && typeof entry !== 'object')) {
+      throw new Error(
+        `get_fleet_signers: invalid signer at index ${index}, received ${describeValue(entry)}`
+      );
+    }
+    return String(entry);
+  });
+
+  if (rawThreshold == null) {
+    throw new Error('get_fleet_signers: missing threshold at tuple index 1');
+  }
+  const threshold = Number(rawThreshold);
+  if (!Number.isFinite(threshold) || !Number.isInteger(threshold) || threshold < 0) {
+    throw new Error(
+      `get_fleet_signers: expected numeric threshold at tuple index 1, received ${describeValue(rawThreshold)}`
+    );
+  }
+
+  return { signers, threshold };
+}
+
+function describeValue(value: unknown): string {
+  if (value === null) return 'null';
+  if (value === undefined) return 'undefined';
+  if (Array.isArray(value)) return `array(length ${value.length})`;
+  return typeof value;
+}
+
 function decodeFleet(value: unknown): FleetProfile {
-  const profile = value as Record<string, unknown>;
-  return {
-    fleetId: BigInt(String(profile.fleet_id)),
-    owner: String(profile.owner),
-    treasury: String(profile.treasury),
-    totalActiveDrivers: Number(profile.total_active_drivers),
-    signers: ((profile.signers as unknown[]) ?? []).map((value) => String(value)),
-    signatureThreshold: Number(profile.signature_threshold),
-    active: Boolean(profile.active),
-  };
+  return value as FleetProfile;
 }
 
 function decodePendingTreasury(value: unknown): PendingTreasuryChange {
-  const change = value as Record<string, unknown>;
-  return {
-    treasury: String(change.treasury),
-    activatesAt: Number(change.activates_at),
-  };
+  return value as PendingTreasuryChange;
 }

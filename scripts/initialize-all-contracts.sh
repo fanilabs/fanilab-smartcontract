@@ -10,13 +10,47 @@ NETWORK=${1:-testnet}
 # Overridable, but the default must match the identity provisioned by
 # .github/workflows/deploy-testnet.yml and documented in docs/DEPLOYMENT.md.
 DEPLOYER_IDENTITY="${DEPLOYER_IDENTITY:-deployer}"
+# Per-stage timeout (seconds) applied to every CLI invoke so a hung RPC call
+# cannot block the whole initialization sequence. Override with STAGE_TIMEOUT.
+STAGE_TIMEOUT="${STAGE_TIMEOUT:-120}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 CONTRACT_IDS_FILE="$PROJECT_ROOT/contract-ids-$NETWORK.json"
 
+# Tracks the last stage that completed successfully so a timeout/failure can
+# report exactly where the sequence stopped.
+LAST_CONFIRMED_STAGE="(none)"
+
+# Run a CLI command under a bounded timeout. On timeout or failure, report the
+# last confirmed stage and exit non-zero instead of blocking indefinitely.
+run_with_timeout() {
+    local stage=$1
+    shift
+    local rc=0
+    if command -v timeout &> /dev/null; then
+        timeout "$STAGE_TIMEOUT" "$@" || rc=$?
+    else
+        "$@" || rc=$?
+    fi
+    if [ "$rc" -eq 124 ]; then
+        echo ""
+        echo "❌ Stage '$stage' timed out after ${STAGE_TIMEOUT}s"
+        echo "   Last confirmed stage: $LAST_CONFIRMED_STAGE"
+        echo "   Re-run with a larger STAGE_TIMEOUT if the network is slow."
+        exit 1
+    elif [ "$rc" -ne 0 ]; then
+        echo ""
+        echo "❌ Stage '$stage' failed (exit $rc)"
+        echo "   Last confirmed stage: $LAST_CONFIRMED_STAGE"
+        exit "$rc"
+    fi
+    LAST_CONFIRMED_STAGE=$stage
+}
+
 echo "🔧 Initializing FaniLab Smart Contracts"
 echo "======================================"
 echo "Network: $NETWORK"
+echo "Stage timeout: ${STAGE_TIMEOUT}s"
 echo ""
 
 # Check if contract IDs file exists
@@ -88,6 +122,14 @@ invoke_contract() {
         -- "$@"
 }
 
+# Bounded invoke: wraps invoke_contract with the per-stage timeout and stage
+# label so a hung RPC call is reported with the last confirmed transaction.
+invoke_stage() {
+    local stage=$1
+    shift
+    run_with_timeout "$stage" invoke_contract "$@"
+}
+
 DISPUTE_TIME_LIMIT=${DISPUTE_TIME_LIMIT:-86400}
 DISPUTE_RESOLUTION_LIMIT=${DISPUTE_RESOLUTION_LIMIT:-86400}
 
@@ -100,20 +142,20 @@ echo "Settlement Contract: $SETTLEMENT_ID"
 echo ""
 
 echo "Initializing Escrow Contract..."
-invoke_contract "$ESCROW_ID" init \
+invoke_stage "escrow.init" "$ESCROW_ID" init \
     --admin "$ADMIN_ADDRESS" \
     --token "$TOKEN_ADDRESS" \
     --platform_fee_bps "${PLATFORM_FEE_BPS:-250}"
 echo "✓ Escrow initialized"
 
 echo "Initializing Delivery Contract..."
-invoke_contract "$DELIVERY_ID" init \
+invoke_stage "delivery.init" "$DELIVERY_ID" init \
     --admin "$ADMIN_ADDRESS" \
     --escrow_contract "$ESCROW_ID"
 echo "✓ Delivery initialized"
 
 echo "Initializing Dispute Resolution Contract..."
-invoke_contract "$DISPUTE_ID" init \
+invoke_stage "dispute.init" "$DISPUTE_ID" init \
     --admin "$ADMIN_ADDRESS" \
     --delivery_contract "$DELIVERY_ID" \
     --escrow_contract "$ESCROW_ID" \
@@ -122,73 +164,73 @@ invoke_contract "$DISPUTE_ID" init \
 echo "✓ Dispute resolution initialized"
 
 echo "Initializing Fleet Management Contract..."
-invoke_contract "$FLEET_ID" init \
+invoke_stage "fleet.init" "$FLEET_ID" init \
     --admin "$ADMIN_ADDRESS"
 echo "✓ Fleet management initialized"
 
 echo "Initializing Identity Reputation Contract..."
-invoke_contract "$IDENTITY_ID" init \
+invoke_stage "identity.init" "$IDENTITY_ID" init \
     --admin "$ADMIN_ADDRESS" \
     --delivery_contract "$DELIVERY_ID" \
     --dispute_contract "$DISPUTE_ID"
 echo "✓ Identity reputation initialized"
 
 echo "Initializing Settlement Contract..."
-invoke_contract "$SETTLEMENT_ID" init \
+invoke_stage "settlement.init" "$SETTLEMENT_ID" init \
     --admin "$ADMIN_ADDRESS" \
     --escrow_contract "$ESCROW_ID"
 echo "✓ Settlement initialized"
 echo ""
 
 echo "Wiring contract integrations..."
-invoke_contract "$DELIVERY_ID" set_escrow_contract \
+invoke_stage "delivery.set_escrow_contract" "$DELIVERY_ID" set_escrow_contract \
     --admin "$ADMIN_ADDRESS" \
     --escrow_contract "$ESCROW_ID"
-invoke_contract "$DELIVERY_ID" set_dispute_resolution_contract \
+invoke_stage "delivery.set_dispute_resolution_contract" "$DELIVERY_ID" set_dispute_resolution_contract \
     --admin "$ADMIN_ADDRESS" \
     --dispute_contract "$DISPUTE_ID"
-invoke_contract "$DELIVERY_ID" set_identity_reputation_contract \
+invoke_stage "delivery.set_identity_reputation_contract" "$DELIVERY_ID" set_identity_reputation_contract \
     --admin "$ADMIN_ADDRESS" \
     --identity_contract "$IDENTITY_ID"
 
-invoke_contract "$DISPUTE_ID" set_delivery_contract \
+invoke_stage "dispute.set_delivery_contract" "$DISPUTE_ID" set_delivery_contract \
     --caller "$ADMIN_ADDRESS" \
     --delivery_contract "$DELIVERY_ID"
-invoke_contract "$DISPUTE_ID" set_escrow_contract \
+invoke_stage "dispute.set_escrow_contract" "$DISPUTE_ID" set_escrow_contract \
     --caller "$ADMIN_ADDRESS" \
     --escrow_contract "$ESCROW_ID"
-invoke_contract "$DISPUTE_ID" set_identity_reputation_contract \
+invoke_stage "dispute.set_identity_reputation_contract" "$DISPUTE_ID" set_identity_reputation_contract \
     --caller "$ADMIN_ADDRESS" \
     --reputation_contract "$IDENTITY_ID"
 
-invoke_contract "$FLEET_ID" set_escrow_contract \
+invoke_stage "fleet.set_escrow_contract" "$FLEET_ID" set_escrow_contract \
     --admin "$ADMIN_ADDRESS" \
     --escrow_contract "$ESCROW_ID"
-invoke_contract "$FLEET_ID" set_identity_contract \
+invoke_stage "fleet.set_identity_contract" "$FLEET_ID" set_identity_contract \
     --admin "$ADMIN_ADDRESS" \
     --identity_contract "$IDENTITY_ID"
 
-invoke_contract "$IDENTITY_ID" set_delivery_contract \
+invoke_stage "identity.set_delivery_contract" "$IDENTITY_ID" set_delivery_contract \
     --admin "$ADMIN_ADDRESS" \
     --delivery_contract "$DELIVERY_ID"
-invoke_contract "$IDENTITY_ID" set_dispute_contract \
+invoke_stage "identity.set_dispute_contract" "$IDENTITY_ID" set_dispute_contract \
     --admin "$ADMIN_ADDRESS" \
     --dispute_contract "$DISPUTE_ID"
 
-invoke_contract "$SETTLEMENT_ID" set_escrow_contract \
+invoke_stage "settlement.set_escrow_contract" "$SETTLEMENT_ID" set_escrow_contract \
     --admin "$ADMIN_ADDRESS" \
     --new_escrow "$ESCROW_ID"
 
-invoke_contract "$ESCROW_ID" set_delivery_contract \
+invoke_stage "escrow.set_delivery_contract" "$ESCROW_ID" set_delivery_contract \
     --admin "$ADMIN_ADDRESS" \
     --delivery_contract "$DELIVERY_ID"
-invoke_contract "$ESCROW_ID" set_dispute_resolution_contract \
+invoke_stage "escrow.set_dispute_resolution_contract" "$ESCROW_ID" set_dispute_resolution_contract \
     --admin "$ADMIN_ADDRESS" \
     --dispute_contract "$DISPUTE_ID"
-invoke_contract "$ESCROW_ID" set_identity_reputation_contract \
+invoke_stage "escrow.set_identity_reputation_contract" "$ESCROW_ID" set_identity_reputation_contract \
     --admin "$ADMIN_ADDRESS" \
     --identity_contract "$IDENTITY_ID"
-invoke_contract "$ESCROW_ID" set_fleet_management_contract \
+invoke_stage "escrow.set_fleet_management_contract" "$ESCROW_ID" set_fleet_management_contract \
     --admin "$ADMIN_ADDRESS" \
     --fleet_contract "$FLEET_ID"
 

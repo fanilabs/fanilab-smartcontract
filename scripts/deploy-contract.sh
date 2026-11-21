@@ -2,19 +2,49 @@
 
 # FaniLab Smart Contracts - Single Contract Deployment Script
 # Usage: ./deploy-contract.sh <contract_name> [network]
+#
+# Environment override precedence (issue #754):
+#   Pre-set environment variables ALWAYS win over values from the .env file.
+#   The .env file is sourced first, then any variable that was already set in
+#   the environment is restored on top of it. This rule applies uniformly to
+#   every setting, including DEPLOYER_IDENTITY — no setting is resolved before
+#   .env is sourced.
 
 set -e
 
 CONTRACT_NAME=$1
 NETWORK=${2:-testnet}
-# Name of the Stellar CLI identity every deploy/initialize script signs with.
-# Overridable, but the default must match the identity provisioned by
-# .github/workflows/deploy-testnet.yml and documented in docs/DEPLOYMENT.md.
-DEPLOYER_IDENTITY="${DEPLOYER_IDENTITY:-deployer}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 OUTPUT_FILE="$PROJECT_ROOT/contract-ids-$NETWORK.json"
+
+# Snapshot any variables already present in the environment so they can be
+# re-applied after sourcing .env (environment overrides file values).
+ENV_OVERRIDES=()
+for var in DEPLOYER_IDENTITY NETWORK; do
+    if [ -n "${!var+x}" ]; then
+        ENV_OVERRIDES+=("$var=${!var}")
+    fi
+done
+
+# Source .env (if present) so file values are available to every setting.
+if [ -f "$PROJECT_ROOT/.env" ]; then
+    set -a
+    # shellcheck disable=SC1091
+    source "$PROJECT_ROOT/.env"
+    set +a
+fi
+
+# Re-apply pre-set environment variables so they take precedence over .env.
+for override in "${ENV_OVERRIDES[@]}"; do
+    export "$override"
+done
+
+# Name of the Stellar CLI identity every deploy/initialize script signs with.
+# Overridable, but the default must match the identity provisioned by
+# .github/workflows/deploy-testnet.yml and documented in docs/DEPLOYMENT.md.
+DEPLOYER_IDENTITY="${DEPLOYER_IDENTITY:-deployer}"
 
 CONTRACTS=("escrow_contract" "delivery_contract" "dispute_resolution_contract" "fleet_management_contract" "identity_reputation_contract" "settlement_contract")
 

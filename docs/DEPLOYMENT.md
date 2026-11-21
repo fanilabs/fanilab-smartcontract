@@ -38,6 +38,35 @@ cp .env.example .env
 nano .env
 ```
 
+### Environment Variable Precedence
+
+Every deployment and initialization script resolves settings with a single,
+uniform precedence order:
+
+1. **Pre-set environment variables** (exported in the shell, or injected by CI)
+   always win.
+2. **Values from the sourced `.env` file** are used only when the corresponding
+   variable is not already set in the environment.
+3. **Built-in defaults** in the script apply when neither of the above is set.
+
+In other words, `.env` never overrides an already-exported variable. This rule
+applies to **every** setting the scripts read — including `DEPLOYER_IDENTITY`,
+`STELLAR_NETWORK`, `SOROBAN_RPC_URL`, `NETWORK_PASSPHRASE`, `ADMIN_ADDRESS`,
+`TOKEN_ADDRESS`, `PLATFORM_FEE_BPS`, and the dispute limits. There are no
+special-cased variables resolved before or after `.env` is sourced.
+
+Example — conflicting values:
+```bash
+# .env contains: DEPLOYER_IDENTITY=deployer-from-file
+# Shell exports:  DEPLOYER_IDENTITY=deployer-from-env
+export DEPLOYER_IDENTITY=deployer-from-env
+./scripts/initialize-all-contracts.sh testnet
+# The script uses "deployer-from-env" — the exported value wins.
+```
+
+To deliberately use a value from `.env` while it is also exported, unset the
+exported variable first (`unset DEPLOYER_IDENTITY`) so the file value applies.
+
 ### Required Environment Variables
 ```env
 # Network Configuration
@@ -197,6 +226,11 @@ identity is missing, so a run with an unset or blank `TESTNET_DEPLOYER_SECRET`
 fails with a clear message instead of a raw CLI error. To point the scripts at a
 differently named identity, export `DEPLOYER_IDENTITY` before invoking them.
 
+`DEPLOYER_IDENTITY` follows the same precedence rule as every other setting
+(see [Environment Variable Precedence](#environment-variable-precedence)): an
+exported value wins over a value in `.env`, and the built-in default (`deployer`)
+applies only when neither is set. It is not resolved before `.env` is sourced.
+
 The local `.env` variable that carries this same key is `CONTRACT_DEPLOYER_SECRET`
 (see `.env.example`); it is only a convenience for humans importing the identity
 locally and is not consumed by the scripts directly.
@@ -294,157 +328,108 @@ contract; configure and confirm it separately after its delay has elapsed.
 
 To initialize one contract instead, use
 `./scripts/initialize-contract.sh <contract_name> $STELLAR_NETWORK`. Supported
-names are `escrow_contract`, `delivery_contract`,
-`dispute_resolution_contract`, `fleet_management_contract`,
-`identity_reputation_contract`, and `settlement_contract`.
+names are `escrow_contract`, `delivery_contract`, `identity_reputation_contract`,
+`fleet_management_contract`, `dispute_resolution_contract`, and
+`settlement_contract`.
 
 ## Verification
 
-### Contract State Verification
+### Verify Contract State
 ```bash
-# Verify escrow admin
+# Check escrow contract admin
 stellar contract invoke \
   --id $ESCROW_CONTRACT_ID \
   --network $STELLAR_NETWORK \
   -- get_admin
 
-# Verify platform fee
+# Check platform fee
 stellar contract invoke \
   --id $ESCROW_CONTRACT_ID \
   --network $STELLAR_NETWORK \
   -- get_platform_fee
-
-# Verify delivery contract escrow reference
-stellar contract invoke \
-  --id $DELIVERY_CONTRACT_ID \
-  --network $STELLAR_NETWORK \
-  -- get_escrow_contract
 ```
 
-### Test Transaction
+### Verify Contract Events
 ```bash
-# Create a test delivery (Testnet only)
-stellar contract invoke \
-  --id $DELIVERY_CONTRACT_ID \
-  --source test_sender \
-  --network testnet \
-  -- create_delivery \
-  --sender $TEST_SENDER_ADDRESS \
-  --recipient $TEST_RECIPIENT_ADDRESS \
-  --metadata '{"delivery_id":1,"origin":"Test A","destination":"Test B","cargo_description":{"weight_grams":1000,"category":"General","fragile":false},"created_at":1000000,"estimated_delivery":2000000}'
+# Stream contract events
+stellar events \
+  --id $ESCROW_CONTRACT_ID \
+  --network $STELLAR_NETWORK \
+  --start-ledger <ledger_number>
 ```
 
 ## Monitoring
 
-### Contract Events
+### Set Up Monitoring
 ```bash
-# Monitor escrow events
-stellar contract events \
+# Monitor contract events
+stellar events \
   --id $ESCROW_CONTRACT_ID \
   --network $STELLAR_NETWORK \
-  --count 100
+  --follow
 
-# Monitor delivery events
-stellar contract events \
-  --id $DELIVERY_CONTRACT_ID \
-  --network $STELLAR_NETWORK \
-  --count 100
+# Monitor account balance
+watch -n 60 'stellar account balance deployer --network $STELLAR_NETWORK'
 ```
 
-### Metrics to Monitor
-- Contract invocation count
-- Gas usage per transaction
-- Error rates
-- Storage growth
-- Failed transactions
-- Event emission patterns
-
-### Alerting
-Set up alerts for:
-- Contract errors
-- Unexpected state transitions
-- High gas usage
-- Failed cross-contract calls
-- Storage threshold breaches
+### Key Metrics to Track
+- Transaction success rate
+- Contract invocation frequency
+- Gas consumption per operation
+- Error rates by contract
+- Account balance levels
 
 ## Rollback Procedures
 
-### Contract Upgrade
-Soroban contracts are upgradeable. To rollback:
-
+### Emergency Rollback
 ```bash
-# Deploy previous version
-stellar contract deploy \
-  --wasm target/wasm32v1-none/release/escrow_contract_v1.wasm \
+# 1. Pause contract (if supported)
+stellar contract invoke \
+  --id $ESCROW_CONTRACT_ID \
+  --network $STELLAR_NETWORK \
+  -- pause
+
+# 2. Notify stakeholders
+# 3. Investigate issue
+# 4. Deploy fix or restore from backup
+```
+
+### Contract Upgrade
+```bash
+# Deploy new WASM
+stellar contract upload \
+  --wasm target/wasm32v1-none/release/escrow_contract.wasm \
   --source deployer \
   --network $STELLAR_NETWORK
 
-# Important Note: The current delivery contract does not have an escrow contract setter function.
-# To update escrow contract references, you must redeploy the delivery contract with the new escrow address.
-# Alternatively, create a new delivery contract deployment with the rollback escrow address.
+# Upgrade contract instance
+stellar contract invoke \
+  --id $ESCROW_CONTRACT_ID \
+  --network $STELLAR_NETWORK \
+  -- upgrade \
+  --new_wasm_hash <wasm_hash>
 ```
 
-**Note on Contract Dependencies**: Currently, the delivery contract stores the escrow contract address during initialization and does not provide a setter function. Rollback procedures involving escrow contract updates require redeployment of dependent contracts.
-
-### Emergency Procedures
-1. **Pause Operations**: Call admin pause functions if available
-2. **Notify Users**: Announce maintenance via official channels
-3. **Deploy Fix**: Deploy corrected contract version
-4. **Resume Operations**: Unpause and monitor closely
-
-## Cost Estimation
-
-### Testnet
-- Deployment: Free (using Friendbot)
-- Transactions: Free
-
-### Mainnet
-- Contract Deployment: ~0.1 XLM per contract
-- Contract Initialization: ~0.01 XLM per contract
-- Storage: 0.00001 XLM per ledger entry
-- Transactions: Variable (0.00001-0.1 XLM)
-
-**Budget Recommendation**: Have at least 10 XLM available for full deployment
-
-## Support & Troubleshooting
+## Troubleshooting
 
 ### Common Issues
 
-**Issue**: Insufficient balance
-```bash
-# Solution: Fund the account
-stellar account balance deployer --network $STELLAR_NETWORK
-```
+**Contract deployment fails:**
+- Check account balance
+- Verify network connectivity
+- Ensure WASM file is valid
 
-**Issue**: Contract already exists
-```bash
-# Solution: Use install and then deploy with custom contract ID
-stellar contract install --wasm <wasm-file> --network $STELLAR_NETWORK
-```
+**Initialization fails:**
+- Verify all contract IDs are set
+- Check admin address is valid
+- Ensure token contract is deployed
 
-**Issue**: Authorization failed
-```bash
-# Solution: Ensure deployer has auth
-stellar keys show deployer
-```
+**Transaction fails:**
+- Check gas limits
+- Verify contract state
+- Review error messages
 
 ### Getting Help
-- Stellar Discord: https://discord.gg/stellar
-- Developer Docs: https://developers.stellar.org
-- Issue Tracker: GitHub Issues
-
-## Security Best Practices
-
-1. **Never commit private keys** to version control
-2. **Use hardware wallets** for mainnet admin keys
-3. **Test thoroughly** on Testnet before Mainnet
-4. **Implement time-locks** for sensitive operations
-5. **Monitor contracts** continuously post-deployment
-6. **Maintain backups** of all deployment configurations
-7. **Document everything** for audit trail
-8. **Use multi-sig** for admin operations where possible
-
----
-
-**Last Updated**: January 2026
-**Version**: 1.0.0
+- Check [Stellar documentation](https://developers.stellar.org/)
+- Open an issue on GitHub
+- Contact the development team

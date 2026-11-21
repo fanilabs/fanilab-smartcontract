@@ -2,16 +2,36 @@
 
 # FaniLab Smart Contracts - Complete Deployment Script
 # Usage: ./deploy-all-contracts.sh [testnet|mainnet]
+#
+# Environment precedence (applies to every setting in this script):
+#   1. Variables already exported in the environment win.
+#   2. Values from the project .env file fill in anything not already set.
+#   3. Built-in defaults apply last.
+# This is enforced by sourcing .env BEFORE resolving any setting, so a
+# pre-set DEPLOYER_IDENTITY (or any other variable) is never clobbered by
+# the file, and a value only present in .env is still honored.
 
 set -e
 
 NETWORK=${1:-testnet}
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+
+# Load .env first, without overriding variables already present in the
+# environment. This makes the precedence order above explicit and uniform.
+if [ -f "$PROJECT_ROOT/.env" ]; then
+    set -a
+    # shellcheck disable=SC1091
+    . "$PROJECT_ROOT/.env"
+    set +a
+fi
+
 # Name of the Stellar CLI identity every deploy/initialize script signs with.
 # Overridable, but the default must match the identity provisioned by
 # .github/workflows/deploy-testnet.yml and documented in docs/DEPLOYMENT.md.
+# Resolved AFTER .env is sourced so it follows the same precedence as every
+# other setting (environment > .env > default).
 DEPLOYER_IDENTITY="${DEPLOYER_IDENTITY:-deployer}"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 OUTPUT_FILE="$PROJECT_ROOT/contract-ids-$NETWORK.json"
 
 echo "🚀 FaniLab Smart Contract Deployment"

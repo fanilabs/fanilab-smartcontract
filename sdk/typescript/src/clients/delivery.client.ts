@@ -260,6 +260,112 @@ export class DeliveryClient {
   }
 
   /**
-   * Check if a driver is registered
+   * Get deliveries by driver index
    */
-  async isDriverRegistered(driver: string): Promise<boolean>
+  async getDeliveriesByDriver(
+    driver: string,
+    options?: ContractInvokeOptions
+  ): Promise<DeliveryTypes.DeliveryPage> {
+    return decodeDeliveryPage(await this.invoker.call('get_deliveries_by_driver', [address(driver)], options));
+  }
+
+  /**
+   * Get the total number of deliveries
+   */
+  async getDeliveryCount(options?: ContractInvokeOptions): Promise<bigint> {
+    return BigInt(String(await this.invoker.call('get_delivery_count', [], options)));
+  }
+}
+
+const DELIVERY_STATUSES: ReadonlyArray<DeliveryTypes.DeliveryStatus> = [
+  'Pending',
+  'InTransit',
+  'Delivered',
+  'Cancelled',
+  'Disputed',
+];
+
+function decodeDelivery(raw: unknown): DeliveryTypes.DeliveryRecord {
+  const record = requireRecord(raw, 'delivery');
+  const status = requireField(record, 'status', 'delivery');
+  if (typeof status !== 'string' || !DELIVERY_STATUSES.includes(status as DeliveryTypes.DeliveryStatus)) {
+    throw new Error(
+      `Invalid delivery response: field 'status' has unexpected value ${JSON.stringify(status)}`
+    );
+  }
+  return {
+    deliveryId: requireField(record, 'deliveryId', 'delivery') as bigint,
+    sender: requireField(record, 'sender', 'delivery') as string,
+    recipient: requireField(record, 'recipient', 'delivery') as string,
+    driver: requireField(record, 'driver', 'delivery') as string,
+    status: status as DeliveryTypes.DeliveryStatus,
+    createdAt: requireField(record, 'createdAt', 'delivery') as bigint,
+    updatedAt: requireField(record, 'updatedAt', 'delivery') as bigint,
+  };
+}
+
+function requireRecord(raw: unknown, context: string): Record<string, unknown> {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    throw new Error(`Invalid ${context} response: expected an object, got ${typeof raw}`);
+  }
+  return raw as Record<string, unknown>;
+}
+
+function requireField(record: Record<string, unknown>, field: string, context: string): unknown {
+  if (!(field in record) || record[field] === undefined || record[field] === null) {
+    throw new Error(`Invalid ${context} response: missing required field '${field}'`);
+  }
+  return record[field];
+}
+
+function decodeOptional(raw: unknown): string | null {
+  if (raw === null || raw === undefined) {
+    return null;
+  }
+  return String(raw);
+}
+
+function decodeIds(raw: unknown): bigint[] {
+  if (!Array.isArray(raw)) {
+    throw new Error('Invalid batch response: expected an array of ids');
+  }
+  return raw.map((id) => BigInt(String(id)));
+}
+
+function decodeDriverProfile(raw: unknown): DeliveryTypes.DeliveryDriverProfile {
+  const record = requireRecord(raw, 'driver profile');
+  return {
+    driver: requireField(record, 'driver', 'driver profile') as string,
+    reputation: requireField(record, 'reputation', 'driver profile') as bigint,
+    completedDeliveries: requireField(record, 'completedDeliveries', 'driver profile') as bigint,
+  };
+}
+
+function decodeCombinedState(raw: unknown): DeliveryTypes.CombinedDeliveryState {
+  const record = requireRecord(raw, 'combined state');
+  return {
+    delivery: decodeDelivery(requireField(record, 'delivery', 'combined state')),
+    escrowStatus: requireField(record, 'escrowStatus', 'combined state') as string,
+  };
+}
+
+function decodeDeliveryPage(raw: unknown): DeliveryTypes.DeliveryPage {
+  const record = requireRecord(raw, 'delivery page');
+  const items = requireField(record, 'items', 'delivery page');
+  if (!Array.isArray(items)) {
+    throw new Error("Invalid delivery page response: field 'items' must be an array");
+  }
+  return {
+    items: items.map((item) => decodeDelivery(item)),
+    total: requireField(record, 'total', 'delivery page') as bigint,
+  };
+}
+
+function encodeDeliveryMetadata(deliveryId: bigint, metadata: DeliveryTypes.DeliveryMetadata): unknown {
+  return map([
+    [symbol('delivery_id'), u64(deliveryId)],
+    [symbol('description'), string(metadata.description)],
+    [symbol('weight'), u32(metadata.weight)],
+    [symbol('is_fragile'), bool(metadata.isFragile)],
+  ]);
+}

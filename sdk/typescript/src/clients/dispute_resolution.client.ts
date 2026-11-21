@@ -104,7 +104,8 @@ export class DisputeResolutionClient {
     params: DisputeResolutionTypes.AddEvidenceHashParams,
     options?: ContractInvokeOptions
   ): Promise<void> {
-    await this.invoker.call('add_evidence_hash', [address(params.caller), u64(params.deliveryId), bytes(new Uint8Array(Buffer.from(params.evidenceHash, 'hex')))], options);
+    const evidenceHashBytes = decodeEvidenceHash(params.evidenceHash);
+    await this.invoker.call('add_evidence_hash', [address(params.caller), u64(params.deliveryId), bytes(evidenceHashBytes)], options);
   }
 
   async resolveDisputeRefundSender(
@@ -148,6 +149,23 @@ export class DisputeResolutionClient {
     const result = await this.invoker.call('get_disputes_page', [u32(offset), u32(pageSize)], options);
     return (result as unknown[]).map((deliveryId) => BigInt(String(deliveryId)));
   }
+}
+
+/**
+ * Validate and decode a `BytesN<32>` evidence hash supplied as hex text.
+ *
+ * `Buffer.from(text, 'hex')` silently truncates at the first invalid pair
+ * and accepts odd-length input, so a malformed hash could reach the RPC as
+ * a short byte buffer (Issue #726). Require exactly 64 hexadecimal
+ * characters and reject anything else before decoding.
+ */
+function decodeEvidenceHash(evidenceHash: string): Uint8Array {
+  if (typeof evidenceHash !== 'string' || !/^[0-9a-fA-F]{64}$/.test(evidenceHash)) {
+    throw new TypeError(
+      `Invalid evidence hash: expected exactly 64 hexadecimal characters, received ${JSON.stringify(evidenceHash)}`
+    );
+  }
+  return new Uint8Array(Buffer.from(evidenceHash, 'hex'));
 }
 
 /**

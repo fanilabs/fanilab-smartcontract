@@ -15,6 +15,10 @@ DEPLOYER_IDENTITY="${DEPLOYER_IDENTITY:-deployer}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 OUTPUT_FILE="$PROJECT_ROOT/contract-ids-$NETWORK.json"
+# Shared lock guarding the manifest read-modify-write below. Concurrent
+# single-contract deploys serialize on this file so neither loses the other's
+# added contract ID.
+LOCK_FILE="$OUTPUT_FILE.lock"
 
 CONTRACTS=("escrow_contract" "delivery_contract" "dispute_resolution_contract" "fleet_management_contract" "identity_reputation_contract" "settlement_contract")
 
@@ -115,37 +119,61 @@ echo "" >&2
 
 # Merge this contract's ID into any existing output file for this network,
 # so deploying contracts one at a time doesn't clobber previously deployed IDs.
-declare -A DEPLOYED_IDS
-if [ -f "$OUTPUT_FILE" ]; then
-    for c in "${CONTRACTS[@]}"; do
-        existing_id=$(grep -o "\"$c\": *\"[^\"]*\"" "$OUTPUT_FILE" | grep -o '"[^"]*"$' | tr -d '"')
-        if [ -n "$existing_id" ]; then
-            DEPLOYED_IDS["$c"]="$existing_id"
-        fi
-    done
-fi
-DEPLOYED_IDS["$CONTRACT_NAME"]="$CONTRACT_ID"
-
-{
-    echo "{"
-    echo "  \"network\": \"$NETWORK\","
-    echo "  \"deployed_at\": \"$(date -u +"%Y-%m-%dT%H:%M:%SZ")\","
-    echo "  \"contracts\": {"
-    first=true
-    for c in "${CONTRACTS[@]}"; do
-        if [ -n "${DEPLOYED_IDS[$c]:-}" ]; then
-            if [ "$first" = true ]; then
-                first=false
-            else
-                echo ","
+#
+# The whole read-modify-write cycle runs under an exclusive flock on
+# $LOCK_FILE so two concurrent single-contract deploys cannot both read the
+# same manifest and overwrite each other's added IDs. The lock is held on fd 9
+# for the duration of the subshell and released automatically on exit.
+update_manifest() {
+    declare -A DEPLOYED_IDS
+    if [ -f "$OUTPUT_FILE" ]; then
+        for c in "${CONTRACTS[@]}"; do
+            existing_id=$(grep -o "\"$c\": *\"[^\"]*\"" "$OUTPUT_FILE" | grep -o '"[^"]*"$' | tr -d '"')
+            if [ -n "$existing_id" ]; then
+                DEPLOYED_IDS["$c"]="$existing_id"
             fi
-            printf '    "%s": "%s"' "$c" "${DEPLOYED_IDS[$c]}"
-        fi
+        done
+    fi
+    DEPLOYED_IDS["$CONTRACT_NAME"]="$CONTRACT_ID"
+
+    {
+        echo "{"
+        echo "  \"network\": \"$NETWORK\","
+        echo "  \"deployed_at\": \"$(date -u +"%Y-%m-%dT%H:%M:%SZ")\","
+        echo "  \"contracts\": {"
+        first=true
+        for c in "${CONTRACTS[@]}"; do
+            if [ -n "${DEPLOYED_IDS[$c]:-}" ]; then
+                if [ "$first" = true ]; then
+                    first=false
+                else
+                    echo ","
+                fi
+                printf '    "%s": "%s"' "$c" "${DEPLOYED_IDS[$c]}"
+            fi
+        done
+        echo ""
+        echo "  }"
+        echo "}"
+    } > "$OUTPUT_FILE"
+}
+
+if command -v flock &> /dev/null; then
+    (
+        flock -x 9
+        update_manifest
+    ) 9>"$LOCK_FILE"
+else
+    # Fallback for environments without flock: serialize via mkdir-based lock.
+    LOCK_DIR="$LOCK_FILE.d"
+    while ! mkdir "$LOCK_DIR" 2>/dev/null; do
+        sleep 0.1
     done
-    echo ""
-    echo "  }"
-    echo "}"
-} > "$OUTPUT_FILE"
+    trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT
+    update_manifest
+    rmdir "$LOCK_DIR" 2>/dev/null || true
+    trap - EXIT
+fi
 
 echo "${GREEN}✓ Contract ID saved to: $OUTPUT_FILE${NC}" >&2
 

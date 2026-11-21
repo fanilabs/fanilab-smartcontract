@@ -107,6 +107,38 @@ export function findExpiringPersistentKeys(
   );
 }
 
+/**
+ * Resolve the effective TTL extension target, honoring the network's maximum
+ * entry lifetime. Caller-provided values above the ceiling are clamped (with a
+ * warning) so the extension still succeeds; values that cannot be satisfied
+ * (e.g. not above the threshold) are rejected with a clear explanation.
+ */
+export function resolveTtlExtendTo(
+  requestedExtendTo: number,
+  thresholdLedgers: number,
+  networkMaxTtlLedgers: number
+): number {
+  if (!Number.isSafeInteger(networkMaxTtlLedgers) || networkMaxTtlLedgers <= 0) {
+    throw new RangeError('network maximum TTL must be a positive integer');
+  }
+  if (!Number.isSafeInteger(requestedExtendTo) || requestedExtendTo <= thresholdLedgers) {
+    throw new RangeError('ttlExtendToLedgers must be greater than ttlThresholdLedgers');
+  }
+  if (thresholdLedgers >= networkMaxTtlLedgers) {
+    throw new RangeError(
+      `ttlThresholdLedgers (${thresholdLedgers}) must be less than the network maximum TTL (${networkMaxTtlLedgers})`
+    );
+  }
+  if (requestedExtendTo > networkMaxTtlLedgers) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `ttlExtendToLedgers (${requestedExtendTo}) exceeds the network maximum TTL (${networkMaxTtlLedgers}); clamping to the network maximum`
+    );
+    return networkMaxTtlLedgers;
+  }
+  return requestedExtendTo;
+}
+
 function abortError(): Error {
   const error = new Error('Contract invocation was aborted');
   error.name = 'AbortError';
@@ -271,25 +303,35 @@ export class ContractInvoker {
     keys: xdr.LedgerKey[],
     config: ContractInvokeOptions
   ): Promise<void> {
-    const extendTo = config.ttlExtendToLedgers ?? DEFAULT_TTL_EXTEND_TO_LEDGERS;
+    const threshold = config.ttlThresholdLedgers ?? DEFAULT_TTL_THRESHOLD_LEDGERS;
+    const requestedExtendTo = config.ttlExtendToLedgers ?? DEFAULT_TTL_EXTEND_TO_LEDGERS;
+    const networkMaxTtlLedgers = await this.networkMaxTtlLedgers(server, config);
+    const extendTo = resolveTtlExtendTo(requestedExtendTo, threshold, networkMaxTtlLedgers);
+
     const account = await server.getAccount(accountId);
-    const ttlTransaction = new TransactionBuilder(account, {
+    const builder = new TransactionBuilder(account, {
       fee: config.fee ?? '100000',
       networkPassphrase,
-    })
-      .setTimeout(config.timeoutSeconds ?? 30)
-      .addOperation(Operation.extendFootprintTtl({ extendTo }))
-      .setSorobanData(
-        new SorobanDataBuilder(transactionData.build())
-          .setFootprint(dedupeLedgerKeys(keys), [])
-      )
-      .build();
-    ttlTransaction.sign(config.signer!);
-    const submitted = await server.sendTransaction(ttlTransaction);
+    }).setTimeout(config.timeoutSeconds ?? 30);
+
+    for (const key of keys) {
+      builder.addOperation(
+        Operation.extendFootprintTtl({
+          extendTo,
+        })
+      );
+    }
+
+    const transaction = builder.build();
+    transaction.setSorobanData(transactionData.build());
+    if (config.signer) {
+      transaction.sign(config.signer);
+    }
+    const submitted = await server.sendTransaction(transaction);
     if (submitted.status === 'ERROR') {
       throw new Error(
         formatSorobanError(
-          'TTL extension failed',
+          'Soroban TTL extension failed',
           submitted.errorResult?.toString() ?? 'unknown error'
         )
       );
@@ -299,15 +341,36 @@ export class ContractInvoker {
     }
   }
 
+  private async networkMaxTtlLedgers(
+    server: SorobanRpc.Server,
+    config: ContractInvokeOptions
+  ): Promise<number> {
+    if (config.networkMaxTtlLedgers !== undefined) {
+      if (!Number.isSafeInteger(config.networkMaxTtlLedgers) || config.networkMaxTtlLedgers <= 0) {
+        throw new RangeError('networkMaxTtlLedgers must be a positive integer');
+      }
+      return config.networkMaxTtlLedgers;
+    }
+
+    const network = await server.getNetwork();
+    const maxTtl = (network as { maxEntryTtl?: number }).maxEntryTtl;
+    if (maxTtl === undefined) {
+      throw new Error(
+        'Unable to determine the network maximum TTL; pass networkMaxTtlLedgers explicitly'
+      );
+    }
+    return maxTtl;
+  }
+
   private server(config: ContractInvokeOptions): SorobanRpc.Server {
     return new SorobanRpc.Server(this.require(config.rpcUrl, 'rpcUrl'), {
       allowHttp: config.rpcUrl?.startsWith('http://') ?? false,
     });
   }
 
-  private require(value: string | undefined, name: string): string {
-    if (!value) {
-      throw new Error(`${name} is required`);
+  private require<T>(value: T | undefined, name: string): T {
+    if (value === undefined) {
+      throw new Error(`Missing required option: ${name}`);
     }
     return value;
   }
@@ -317,12 +380,14 @@ export class ContractInvoker {
     hash: string,
     config: ContractInvokeOptions
   ): Promise<unknown> {
-    const timeoutMs = (config.timeoutSeconds ?? 30) * 1000;
+    const timeoutMs = config.pollTimeoutMs ?? 30_000;
+    const intervalMs = config.pollIntervalMs ?? 1_000;
     const deadline = Date.now() + timeoutMs;
+
     while (Date.now() < deadline) {
       const result = await awaitPollResult(
         server.getTransaction(hash),
-        Math.max(deadline - Date.now(), 1),
+        Math.max(deadline - Date.now(), 0),
         'Timed out waiting for transaction result',
         config.signal
       );
@@ -330,9 +395,9 @@ export class ContractInvoker {
         return result.returnValue ? native(result.returnValue) : undefined;
       }
       if (result.status === SorobanRpc.Api.GetTransactionStatus.FAILED) {
-        throw new Error(formatSorobanError('Soroban transaction failed', hash));
+        throw new Error(formatSorobanError('Soroban transaction failed', result.resultXdr?.toString()));
       }
-      await delay(1000, config.signal);
+      await delay(intervalMs, config.signal);
     }
     throw new Error('Timed out waiting for transaction result');
   }

@@ -17,10 +17,17 @@ ALLOW_MULTISIGNER_ADMIN="${ALLOW_MULTISIGNER_ADMIN:-false}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 CONTRACT_IDS_FILE="$PROJECT_ROOT/contract-ids-$NETWORK.json"
+# Durable receipt recording each confirmed initialization stage and its
+# transaction hash. Written incrementally so an interrupted run can be
+# reconciled/resumed by an operator.
+RECEIPT_FILE="${INIT_RECEIPT_FILE:-$PROJECT_ROOT/init-receipt-$NETWORK.json}"
+# When true, stages already recorded as confirmed in the receipt are skipped.
+RESUME_INIT="${RESUME_INIT:-true}"
 
 echo "🔧 Initializing FaniLab Smart Contracts"
 echo "======================================"
 echo "Network: $NETWORK"
+echo "Receipt: $RECEIPT_FILE"
 echo ""
 
 # Check if contract IDs file exists
@@ -182,73 +189,78 @@ verify_deployed_contract "settlement_contract" "$SETTLEMENT_ID"
 
 echo ""
 
+# ---------------------------------------------------------------------------
+# Durable initialization receipt
+# ---------------------------------------------------------------------------
+# The receipt is a JSON document written incrementally after each confirmed
+# stage. It records the network, the manifest, and for every stage the
+# contract, the invoked function, the transaction hash, and a timestamp.
+# Operators can inspect it after an interruption to see exactly which stages
+# completed and resume from there (RESUME_INIT=true, the default).
+
+receipt_init() {
+    if [ -f "$RECEIPT_FILE" ]; then
+        echo "↻ Found existing receipt: $RECEIPT_FILE"
+        echo "  Confirmed stages will be skipped (set RESUME_INIT=false to re-run all)."
+        return
+    fi
+    local started_at
+    started_at=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    cat > "$RECEIPT_FILE" <<EOF
+{
+  "network": "$NETWORK",
+  "manifest": "$CONTRACT_IDS_FILE",
+  "started_at": "$started_at",
+  "stages": []
+}
+EOF
+    echo "✓ Created receipt: $RECEIPT_FILE"
+}
+
+# Returns 0 if the given stage is already recorded as confirmed.
+receipt_has_stage() {
+    local stage=$1
+    [ -f "$RECEIPT_FILE" ] || return 1
+    grep -q "\"stage\": *\"$stage\"" "$RECEIPT_FILE"
+}
+
+# Append a confirmed stage (with its transaction hash) to the receipt.
+receipt_record_stage() {
+    local stage=$1
+    local contract_id=$2
+    local function_name=$3
+    local tx_hash=$4
+    local recorded_at
+    recorded_at=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+    local entry
+    entry=$(printf '    {"stage": "%s", "contract": "%s", "function": "%s", "tx_hash": "%s", "confirmed_at": "%s"}' \
+        "$stage" "$contract_id" "$function_name" "$tx_hash" "$recorded_at")
+
+    # Insert the entry before the closing "stages" array bracket. The receipt
+    # is small and machine-generated, so a targeted rewrite is sufficient.
+    local tmp
+    tmp=$(mktemp)
+    awk -v entry="$entry" '
+        /^  \]\$/ && !done {
+            if (last) { print last "," }
+            print entry
+            done = 1
+            next
+        }
+        { if (last) print last; last = $0 }
+        END { if (last) print last }
+    ' "$RECEIPT_FILE" > "$tmp"
+    mv "$tmp" "$RECEIPT_FILE"
+}
+
+receipt_init
+
+echo ""
+
 invoke_contract() {
     local contract_id=$1
     shift
-    stellar contract invoke \
-        --id "$contract_id" \
-        --source "$DEPLOYER_IDENTITY" \
-        --network "$NETWORK" \
-        -- "$@"
-}
+    ste
 
-DISPUTE_TIME_LIMIT=${DISPUTE_TIME_LIMIT:-86400}
-DISPUTE_RESOLUTION_LIMIT=${DISPUTE_RESOLUTION_LIMIT:-86400}
-
-echo "Escrow Contract: $ESCROW_ID"
-echo "Delivery Contract: $DELIVERY_ID"
-echo "Dispute Resolution Contract: $DISPUTE_ID"
-echo "Fleet Management Contract: $FLEET_ID"
-echo "Identity Reputation Contract: $IDENTITY_ID"
-echo "Settlement Contract: $SETTLEMENT_ID"
-echo ""
-
-echo "Initializing Escrow Contract..."
-invoke_contract "$ESCROW_ID" init \
-    --admin "$ADMIN_ADDRESS" \
-    --token "$TOKEN_ADDRESS" \
-    --platform_fee_bps "${PLATFORM_FEE_BPS:-250}"
-echo "✓ Escrow initialized"
-
-echo "Initializing Delivery Contract..."
-invoke_contract "$DELIVERY_ID" init \
-    --admin "$ADMIN_ADDRESS" \
-    --escrow_contract "$ESCROW_ID"
-echo "✓ Delivery initialized"
-
-echo "Initializing Dispute Resolution Contract..."
-invoke_contract "$DISPUTE_ID" init \
-    --admin "$ADMIN_ADDRESS" \
-    --delivery_contract "$DELIVERY_ID" \
-    --escrow_contract "$ESCROW_ID" \
-    --dispute_time_limit "$DISPUTE_TIME_LIMIT" \
-    --dispute_resolution_limit "$DISPUTE_RESOLUTION_LIMIT"
-echo "✓ Dispute resolution initialized"
-
-echo "Initializing Fleet Management Contract..."
-invoke_contract "$FLEET_ID" init \
-    --admin "$ADMIN_ADDRESS"
-echo "✓ Fleet management initialized"
-
-echo "Initializing Identity Reputation Contract..."
-invoke_contract "$IDENTITY_ID" init \
-    --admin "$ADMIN_ADDRESS" \
-    --delivery_contract "$DELIVERY_ID" \
-    --dispute_contract "$DISPUTE_ID"
-echo "✓ Identity reputation initialized"
-
-echo "Initializing Settlement Contract..."
-invoke_contract "$SETTLEMENT_ID" init \
-    --admin "$ADMIN_ADDRESS" \
-    --escrow_contract "$ESCROW_ID"
-echo "✓ Settlement initialized"
-echo ""
-
-echo "Wiring contract integrations..."
-invoke_contract "$DELIVERY_ID" set_escrow_contract \
-    --admin "$ADMIN_ADDRESS" \
-    --escrow_contract "$ESCROW_ID"
-invoke_contract "$DELIVERY_ID" set_dispute_resolution_contract \
-    --admin "$ADMIN_ADDRESS" \
-    --dispute_contract "$DISPUTE_ID"
-invoke_contract "$DELIVERY_ID" set_identity_rep
+/* … truncated 2179 chars — edit only what you need near the top … */

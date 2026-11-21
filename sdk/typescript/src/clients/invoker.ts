@@ -15,6 +15,20 @@ import { formatSorobanError } from './error-codes';
 
 export type ScVal = xdr.ScVal;
 
+/**
+ * Opt-in receipt describing a successful write invocation. Returned only when
+ * `ContractInvokeOptions.returnReceipt` is enabled; otherwise `call` keeps
+ * returning the native return value so existing callers are unaffected.
+ */
+export interface InvocationReceipt {
+  /** Transaction hash of the submitted invocation. */
+  hash: string;
+  /** Ledger sequence in which the transaction was included. */
+  ledger: number;
+  /** Native return value of the invoked contract function, if any. */
+  result: unknown;
+}
+
 export function address(value: string): ScVal {
   return new Address(value).toScVal();
 }
@@ -262,143 +276,45 @@ export class ContractInvoker {
       );
     }
     if (submitted.status === 'PENDING') {
-      return this.waitForResult(server, submitted.hash, config);
+      const result = await this.waitForResult(server, submitted.hash, config);
+      if (config.returnReceipt) {
+        const receipt = await this.buildReceipt(server, submitted.hash, result, config);
+        return receipt;
+      }
+      return result;
     }
     return undefined;
   }
 
-  private async expiringFootprintKeys(
-    server: SorobanRpc.Server,
-    transactionData: SorobanDataBuilder,
-    config: ContractInvokeOptions
-  ): Promise<xdr.LedgerKey[]> {
-    const threshold = config.ttlThresholdLedgers ?? DEFAULT_TTL_THRESHOLD_LEDGERS;
-    const extendTo = config.ttlExtendToLedgers ?? DEFAULT_TTL_EXTEND_TO_LEDGERS;
-    if (!Number.isSafeInteger(threshold) || threshold <= 0) {
-      throw new RangeError('ttlThresholdLedgers must be a positive integer');
-    }
-    if (!Number.isSafeInteger(extendTo) || extendTo <= threshold) {
-      throw new RangeError('ttlExtendToLedgers must be greater than ttlThresholdLedgers');
-    }
-
-    const candidates = dedupeLedgerKeys(
-      [
-        ...transactionData.getReadOnly(),
-        ...transactionData.getReadWrite(),
-      ].filter(canExtendTtl)
-    );
-    if (candidates.length === 0) {
-      return [];
-    }
-
-    const ledgerEntries = await server.getLedgerEntries(...candidates);
-    return findExpiringPersistentKeys(ledgerEntries.entries, ledgerEntries.latestLedger, threshold);
-  }
-
-  private async extendFootprintTtl(
-    server: SorobanRpc.Server,
-    accountId: string,
-    networkPassphrase: string,
-    transactionData: SorobanDataBuilder,
-    keys: xdr.LedgerKey[],
-    config: ContractInvokeOptions
-  ): Promise<void> {
-    const threshold = config.ttlThresholdLedgers ?? DEFAULT_TTL_THRESHOLD_LEDGERS;
-    const requestedExtendTo = config.ttlExtendToLedgers ?? DEFAULT_TTL_EXTEND_TO_LEDGERS;
-    const networkMaxTtlLedgers = await this.networkMaxTtlLedgers(server, config);
-    const extendTo = resolveTtlExtendTo(requestedExtendTo, threshold, networkMaxTtlLedgers);
-
-    const account = await server.getAccount(accountId);
-    const builder = new TransactionBuilder(account, {
-      fee: config.fee ?? '100000',
-      networkPassphrase,
-    }).setTimeout(config.timeoutSeconds ?? 30);
-
-    for (const key of keys) {
-      builder.addOperation(
-        Operation.extendFootprintTtl({
-          extendTo,
-        })
-      );
-    }
-
-    const transaction = builder.build();
-    transaction.setSorobanData(transactionData.build());
-    if (config.signer) {
-      transaction.sign(config.signer);
-    }
-    const submitted = await server.sendTransaction(transaction);
-    if (submitted.status === 'ERROR') {
-      throw new Error(
-        formatSorobanError(
-          'Soroban TTL extension failed',
-          submitted.errorResult?.toString() ?? 'unknown error'
-        )
-      );
-    }
-    if (submitted.status === 'PENDING') {
-      await this.waitForResult(server, submitted.hash, config);
-    }
-  }
-
-  private async networkMaxTtlLedgers(
-    server: SorobanRpc.Server,
-    config: ContractInvokeOptions
-  ): Promise<number> {
-    if (config.networkMaxTtlLedgers !== undefined) {
-      if (!Number.isSafeInteger(config.networkMaxTtlLedgers) || config.networkMaxTtlLedgers <= 0) {
-        throw new RangeError('networkMaxTtlLedgers must be a positive integer');
-      }
-      return config.networkMaxTtlLedgers;
-    }
-
-    const network = await server.getNetwork();
-    const maxTtl = (network as { maxEntryTtl?: number }).maxEntryTtl;
-    if (maxTtl === undefined) {
-      throw new Error(
-        'Unable to determine the network maximum TTL; pass networkMaxTtlLedgers explicitly'
-      );
-    }
-    return maxTtl;
-  }
-
-  private server(config: ContractInvokeOptions): SorobanRpc.Server {
-    return new SorobanRpc.Server(this.require(config.rpcUrl, 'rpcUrl'), {
-      allowHttp: config.rpcUrl?.startsWith('http://') ?? false,
-    });
-  }
-
-  private require<T>(value: T | undefined, name: string): T {
-    if (value === undefined) {
-      throw new Error(`Missing required option: ${name}`);
-    }
-    return value;
-  }
-
-  private async waitForResult(
+  /**
+   * Build an invocation receipt for a confirmed transaction, resolving the
+   * inclusion ledger from the network. Falls back to the latest known ledger
+   * when the transaction response does not expose one.
+   */
+  private async buildReceipt(
     server: SorobanRpc.Server,
     hash: string,
+    result: unknown,
     config: ContractInvokeOptions
-  ): Promise<unknown> {
-    const timeoutMs = config.pollTimeoutMs ?? 30_000;
-    const intervalMs = config.pollIntervalMs ?? 1_000;
-    const deadline = Date.now() + timeoutMs;
-
-    while (Date.now() < deadline) {
-      const result = await awaitPollResult(
-        server.getTransaction(hash),
-        Math.max(deadline - Date.now(), 0),
-        'Timed out waiting for transaction result',
-        config.signal
-      );
-      if (result.status === SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
-        return result.returnValue ? native(result.returnValue) : undefined;
+  ): Promise<InvocationReceipt> {
+    let ledger = 0;
+    try {
+      const response = await server.getTransaction(hash);
+      if (response && typeof response.ledger === 'number') {
+        ledger = response.ledger;
       }
-      if (result.status === SorobanRpc.Api.GetTransactionStatus.FAILED) {
-        throw new Error(formatSorobanError('Soroban transaction failed', result.resultXdr?.toString()));
-      }
-      await delay(intervalMs, config.signal);
+    } catch {
+      // Fall through to latest ledger lookup below.
     }
-    throw new Error('Timed out waiting for transaction result');
+    if (ledger === 0) {
+      try {
+        const latest = await server.getLatestLedger();
+        ledger = latest.sequence;
+      } catch {
+        ledger = 0;
+      }
+    }
+    return { hash, ledger, result };
   }
-}
+
+/* … truncated 4716 chars — edit only what you need near the top … */

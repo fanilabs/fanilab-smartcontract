@@ -170,6 +170,36 @@ function awaitPollResult<T>(
   });
 }
 
+/**
+ * Validate numeric maintenance/TTL options up front so configuration mistakes
+ * fail fast, before any RPC (account fetch or simulation) is issued.
+ */
+function validateMaintenanceOptions(config: ContractInvokeOptions): void {
+  const numericOptions: Array<[keyof ContractInvokeOptions, number | undefined]> = [
+    ['ttlThresholdLedgers', config.ttlThresholdLedgers],
+    ['ttlExtendToLedgers', config.ttlExtendToLedgers],
+  ];
+  for (const [name, value] of numericOptions) {
+    if (value === undefined) {
+      continue;
+    }
+    if (typeof value !== 'number' || !Number.isFinite(value) || !Number.isInteger(value) || value < 0) {
+      throw new Error(
+        `Invalid ${String(name)}: expected a non-negative integer, received ${String(value)}`
+      );
+    }
+  }
+  if (
+    config.ttlThresholdLedgers !== undefined &&
+    config.ttlExtendToLedgers !== undefined &&
+    config.ttlExtendToLedgers < config.ttlThresholdLedgers
+  ) {
+    throw new Error(
+      `Invalid TTL configuration: ttlExtendToLedgers (${config.ttlExtendToLedgers}) must be >= ttlThresholdLedgers (${config.ttlThresholdLedgers})`
+    );
+  }
+}
+
 export class ContractInvoker {
   private readonly contract: Contract;
   private readonly defaults: ContractInvokeOptions;
@@ -185,6 +215,8 @@ export class ContractInvoker {
     options: ContractInvokeOptions = {}
   ): Promise<unknown> {
     const config = { ...this.defaults, ...options };
+    // Validate maintenance/TTL configuration before any RPC is issued.
+    validateMaintenanceOptions(config);
     const server = this.server(config);
     const accountId = this.require(config.sourceAccount, 'sourceAccount');
     const networkPassphrase = this.require(config.networkPassphrase, 'networkPassphrase');
@@ -260,112 +292,6 @@ export class ContractInvoker {
 
   private async expiringFootprintKeys(
     server: SorobanRpc.Server,
-    transactionData: SorobanDataBuilder,
-    config: ContractInvokeOptions
-  ): Promise<xdr.LedgerKey[]> {
-    const threshold = config.ttlThresholdLedgers ?? DEFAULT_TTL_THRESHOLD_LEDGERS;
-    const extendTo = config.ttlExtendToLedgers ?? DEFAULT_TTL_EXTEND_TO_LEDGERS;
-    if (!Number.isSafeInteger(threshold) || threshold < 0) {
-      throw new Error('ttlThresholdLedgers must be a non-negative safe integer');
-    }
-    if (!Number.isSafeInteger(extendTo) || extendTo <= 0) {
-      throw new Error('ttlExtendToLedgers must be a positive safe integer');
-    }
-    if (extendTo <= threshold) {
-      throw new Error('ttlExtendToLedgers must be greater than ttlThresholdLedgers');
-    }
+    transactionData: Soro
 
-    const footprint = transactionData.build().resources().footprint();
-    const keys = [...footprint.readOnly(), ...footprint.readWrite()];
-    if (keys.length === 0) {
-      return [];
-    }
-
-    const response = await server.getLedgerEntries(...keys);
-    const latestLedger = response.latestLedger;
-    const entries = response.entries.map((entry) => ({
-      key: entry.key,
-      liveUntilLedgerSeq: entry.liveUntilLedgerSeq,
-    }));
-    return findExpiringPersistentKeys(entries, latestLedger, threshold);
-  }
-
-  private async extendFootprintTtl(
-    server: SorobanRpc.Server,
-    accountId: string,
-    networkPassphrase: string,
-    transactionData: SorobanDataBuilder,
-    keys: xdr.LedgerKey[],
-    config: ContractInvokeOptions
-  ): Promise<void> {
-    const extendTo = config.ttlExtendToLedgers ?? DEFAULT_TTL_EXTEND_TO_LEDGERS;
-    const account = await server.getAccount(accountId);
-    const builder = new TransactionBuilder(account, {
-      fee: config.fee ?? '100000',
-      networkPassphrase,
-    }).setTimeout(config.timeoutSeconds ?? 30);
-    for (const key of keys) {
-      builder.addOperation(Operation.extendFootprintTtl({ extendTo }));
-    }
-    const transaction = builder.build();
-    const simulation = await server.simulateTransaction(transaction);
-    if (SorobanRpc.Api.isSimulationError(simulation)) {
-      throw new Error(formatSorobanError('TTL extension simulation failed', simulation.error));
-    }
-    const assembled = SorobanRpc.assembleTransaction(transaction, simulation).build();
-    if (config.signer) {
-      assembled.sign(config.signer);
-    }
-    const submitted = await server.sendTransaction(assembled);
-    if (submitted.status === 'ERROR') {
-      throw new Error(
-        formatSorobanError(
-          'TTL extension submission failed',
-          submitted.errorResult?.toString() ?? 'unknown error'
-        )
-      );
-    }
-    if (submitted.status === 'PENDING') {
-      await this.waitForResult(server, submitted.hash, config);
-    }
-  }
-
-  private async waitForResult(
-    server: SorobanRpc.Server,
-    hash: string,
-    config: ContractInvokeOptions
-  ): Promise<unknown> {
-    const pollIntervalMs = config.pollIntervalMs ?? 1000;
-    const timeoutMs = config.pollTimeoutMs ?? 30_000;
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-      const request = server.getTransaction(hash);
-      const response = await awaitPollResult(
-        request,
-        Math.max(0, deadline - Date.now()),
-        'Timed out waiting for transaction result',
-        config.signal
-      );
-      if (response.status === SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
-        return response.returnValue ? native(response.returnValue) : undefined;
-      }
-      if (response.status === SorobanRpc.Api.GetTransactionStatus.FAILED) {
-        throw new Error('Transaction failed');
-      }
-      await delay(pollIntervalMs, config.signal);
-    }
-    throw new Error('Timed out waiting for transaction result');
-  }
-
-  private server(config: ContractInvokeOptions): SorobanRpc.Server {
-    const rpcUrl = this.require(config.rpcUrl, 'rpcUrl');
-    return new SorobanRpc.Server(rpcUrl, { allowHttp: config.allowHttp ?? false });
-  }
-
-  private require<T>(value: T | undefined, name: string): T {
-    if (value === undefined) {
-      throw new Error(`Missing required option: ${name}`);
-    }
-    return value;
-  }
-}
+/* … truncated 4054 chars — edit only what you need near the top … */

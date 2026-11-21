@@ -84,9 +84,10 @@ jobs:
         fi
 
     - name: Save Deployment Artifacts
+      if: always()
       uses: actions/upload-artifact@v7
       with:
         name: deployment-info
         path: contract-ids-*.json
-        if-no-files-found: error
+        if-no-files-found: warn
 

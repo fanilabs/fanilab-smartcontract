@@ -65,6 +65,7 @@ export function native(value: ScVal): unknown {
 
 const DEFAULT_TTL_THRESHOLD_LEDGERS = 100_000;
 const DEFAULT_TTL_EXTEND_TO_LEDGERS = 518_400;
+const LEDGER_ENTRY_BATCH_LIMIT = 200;
 
 function canExtendTtl(key: xdr.LedgerKey): boolean {
   return key.type === 'contractCode' ||
@@ -257,26 +258,29 @@ export class ContractInvoker {
       throw new RangeError('ttlThresholdLedgers must be a positive integer');
     }
     if (!Number.isSafeInteger(extendTo) || extendTo <= threshold) {
-      throw new RangeError('ttlExtendToLedgers must be greater than ttlThresholdLedgers');
+      throw new RangeError('ttlExtendToLedgers must be a positive integer greater than ttlThresholdLedgers');
     }
+
     const footprint = transactionData.build().resources().footprint();
-    const keys = [
-      ...footprint.readOnly(),
-      ...footprint.readWrite(),
-    ];
+    const keys = [...footprint.readOnly(), ...footprint.readWrite()];
     if (keys.length === 0) {
       return [];
     }
-    const latestLedger = await this.latestLedger(server);
-    const entries = await server.getLedgerEntries(...keys);
-    return findExpiringPersistentKeys(
-      entries.entries.map((entry) => ({
-        key: entry.key,
-        liveUntilLedgerSeq: entry.liveUntilLedgerSeq,
-      })),
-      latestLedger,
-      threshold
-    );
+
+    const latestLedger = (await server.getLatestLedger()).sequence;
+    const entries: Array<{ key: xdr.LedgerKey; liveUntilLedgerSeq?: number }> = [];
+    for (let start = 0; start < keys.length; start += LEDGER_ENTRY_BATCH_LIMIT) {
+      const chunk = keys.slice(start, start + LEDGER_ENTRY_BATCH_LIMIT);
+      const response = await server.getLedgerEntries(...chunk);
+      for (const entry of response.entries) {
+        entries.push({
+          key: entry.key,
+          liveUntilLedgerSeq: entry.liveUntilLedgerSeq,
+        });
+      }
+    }
+
+    return findExpiringPersistentKeys(entries, latestLedger, threshold);
   }
 
   private async extendFootprintTtl(
@@ -284,41 +288,32 @@ export class ContractInvoker {
     accountId: string,
     networkPassphrase: string,
     transactionData: SorobanDataBuilder,
-    keys: xdr.LedgerKey[],
+    expiringKeys: xdr.LedgerKey[],
     config: ContractInvokeOptions
   ): Promise<void> {
     const extendTo = config.ttlExtendToLedgers ?? DEFAULT_TTL_EXTEND_TO_LEDGERS;
     const account = await server.getAccount(accountId);
     const builder = new TransactionBuilder(account, {
-      fee: config.ttlMaintenanceFee ?? config.fee ?? '100000',
+      fee: config.fee ?? '100000',
       networkPassphrase,
     }).setTimeout(config.timeoutSeconds ?? 30);
-    for (const key of keys) {
+
+    for (const key of expiringKeys) {
       builder.addOperation(Operation.extendFootprintTtl({ extendTo }));
     }
-    const ttlTransaction = builder.build();
-    const ttlSimulation = await server.simulateTransaction(ttlTransaction);
-    if (SorobanRpc.Api.isSimulationError(ttlSimulation)) {
-      throw new Error(formatSorobanError('TTL maintenance simulation failed', ttlSimulation.error));
-    }
 
-    const maxFee = config.ttlMaintenanceMaxFee;
-    if (maxFee !== undefined) {
-      const minFee = ttlSimulation.minResourceFee;
-      if (minFee !== undefined && BigInt(minFee) > BigInt(maxFee)) {
-        throw new Error(
-          `TTL maintenance resource fee ${minFee} exceeds configured ceiling ${maxFee}`
-        );
-      }
+    const transaction = builder.build();
+    const simulation = await server.simulateTransaction(transaction);
+    if (SorobanRpc.Api.isSimulationError(simulation)) {
+      throw new Error(formatSorobanError('Soroban TTL extension simulation failed', simulation.error));
     }
-
-    const prepared = SorobanRpc.assembleTransaction(ttlTransaction, ttlSimulation).build();
+    const prepared = SorobanRpc.assembleTransaction(transaction, simulation).build();
     const signed = await this.signPrepared(prepared, networkPassphrase, config);
     const submitted = await server.sendTransaction(signed);
     if (submitted.status === 'ERROR') {
       throw new Error(
         formatSorobanError(
-          'TTL maintenance submission failed',
+          'Soroban TTL extension failed',
           submitted.errorResult?.toString() ?? 'unknown error'
         )
       );
@@ -326,11 +321,6 @@ export class ContractInvoker {
     if (submitted.status === 'PENDING') {
       await this.waitForResult(server, submitted.hash, config);
     }
-  }
-
-  private async latestLedger(server: SorobanRpc.Server): Promise<number> {
-    const latest = await server.getLatestLedger();
-    return latest.sequence;
   }
 
   private async waitForResult(
@@ -341,10 +331,11 @@ export class ContractInvoker {
     const timeoutMs = config.pollTimeoutMs ?? 30_000;
     const intervalMs = config.pollIntervalMs ?? 1_000;
     const deadline = Date.now() + timeoutMs;
+
     while (Date.now() < deadline) {
       const result = await awaitPollResult(
         server.getTransaction(hash),
-        Math.max(0, deadline - Date.now()),
+        Math.max(deadline - Date.now(), 1),
         'Timed out waiting for transaction result',
         config.signal
       );
@@ -352,15 +343,20 @@ export class ContractInvoker {
         return result.returnValue ? native(result.returnValue) : undefined;
       }
       if (result.status === SorobanRpc.Api.GetTransactionStatus.FAILED) {
-        throw new Error(formatSorobanError('Soroban transaction failed', hash));
+        throw new Error(formatSorobanError('Soroban transaction failed', result.resultXdr?.toString() ?? 'unknown error'));
       }
       await delay(intervalMs, config.signal);
     }
+
     throw new Error('Timed out waiting for transaction result');
   }
 
   private server(config: ContractInvokeOptions): SorobanRpc.Server {
-    return new SorobanRpc.Server(this.require(config.rpcUrl, 'rpcUrl'));
+    if (config.server) {
+      return config.server;
+    }
+    const rpcUrl = this.require(config.rpcUrl, 'rpcUrl');
+    return new SorobanRpc.Server(rpcUrl, { allowHttp: rpcUrl.startsWith('http://') });
   }
 
   private require<T>(value: T | undefined, name: string): T {

@@ -47,6 +47,12 @@ OUTPUT_FILE="$PROJECT_ROOT/contract-ids-$NETWORK.json"
 # retry can reuse already-deployed contract IDs instead of redeploying.
 JOURNAL_FILE="$PROJECT_ROOT/.deploy-journal-$NETWORK.log"
 
+# Minimum deployer balance (in stroops) required before the batch starts.
+# Each contract deploy consumes fees + a minimum account reserve; this is a
+# conservative floor so the batch does not fail partway through. Overridable
+# via MIN_DEPLOYER_BALANCE_STROOPS (default 10 XLM = 100,000,000 stroops).
+MIN_DEPLOYER_BALANCE_STROOPS="${MIN_DEPLOYER_BALANCE_STROOPS:-100000000}"
+
 # Resolve config file: explicit path (flag/env) wins, else default repo .env.
 if [ -n "$CONFIG_FILE" ]; then
     if [ ! -f "$CONFIG_FILE" ]; then
@@ -111,6 +117,39 @@ if ! stellar keys address "$DEPLOYER_IDENTITY" &> /dev/null; then
     exit 1
 fi
 
+# Preflight: verify the deployer account is funded before deploying anything.
+# Stops the batch before the first deployment if the required reserve is
+# unavailable, so a partially-deployed batch is never left behind.
+echo "${BLUE}Checking deployer funding...${NC}"
+DEPLOYER_ADDRESS=$(stellar keys address "$DEPLOYER_IDENTITY" 2>/dev/null)
+if [ -z "$DEPLOYER_ADDRESS" ]; then
+    echo "${RED}❌ Could not resolve address for identity '$DEPLOYER_IDENTITY'.${NC}"
+    exit 1
+fi
+
+# Query the account balance in stroops. `stellar account balance` prints the
+# native balance; fall back to an empty value if the account is unfunded.
+DEPLOYER_BALANCE_STROOPS=$(stellar account balance \
+    --account "$DEPLOYER_ADDRESS" \
+    --network "$NETWORK" 2>/dev/null || true)
+
+if [ -z "$DEPLOYER_BALANCE_STROOPS" ]; then
+    echo "${RED}❌ Deployer account '$DEPLOYER_ADDRESS' is not funded on $NETWORK.${NC}"
+    echo "   Fund it before deploying (e.g. via friendbot on testnet):"
+    echo "     curl \"https://friendbot.stellar.org?addr=$DEPLOYER_ADDRESS\""
+    exit 1
+fi
+
+if [ "$DEPLOYER_BALANCE_STROOPS" -lt "$MIN_DEPLOYER_BALANCE_STROOPS" ] 2>/dev/null; then
+    echo "${RED}❌ Insufficient deployer balance on $NETWORK.${NC}"
+    echo "   Account:  $DEPLOYER_ADDRESS"
+    echo "   Balance:  $DEPLOYER_BALANCE_STROOPS stroops"
+    echo "   Required: $MIN_DEPLOYER_BALANCE_STROOPS stroops (MIN_DEPLOYER_BALANCE_STROOPS)"
+    echo "   Fund the account and re-run this script."
+    exit 1
+fi
+
+echo "${GREEN}✓ Deployer funded: $DEPLOYER_BALANCE_STROOPS stroops (min $MIN_DEPLOYER_BALANCE_STROOPS)${NC}"
 echo "${GREEN}✓ Prerequisites OK${NC}"
 echo ""
 

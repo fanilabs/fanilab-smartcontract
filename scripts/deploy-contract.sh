@@ -65,6 +65,12 @@ fi
 
 CONTRACTS=("escrow_contract" "delivery_contract" "dispute_resolution_contract" "fleet_management_contract" "identity_reputation_contract" "settlement_contract")
 
+# Minimum native (XLM) balance, in stroops, the deployer must hold before a
+# deployment is attempted. Each contract deploy consumes fees + a storage
+# reserve; this reserve is a conservative floor so a batch never starts on an
+# underfunded account. Overridable via env for networks with different costs.
+MIN_DEPLOYER_RESERVE_STROOPS="${MIN_DEPLOYER_RESERVE_STROOPS:-100000000}" # 10 XLM
+
 # Colors for output
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
@@ -129,7 +135,41 @@ if ! stellar keys address "$DEPLOYER_IDENTITY" &> /dev/null; then
     exit 1
 fi
 
-echo "${GREEN}✓ Prerequisites OK${NC}" >&2
+# Preflight funding: verify the deployer holds at least the required reserve
+# before any deployment is attempted, so a batch never starts on an
+# underfunded account and fails partway through.
+DEPLOYER_ADDRESS=$(stellar keys address "$DEPLOYER_IDENTITY")
+if ! DEPLOYER_BALANCE=$(stellar account balance "$DEPLOYER_ADDRESS" --network "$NETWORK" 2>/dev/null); then
+    echo "${RED}❌ Unable to read deployer balance for '$DEPLOYER_IDENTITY' ($DEPLOYER_ADDRESS) on $NETWORK.${NC}" >&2
+    echo "   The account may be unfunded. Fund it before deploying:" >&2
+    echo "       stellar keys fund $DEPLOYER_IDENTITY --network $NETWORK" >&2
+    exit 1
+fi
+
+# Parse the native XLM balance (in stroops) from the CLI output. The CLI
+# reports balances as "<amount> XLM" lines; take the first XLM amount.
+DEPLOYER_BALANCE_STROOPS=$(printf '%s\n' "$DEPLOYER_BALANCE" \
+    | grep -Eo '[0-9]+(\.[0-9]+)? XLM' \
+    | head -n1 \
+    | awk '{ printf "%d", $1 * 10000000 }')
+
+if [ -z "$DEPLOYER_BALANCE_STROOPS" ]; then
+    echo "${RED}❌ Could not determine deployer XLM balance for '$DEPLOYER_IDENTITY'.${NC}" >&2
+    echo "   Raw balance output:" >&2
+    printf '%s\n' "$DEPLOYER_BALANCE" >&2
+    exit 1
+fi
+
+if [ "$DEPLOYER_BALANCE_STROOPS" -lt "$MIN_DEPLOYER_RESERVE_STROOPS" ]; then
+    echo "${RED}❌ Insufficient deployer funds on $NETWORK.${NC}" >&2
+    echo "   Required reserve: $MIN_DEPLOYER_RESERVE_STROOPS stroops" >&2
+    echo "   Available balance: $DEPLOYER_BALANCE_STROOPS stroops" >&2
+    echo "   Fund '$DEPLOYER_IDENTITY' before deploying:" >&2
+    echo "       stellar keys fund $DEPLOYER_IDENTITY --network $NETWORK" >&2
+    exit 1
+fi
+
+echo "${GREEN}✓ Prerequisites OK (deployer balance: $DEPLOYER_BALANCE_STROOPS stroops)${NC}" >&2
 echo "" >&2
 
 # Build the contract

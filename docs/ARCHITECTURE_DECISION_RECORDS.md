@@ -400,6 +400,33 @@ boundary, not unaddressed duplication (see Issue #77's disposition in
 
 ---
 
+---
+
+## ADR-009: Residual Allowance Revocation in Settlement Operations
+
+**Date**: 2026-02-15  
+**Status**: Accepted
+
+### Context
+When executing settlements through router contracts or cross-contract token transfers, allowances granted to intermediary routers can leave residual spend authority if transfer amounts are adjusted or execution is completed below approved ceilings.
+
+### Decision
+Implement explicit residual allowance clearance or zero-allowance resets upon final settlement disposition:
+1. Contracts executing routed settlements must ensure any excess allowance granted to transfer delegates is zeroed upon completion.
+2. In client implementations and automated settlement orchestrators, verify allowance states and reset lingering allowances post-transaction.
+
+### Rationale
+- Prevents dormant allowances from being exploited in subsequent contract compromises.
+- Enforces strict principle of least privilege for contract spend authorizations.
+
+### Consequences
+**Positive**:
+- Eliminates attack surface from dangling token spend allowances.
+- Guarantees predictable accounting across multi-hop settlement transactions.
+
+**Negative**:
+- May require an additional authorization call if exact settlement amounts cannot be predetermined.
+
 ## Template for New ADRs
 
 ```markdown

@@ -2,10 +2,39 @@
 
 # FaniLab Smart Contracts - Complete Deployment Script
 # Usage: ./deploy-all-contracts.sh [testnet|mainnet]
+#
+# Configuration file precedence (highest to lowest):
+#   1. Explicit path via --config <path> flag
+#   2. Explicit path via CONFIG_FILE environment variable
+#   3. Default repository .env at the project root
 
 set -e
 
-NETWORK=${1:-testnet}
+# Parse optional --config flag before positional args.
+CONFIG_FILE="${CONFIG_FILE:-}"
+POSITIONAL=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --config)
+            if [ -z "${2:-}" ]; then
+                echo "❌ --config requires a path argument" >&2
+                exit 1
+            fi
+            CONFIG_FILE="$2"
+            shift 2
+            ;;
+        --config=*)
+            CONFIG_FILE="${1#--config=}"
+            shift
+            ;;
+        *)
+            POSITIONAL+=("$1")
+            shift
+            ;;
+    esac
+done
+
+NETWORK=${POSITIONAL[0]:-testnet}
 # Name of the Stellar CLI identity every deploy/initialize script signs with.
 # Overridable, but the default must match the identity provisioned by
 # .github/workflows/deploy-testnet.yml and documented in docs/DEPLOYMENT.md.
@@ -13,6 +42,28 @@ DEPLOYER_IDENTITY="${DEPLOYER_IDENTITY:-deployer}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 OUTPUT_FILE="$PROJECT_ROOT/contract-ids-$NETWORK.json"
+
+# Resolve config file: explicit path (flag/env) wins, else default repo .env.
+if [ -n "$CONFIG_FILE" ]; then
+    if [ ! -f "$CONFIG_FILE" ]; then
+        echo "❌ Config file not found: $CONFIG_FILE" >&2
+        exit 1
+    fi
+    echo "Using config file: $CONFIG_FILE"
+else
+    CONFIG_FILE="$PROJECT_ROOT/.env"
+    if [ -f "$CONFIG_FILE" ]; then
+        echo "Using default config file: $CONFIG_FILE"
+    fi
+fi
+
+# Load config if present (explicit or default).
+if [ -f "$CONFIG_FILE" ]; then
+    set -a
+    # shellcheck disable=SC1090
+    . "$CONFIG_FILE"
+    set +a
+fi
 
 echo "🚀 FaniLab Smart Contract Deployment"
 echo "=================================="

@@ -2,11 +2,39 @@
 
 # FaniLab Smart Contracts - Single Contract Deployment Script
 # Usage: ./deploy-contract.sh <contract_name> [network]
+#
+# Configuration file precedence (highest to lowest):
+#   1. --config <path> CLI flag
+#   2. CONFIG_FILE environment variable
+#   3. Default repository .env at the project root
 
 set -e
 
-CONTRACT_NAME=$1
-NETWORK=${2:-testnet}
+CONFIG_FILE=""
+ARGS=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --config)
+            if [ -z "${2:-}" ]; then
+                echo "❌ --config requires a path argument" >&2
+                exit 1
+            fi
+            CONFIG_FILE="$2"
+            shift 2
+            ;;
+        --config=*)
+            CONFIG_FILE="${1#--config=}"
+            shift
+            ;;
+        *)
+            ARGS+=("$1")
+            shift
+            ;;
+    esac
+done
+
+CONTRACT_NAME=${ARGS[0]:-}
+NETWORK=${ARGS[1]:-testnet}
 # Name of the Stellar CLI identity every deploy/initialize script signs with.
 # Overridable, but the default must match the identity provisioned by
 # .github/workflows/deploy-testnet.yml and documented in docs/DEPLOYMENT.md.
@@ -15,6 +43,21 @@ DEPLOYER_IDENTITY="${DEPLOYER_IDENTITY:-deployer}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 OUTPUT_FILE="$PROJECT_ROOT/contract-ids-$NETWORK.json"
+
+# Resolve the configuration file: explicit flag > env var > default .env.
+if [ -z "$CONFIG_FILE" ]; then
+    CONFIG_FILE="${CONFIG_FILE_ENV:-}"
+fi
+if [ -z "$CONFIG_FILE" ]; then
+    CONFIG_FILE="$PROJECT_ROOT/.env"
+fi
+
+if [ -f "$CONFIG_FILE" ]; then
+    # shellcheck disable=SC1090
+    set -a
+    . "$CONFIG_FILE"
+    set +a
+fi
 
 CONTRACTS=("escrow_contract" "delivery_contract" "dispute_resolution_contract" "fleet_management_contract" "identity_reputation_contract" "settlement_contract")
 
@@ -26,7 +69,7 @@ RED='\033[0;31m'
 NC='\033[0m' # No Color
 
 if [ -z "$CONTRACT_NAME" ]; then
-    echo "${RED}❌ Usage: $0 <contract_name> [network]${NC}" >&2
+    echo "${RED}❌ Usage: $0 <contract_name> [network] [--config <path>]${NC}" >&2
     echo "   Valid contract names: ${CONTRACTS[*]}" >&2
     exit 1
 fi
@@ -49,6 +92,7 @@ echo "🚀 FaniLab Smart Contract Deployment" >&2
 echo "==================================" >&2
 echo "Contract: $CONTRACT_NAME" >&2
 echo "Network: $NETWORK" >&2
+echo "Config: $CONFIG_FILE" >&2
 echo "Date: $(date)" >&2
 echo "" >&2
 

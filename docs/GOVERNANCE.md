@@ -49,6 +49,13 @@ Secure two-step process:
 
 This prevents accidental transfers and ensures new admin has access.
 
+#### Stale Proposal Expiration and Reset Semantics
+
+To prevent lingering, unexecuted admin removal nominations from posing operational risks or becoming attack surfaces over extended time horizons:
+1. **Proposal TTL**: Pending nominations or removals have an effective validity lifetime (recommended 7 days).
+2. **Explicit Cancellation**: The proposing admin may cancel any unfinalized nomination immediately via `cancel_admin_proposal`.
+3. **State Resets**: Any mutation to the underlying admin roster automatically resets pending proposal state, invalidating in-flight proposals that were formulated against prior roster snapshots.
+
 ### Dispute Resolution Admin Roster
 
 `dispute_resolution_contract` is governed by a **multi-admin roster** rather
@@ -71,6 +78,13 @@ structural guards:
 (`admin_added` / `admin_removed`) whose payload is `(caller, affected_admin)`,
 so the remaining admins and any off-chain monitoring can detect roster changes
 immediately. `list_admins` always reflects the current roster.
+
+#### Stale Proposal Expiration and Reset Semantics
+
+To prevent lingering, unexecuted admin removal nominations from posing operational risks or becoming attack surfaces over extended time horizons:
+1. **Proposal TTL**: Pending nominations or removals have an effective validity lifetime (recommended 7 days).
+2. **Explicit Cancellation**: The proposing admin may cancel any unfinalized nomination immediately via `cancel_admin_proposal`.
+3. **State Resets**: Any mutation to the underlying admin roster automatically resets pending proposal state, invalidating in-flight proposals that were formulated against prior roster snapshots.
 
 ### Dispute Resolution
 

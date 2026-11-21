@@ -215,6 +215,21 @@ export class ContractInvoker {
     return undefined;
   }
 
+  private require(value: string | undefined, field: string): string {
+    if (value === undefined) {
+      throw new Error(`Missing required configuration: ${field} is not set`);
+    }
+    if (value.trim() === '') {
+      throw new Error(`Invalid configuration: ${field} must be a non-empty string`);
+    }
+    return value;
+  }
+
+  private server(config: ContractInvokeOptions): SorobanRpc.Server {
+    const serverUrl = this.require(config.serverUrl, 'serverUrl');
+    return new SorobanRpc.Server(serverUrl);
+  }
+
   private async expiringFootprintKeys(
     server: SorobanRpc.Server,
     transactionData: SorobanDataBuilder,
@@ -263,28 +278,19 @@ export class ContractInvoker {
           .build()
       )
       .build();
-    const simulation = await server.simulateTransaction(ttlTransaction);
-    if (SorobanRpc.Api.isSimulationError(simulation)) {
-      throw new Error(
-        formatSorobanError('Soroban TTL extension simulation failed', simulation.error)
-      );
-    }
-    const prepared = SorobanRpc.assembleTransaction(ttlTransaction, simulation).build();
-    prepared.sign(this.require(config.signer, 'signer'));
-
-    const submitted = await server.sendTransaction(prepared);
+    ttlTransaction.sign(config.signer as Keypair);
+    const submitted = await server.sendTransaction(ttlTransaction);
     if (submitted.status === 'ERROR') {
       throw new Error(
         formatSorobanError(
-          'Soroban TTL extension submission failed',
+          'Soroban TTL extension failed',
           submitted.errorResult?.toString() ?? 'unknown error'
         )
       );
     }
-    if (submitted.status !== 'PENDING') {
-      throw new Error(`Soroban TTL extension returned unexpected status: ${submitted.status}`);
+    if (submitted.status === 'PENDING') {
+      await this.waitForResult(server, submitted.hash, config);
     }
-    await this.waitForResult(server, submitted.hash, config);
   }
 
   private async waitForResult(
@@ -292,77 +298,27 @@ export class ContractInvoker {
     hash: string,
     config: ContractInvokeOptions
   ): Promise<unknown> {
-    const initialDelay = config.pollingIntervalMs ?? 1000;
-    const maxDelay = config.pollingMaxIntervalMs ?? 10_000;
-    const timeout = config.pollingTimeoutMs ?? 300_000;
-    if (!Number.isFinite(initialDelay) || initialDelay <= 0) {
-      throw new RangeError('pollingIntervalMs must be a positive number');
-    }
-    if (!Number.isFinite(maxDelay) || maxDelay < initialDelay) {
-      throw new RangeError('pollingMaxIntervalMs must be greater than or equal to pollingIntervalMs');
-    }
-    if (!Number.isFinite(timeout) || timeout <= 0) {
-      throw new RangeError('pollingTimeoutMs must be a positive number');
-    }
-
-    const deadline = Date.now() + timeout;
-    let interval = initialDelay;
-    for (;;) {
+    const timeoutMs = config.pollTimeoutMs ?? 30_000;
+    const intervalMs = config.pollIntervalMs ?? 1_000;
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
       if (config.signal?.aborted) {
         throw abortError();
       }
-      if (Date.now() >= deadline) {
-        throw new Error(`Timed out waiting for Soroban transaction: ${hash}`);
-      }
-      const remaining = deadline - Date.now();
       const result = await awaitPollResult(
         server.getTransaction(hash),
-        remaining,
-        `Timed out waiting for Soroban transaction: ${hash}`,
+        Math.max(deadline - Date.now(), 0),
+        `Timed out waiting for transaction ${hash}`,
         config.signal
       );
-      if (result.status === 'SUCCESS') {
+      if (result.status === SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
         return result.returnValue ? native(result.returnValue) : undefined;
       }
-      if (result.status === 'FAILED') {
-        const errorCodes = result.diagnosticEventsXdr?.flatMap(({ event }) => {
-          const value = event.body.value.data;
-          return value.type === 'scvError' && value.error.type === 'sceContract'
-            ? [value.error.contractCode]
-            : [];
-        });
-        const failure = errorCodes?.length
-          ? `Error(Contract, #${errorCodes.join(', #')})`
-          : hash;
-        throw new Error(
-          formatSorobanError('Soroban transaction failed', failure, errorCodes ?? [])
-        );
+      if (result.status === SorobanRpc.Api.GetTransactionStatus.FAILED) {
+        throw new Error(formatSorobanError('Soroban transaction failed', hash));
       }
-      const remainingAfterPoll = deadline - Date.now();
-      if (remainingAfterPoll <= 0) {
-        throw new Error(`Timed out waiting for Soroban transaction: ${hash}`);
-      }
-      await delay(Math.min(interval, remainingAfterPoll), config.signal);
-      interval = Math.min(interval * 2, maxDelay);
+      await delay(intervalMs, config.signal);
     }
-  }
-
-  private server(config: ContractInvokeOptions): SorobanRpc.Server {
-    return new SorobanRpc.Server(
-      this.require(config.serverUrl, 'serverUrl'),
-      {
-        allowHttp: config.serverUrl?.startsWith('http://'),
-        ...(config.timeout === undefined ? {} : { timeout: config.timeout }),
-      }
-    );
-  }
-
-  private require<T>(value: T | undefined, name: string): T {
-    if (value === undefined) {
-      throw new Error(`Contract invocation requires ${name}`);
-    }
-    return value;
+    throw new Error(`Timed out waiting for transaction ${hash}`);
   }
 }
-
-export type Signer = Keypair;

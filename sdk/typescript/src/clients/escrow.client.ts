@@ -82,6 +82,9 @@ export class EscrowClient {
 
   /**
    * Set volume thresholds and fee discounts for high-volume senders (admin only)
+   *
+   * Volume thresholds are wide on-chain counters, so they are encoded as
+   * `i128` (not `u32`) to preserve large values without rounding.
    */
   async setVolumeTiers(
     params: EscrowTypes.SetVolumeTiersParams,
@@ -89,7 +92,7 @@ export class EscrowClient {
   ): Promise<void> {
     const tiers = vec(params.tiers.map((tier) =>
       map([
-        ['volume_threshold', u32(tier.volumeThreshold)],
+        ['volume_threshold', i128(tier.volumeThreshold)],
         ['discount_bps', u32(tier.discountBps)],
       ])
     ));
@@ -98,20 +101,25 @@ export class EscrowClient {
 
   /**
    * Get configured sender volume thresholds and discounts
+   *
+   * Thresholds are returned as `bigint` so wide on-chain counters are not
+   * rounded through `Number`.
    */
   async getVolumeTiers(options?: ContractInvokeOptions): Promise<EscrowTypes.VolumeTier[]> {
     const result = await this.invoker.call('get_volume_tiers', [], options);
     return (result as Array<Record<string, unknown>>).map((tier) => ({
-      volumeThreshold: Number(tier.volume_threshold),
+      volumeThreshold: BigInt(String(tier.volume_threshold)),
       discountBps: Number(tier.discount_bps),
     }));
   }
 
   /**
    * Get a sender's accumulated volume
+   *
+   * Returned as `bigint` to preserve wide on-chain counters without rounding.
    */
-  async getSenderVolume(sender: string, options?: ContractInvokeOptions): Promise<number> {
-    return Number(await this.invoker.call('get_sender_volume', [address(sender)], options));
+  async getSenderVolume(sender: string, options?: ContractInvokeOptions): Promise<bigint> {
+    return BigInt(String(await this.invoker.call('get_sender_volume', [address(sender)], options)));
   }
 
   /**
@@ -225,56 +233,6 @@ export class EscrowClient {
     params: EscrowTypes.MarkHoldbackEscrowParams,
     options?: ContractInvokeOptions
   ): Promise<void> {
-    await this.invoker.call('mark_holdback_escrow', [address(params.caller), u64(params.deliveryId)], options);
-  }
+    await this.invoker.call('mark_holdback_escrow', [address(params.caller), u64(params.deliveryId)], option
 
-  /**
-   * Get an escrow record by delivery id
-   */
-  async getEscrow(deliveryId: bigint, options?: ContractInvokeOptions): Promise<EscrowRecord | null> {
-    const result = await this.invoker.call('get_escrow', [u64(deliveryId)], options);
-    return decodeEscrow(result);
-  }
-
-  /**
-   * Check whether an escrow exists for a delivery id
-   */
-  async escrowExists(deliveryId: bigint, options?: ContractInvokeOptions): Promise<boolean> {
-    return Boolean(await this.invoker.call('escrow_exists', [u64(deliveryId)], options));
-  }
-}
-
-/**
- * Decode a raw escrow record returned by the contract into the public
- * `EscrowRecord` shape. The `delivery_id` is a `u64` and is preserved as a
- * `bigint` so identifiers above `Number.MAX_SAFE_INTEGER` round-trip without
- * precision loss.
- */
-function decodeEscrow(raw: unknown): EscrowRecord | null {
-  if (raw === null || raw === undefined) {
-    return null;
-  }
-  const record = raw as Record<string, unknown>;
-  return {
-    deliveryId: BigInt(String(record.delivery_id)),
-    sender: String(record.sender),
-    recipient: String(record.recipient),
-    driver: String(record.driver),
-    token: String(record.token),
-    amount: BigInt(String(record.amount)),
-    status: String(record.status),
-    fleetId: record.fleet_id === null || record.fleet_id === undefined ? undefined : BigInt(String(record.fleet_id)),
-  };
-}
-
-/**
- * Decode a list of u64 identifiers returned by the contract, preserving them
- * as `bigint` values.
- */
-function decodeIds(raw: unknown): bigint[] {
-  return (raw as unknown[]).map((id) => BigInt(String(id)));
-}
-
-function xdrVoid(): ReturnType<typeof nativeToScVal> {
-  return nativeToScVal(null);
-}
+/* … truncated 1686 chars — edit only what you need near the top … */

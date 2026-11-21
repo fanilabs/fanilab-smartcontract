@@ -4,6 +4,7 @@ import { Client } from "./client.js";
 import { Invoker } from "./invoker.js";
 
 const RPC_URL = "http://localhost:8000/rpc";
+const REMOTE_RPC_URL = "http://rpc.example.com/rpc";
 const CONTRACT_ID = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM";
 const CONTRACT_ADDRESS = Address.fromString(CONTRACT_ID);
 
@@ -159,5 +160,46 @@ describe("Invoker", () => {
     } finally {
       process.off("unhandledRejection", onUnhandled);
     }
+  });
+
+  describe("HTTP transport opt-in", () => {
+    it("allows loopback http URLs without an explicit insecure option", () => {
+      expect(() =>
+        new Client({
+          contractId: CONTRACT_ID,
+          networkPassphrase: Networks.TESTNET,
+          rpcUrl: "http://127.0.0.1:8000/rpc",
+        }),
+      ).not.toThrow();
+
+      expect(() =>
+        new Client({
+          contractId: CONTRACT_ID,
+          networkPassphrase: Networks.TESTNET,
+          rpcUrl: "http://[::1]:8000/rpc",
+        }),
+      ).not.toThrow();
+    });
+
+    it("rejects remote http URLs unless the insecure option is set", () => {
+      expect(() =>
+        new Client({
+          contractId: CONTRACT_ID,
+          networkPassphrase: Networks.TESTNET,
+          rpcUrl: REMOTE_RPC_URL,
+        }),
+      ).toThrow(/insecure|http/i);
+    });
+
+    it("allows remote http URLs when the insecure option is explicitly set", () => {
+      expect(() =>
+        new Client({
+          contractId: CONTRACT_ID,
+          networkPassphrase: Networks.TESTNET,
+          rpcUrl: REMOTE_RPC_URL,
+          allowHttp: true,
+        }),
+      ).not.toThrow();
+    });
   });
 });

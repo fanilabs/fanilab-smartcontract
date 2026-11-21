@@ -111,6 +111,48 @@ export function findExpiringPersistentKeys(
     .map((entry) => entry.key);
 }
 
+/**
+ * Returns true when the given hostname refers to the local machine
+ * (loopback). Only these hosts are allowed to use plain HTTP automatically.
+ */
+export function isLoopbackHost(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  if (host === 'localhost' || host === '::1' || host === '0:0:0:0:0:0:0:1') {
+    return true;
+  }
+  // IPv4 loopback range 127.0.0.0/8
+  return /^127(?:\.\d{1,3}){3}$/.test(host);
+}
+
+/**
+ * Decide whether plain HTTP is permitted for the given RPC URL.
+ *
+ * HTTP is opt-in: it is only allowed when the caller explicitly sets
+ * `allowInsecureHttp`, or when the URL points at a loopback host. Remote
+ * endpoints must use HTTPS unless the insecure option is set.
+ */
+export function assertHttpTransportAllowed(url: string, allowInsecureHttp?: boolean): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`Invalid RPC URL: ${url}`);
+  }
+  if (parsed.protocol !== 'http:') {
+    return;
+  }
+  if (allowInsecureHttp === true) {
+    return;
+  }
+  if (isLoopbackHost(parsed.hostname)) {
+    return;
+  }
+  throw new Error(
+    `Refusing insecure HTTP RPC transport for remote endpoint ${parsed.host}. ` +
+      'Use HTTPS, or set allowInsecureHttp: true to opt in explicitly.'
+  );
+}
+
 function abortError(): Error {
   const error = new Error('Contract invocation was aborted');
   error.name = 'AbortError';
@@ -255,43 +297,6 @@ export class ContractInvoker {
       );
       transaction = await buildTransaction();
       simulation = await server.simulateTransaction(transaction);
-      if (SorobanRpc.Api.isSimulationError(simulation)) {
-        throw new Error(formatSorobanError('Soroban simulation failed', simulation.error));
-      }
-    }
+      if 
 
-    const assembled = SorobanRpc.assembleTransaction(transaction, simulation);
-    if (config.authEntryHook) {
-      const authEntries = assembled.getAuth();
-      const signedEntries = await config.authEntryHook(authEntries, {
-        transaction,
-        simulation,
-        networkPassphrase,
-        latestLedger: simulation.latestLedger,
-      });
-      assembled.setSorobanData(
-        new SorobanDataBuilder(assembled.build().sorobanData).setAuth(signedEntries).build()
-      );
-    }
-    const prepared = assembled.build();
-    prepared.sign(config.signer);
-    const submitted = await server.sendTransaction(prepared);
-    if (submitted.status === 'ERROR') {
-      throw new Error(
-        formatSorobanError(
-          'Soroban submission failed',
-          submitted.errorResult?.toString() ?? 'unknown error'
-        )
-      );
-    }
-    if (submitted.status === 'PENDING') {
-      return this.waitForResult(server, submitted.hash, config);
-    }
-    return undefined;
-  }
-
-  private async expiringFootprintKeys(
-    server: SorobanRpc.Server,
-    transactionData: Soro
-
-/* … truncated 4054 chars — edit only what you need near the top … */
+/* … truncated 1310 chars — edit only what you need near the top … */

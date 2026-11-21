@@ -88,6 +88,35 @@ invoke_contract() {
         -- "$@"
 }
 
+# Read a currently-installed peer address from a contract's view function.
+# Returns the address on success, or an empty string if the view is not
+# available (e.g. not yet wired). Used to skip redundant timed peer setters
+# that would otherwise queue a pending proposal for an already-installed peer.
+read_active_address() {
+    local contract_id=$1
+    shift
+    invoke_contract "$contract_id" "$@" 2>/dev/null | tr -d '"' | tr -d '[:space:]' || true
+}
+
+# Invoke a timed peer setter only when the target differs from the active
+# installed address. Skips identical assignments so initial wiring leaves no
+# redundant pending proposals for current dependencies.
+set_peer_if_changed() {
+    local contract_id=$1
+    local view_fn=$2
+    local setter_fn=$3
+    local current=$4
+    shift 4
+
+    local active
+    active=$(read_active_address "$contract_id" "$view_fn")
+    if [ -n "$active" ] && [ "$active" = "$current" ]; then
+        echo "  ↷ $setter_fn already set to $current (skipping)"
+        return 0
+    fi
+    invoke_contract "$contract_id" "$setter_fn" "$@"
+}
+
 DISPUTE_TIME_LIMIT=${DISPUTE_TIME_LIMIT:-86400}
 DISPUTE_RESOLUTION_LIMIT=${DISPUTE_RESOLUTION_LIMIT:-86400}
 
@@ -141,54 +170,54 @@ echo "✓ Settlement initialized"
 echo ""
 
 echo "Wiring contract integrations..."
-invoke_contract "$DELIVERY_ID" set_escrow_contract \
+set_peer_if_changed "$DELIVERY_ID" get_escrow_contract set_escrow_contract "$ESCROW_ID" \
     --admin "$ADMIN_ADDRESS" \
     --escrow_contract "$ESCROW_ID"
-invoke_contract "$DELIVERY_ID" set_dispute_resolution_contract \
+set_peer_if_changed "$DELIVERY_ID" get_dispute_resolution_contract set_dispute_resolution_contract "$DISPUTE_ID" \
     --admin "$ADMIN_ADDRESS" \
     --dispute_contract "$DISPUTE_ID"
-invoke_contract "$DELIVERY_ID" set_identity_reputation_contract \
+set_peer_if_changed "$DELIVERY_ID" get_identity_reputation_contract set_identity_reputation_contract "$IDENTITY_ID" \
     --admin "$ADMIN_ADDRESS" \
     --identity_contract "$IDENTITY_ID"
 
-invoke_contract "$DISPUTE_ID" set_delivery_contract \
+set_peer_if_changed "$DISPUTE_ID" get_delivery_contract set_delivery_contract "$DELIVERY_ID" \
     --caller "$ADMIN_ADDRESS" \
     --delivery_contract "$DELIVERY_ID"
-invoke_contract "$DISPUTE_ID" set_escrow_contract \
+set_peer_if_changed "$DISPUTE_ID" get_escrow_contract set_escrow_contract "$ESCROW_ID" \
     --caller "$ADMIN_ADDRESS" \
     --escrow_contract "$ESCROW_ID"
-invoke_contract "$DISPUTE_ID" set_identity_reputation_contract \
+set_peer_if_changed "$DISPUTE_ID" get_identity_reputation_contract set_identity_reputation_contract "$IDENTITY_ID" \
     --caller "$ADMIN_ADDRESS" \
     --reputation_contract "$IDENTITY_ID"
 
-invoke_contract "$FLEET_ID" set_escrow_contract \
+set_peer_if_changed "$FLEET_ID" get_escrow_contract set_escrow_contract "$ESCROW_ID" \
     --admin "$ADMIN_ADDRESS" \
     --escrow_contract "$ESCROW_ID"
-invoke_contract "$FLEET_ID" set_identity_contract \
+set_peer_if_changed "$FLEET_ID" get_identity_contract set_identity_contract "$IDENTITY_ID" \
     --admin "$ADMIN_ADDRESS" \
     --identity_contract "$IDENTITY_ID"
 
-invoke_contract "$IDENTITY_ID" set_delivery_contract \
+set_peer_if_changed "$IDENTITY_ID" get_delivery_contract set_delivery_contract "$DELIVERY_ID" \
     --admin "$ADMIN_ADDRESS" \
     --delivery_contract "$DELIVERY_ID"
-invoke_contract "$IDENTITY_ID" set_dispute_contract \
+set_peer_if_changed "$IDENTITY_ID" get_dispute_contract set_dispute_contract "$DISPUTE_ID" \
     --admin "$ADMIN_ADDRESS" \
     --dispute_contract "$DISPUTE_ID"
 
-invoke_contract "$SETTLEMENT_ID" set_escrow_contract \
+set_peer_if_changed "$SETTLEMENT_ID" get_escrow_contract set_escrow_contract "$ESCROW_ID" \
     --admin "$ADMIN_ADDRESS" \
     --new_escrow "$ESCROW_ID"
 
-invoke_contract "$ESCROW_ID" set_delivery_contract \
+set_peer_if_changed "$ESCROW_ID" get_delivery_contract set_delivery_contract "$DELIVERY_ID" \
     --admin "$ADMIN_ADDRESS" \
     --delivery_contract "$DELIVERY_ID"
-invoke_contract "$ESCROW_ID" set_dispute_resolution_contract \
+set_peer_if_changed "$ESCROW_ID" get_dispute_resolution_contract set_dispute_resolution_contract "$DISPUTE_ID" \
     --admin "$ADMIN_ADDRESS" \
     --dispute_contract "$DISPUTE_ID"
-invoke_contract "$ESCROW_ID" set_identity_reputation_contract \
+set_peer_if_changed "$ESCROW_ID" get_identity_reputation_contract set_identity_reputation_contract "$IDENTITY_ID" \
     --admin "$ADMIN_ADDRESS" \
     --identity_contract "$IDENTITY_ID"
-invoke_contract "$ESCROW_ID" set_fleet_management_contract \
+set_peer_if_changed "$ESCROW_ID" get_fleet_management_contract set_fleet_management_contract "$FLEET_ID" \
     --admin "$ADMIN_ADDRESS" \
     --fleet_contract "$FLEET_ID"
 

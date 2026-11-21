@@ -119,4 +119,45 @@ describe("Invoker", () => {
     await invoker.invoke(source, tx, { signAuthEntries: hook });
     expect(hook).toHaveBeenCalledTimes(1);
   });
+
+  it("does not leak a rejected request as an unhandled rejection when the signal is pre-aborted", async () => {
+    const source = Keypair.random();
+    const tx = new TransactionBuilder(await server.getAccount(source.publicKey()), {
+      fee: "100",
+      networkPassphrase: Networks.TESTNET,
+    })
+      .addOperation(Operation.invokeContractFunction({
+        contract: CONTRACT_ID,
+        function: "transfer",
+        args: [],
+      }))
+      .setTimeout(30)
+      .build();
+
+    vi.spyOn(server, "prepareTransaction").mockResolvedValue(tx);
+
+    const controller = new AbortController();
+    controller.abort();
+
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandled);
+
+    try {
+      const hook = vi.fn(async (entries: xdr.SorobanAuthorizationEntry[]) => entries);
+      await invoker.invoke(source, tx, {
+        signAuthEntries: hook,
+        signal: controller.signal,
+      });
+
+      // Allow any stray microtasks to settle before asserting.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
 });

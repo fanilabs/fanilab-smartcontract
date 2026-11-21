@@ -144,6 +144,13 @@ function awaitPollResult<T>(
   signal?: AbortSignal
 ): Promise<T> {
   return new Promise((resolve, reject) => {
+    // Attach a rejection handler immediately so a rejected request never
+    // surfaces as an unhandled rejection, even when we bail out early below.
+    const settled = request.then(
+      (result) => ({ ok: true as const, result }),
+      (error: unknown) => ({ ok: false as const, error })
+    );
+
     if (signal?.aborted) {
       reject(abortError());
       return;
@@ -157,9 +164,8 @@ function awaitPollResult<T>(
     const timer = setTimeout(() => finish(() => reject(new Error(timeoutMessage))), timeoutMs);
     const onAbort = () => finish(() => reject(abortError()));
     signal?.addEventListener('abort', onAbort, { once: true });
-    request.then(
-      (result) => finish(() => resolve(result)),
-      (error: unknown) => finish(() => reject(error))
+    settled.then((outcome) =>
+      finish(() => (outcome.ok ? resolve(outcome.result) : reject(outcome.error)))
     );
   });
 }
@@ -259,23 +265,29 @@ export class ContractInvoker {
   ): Promise<xdr.LedgerKey[]> {
     const threshold = config.ttlThresholdLedgers ?? DEFAULT_TTL_THRESHOLD_LEDGERS;
     const extendTo = config.ttlExtendToLedgers ?? DEFAULT_TTL_EXTEND_TO_LEDGERS;
-    if (!Number.isSafeInteger(threshold) || threshold <= 0) {
-      throw new RangeError('ttlThresholdLedgers must be a positive integer');
+    if (!Number.isSafeInteger(threshold) || threshold < 0) {
+      throw new Error('ttlThresholdLedgers must be a non-negative safe integer');
     }
-    if (!Number.isSafeInteger(extendTo) || extendTo <= threshold) {
-      throw new RangeError('ttlExtendToLedgers must be greater than ttlThresholdLedgers');
+    if (!Number.isSafeInteger(extendTo) || extendTo <= 0) {
+      throw new Error('ttlExtendToLedgers must be a positive safe integer');
+    }
+    if (extendTo <= threshold) {
+      throw new Error('ttlExtendToLedgers must be greater than ttlThresholdLedgers');
     }
 
-    const candidates = [
-      ...transactionData.getReadOnly(),
-      ...transactionData.getReadWrite(),
-    ].filter(canExtendTtl);
-    if (candidates.length === 0) {
+    const footprint = transactionData.build().resources().footprint();
+    const keys = [...footprint.readOnly(), ...footprint.readWrite()];
+    if (keys.length === 0) {
       return [];
     }
 
-    const ledgerEntries = await server.getLedgerEntries(...candidates);
-    return findExpiringPersistentKeys(ledgerEntries.entries, ledgerEntries.latestLedger, threshold);
+    const response = await server.getLedgerEntries(...keys);
+    const latestLedger = response.latestLedger;
+    const entries = response.entries.map((entry) => ({
+      key: entry.key,
+      liveUntilLedgerSeq: entry.liveUntilLedgerSeq,
+    }));
+    return findExpiringPersistentKeys(entries, latestLedger, threshold);
   }
 
   private async extendFootprintTtl(
@@ -288,24 +300,27 @@ export class ContractInvoker {
   ): Promise<void> {
     const extendTo = config.ttlExtendToLedgers ?? DEFAULT_TTL_EXTEND_TO_LEDGERS;
     const account = await server.getAccount(accountId);
-    const ttlTransaction = new TransactionBuilder(account, {
+    const builder = new TransactionBuilder(account, {
       fee: config.fee ?? '100000',
       networkPassphrase,
-    })
-      .setTimeout(config.timeoutSeconds ?? 30)
-      .addOperation(Operation.extendFootprintTtl({ extendTo }))
-      .setSorobanData(
-        new SorobanDataBuilder(transactionData.build())
-          .setFootprint(keys, [])
-          .build()
-      )
-      .build();
-    ttlTransaction.sign(config.signer as Keypair);
-    const submitted = await server.sendTransaction(ttlTransaction);
+    }).setTimeout(config.timeoutSeconds ?? 30);
+    for (const key of keys) {
+      builder.addOperation(Operation.extendFootprintTtl({ extendTo }));
+    }
+    const transaction = builder.build();
+    const simulation = await server.simulateTransaction(transaction);
+    if (SorobanRpc.Api.isSimulationError(simulation)) {
+      throw new Error(formatSorobanError('TTL extension simulation failed', simulation.error));
+    }
+    const assembled = SorobanRpc.assembleTransaction(transaction, simulation).build();
+    if (config.signer) {
+      assembled.sign(config.signer);
+    }
+    const submitted = await server.sendTransaction(assembled);
     if (submitted.status === 'ERROR') {
       throw new Error(
         formatSorobanError(
-          'Soroban TTL extension failed',
+          'TTL extension submission failed',
           submitted.errorResult?.toString() ?? 'unknown error'
         )
       );
@@ -321,20 +336,21 @@ export class ContractInvoker {
     config: ContractInvokeOptions
   ): Promise<unknown> {
     const pollIntervalMs = config.pollIntervalMs ?? 1000;
-    const pollTimeoutMs = config.pollTimeoutMs ?? 30_000;
-    const deadline = Date.now() + pollTimeoutMs;
+    const timeoutMs = config.pollTimeoutMs ?? 30_000;
+    const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
-      const result = await awaitPollResult(
-        server.getTransaction(hash),
-        Math.max(deadline - Date.now(), 0),
+      const request = server.getTransaction(hash);
+      const response = await awaitPollResult(
+        request,
+        Math.max(0, deadline - Date.now()),
         'Timed out waiting for transaction result',
         config.signal
       );
-      if (result.status === SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
-        return result.returnValue ? native(result.returnValue) : undefined;
+      if (response.status === SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
+        return response.returnValue ? native(response.returnValue) : undefined;
       }
-      if (result.status === SorobanRpc.Api.GetTransactionStatus.FAILED) {
-        throw new Error(formatSorobanError('Soroban transaction failed', hash));
+      if (response.status === SorobanRpc.Api.GetTransactionStatus.FAILED) {
+        throw new Error('Transaction failed');
       }
       await delay(pollIntervalMs, config.signal);
     }
@@ -342,9 +358,8 @@ export class ContractInvoker {
   }
 
   private server(config: ContractInvokeOptions): SorobanRpc.Server {
-    return new SorobanRpc.Server(this.require(config.rpcUrl, 'rpcUrl'), {
-      allowHttp: config.allowHttp ?? false,
-    });
+    const rpcUrl = this.require(config.rpcUrl, 'rpcUrl');
+    return new SorobanRpc.Server(rpcUrl, { allowHttp: config.allowHttp ?? false });
   }
 
   private require<T>(value: T | undefined, name: string): T {

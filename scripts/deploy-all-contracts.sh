@@ -1,17 +1,21 @@
 #!/bin/bash
 
 # FaniLab Smart Contracts - Complete Deployment Script
-# Usage: ./deploy-all-contracts.sh [testnet|mainnet]
+# Usage: ./deploy-all-contracts.sh [testnet|mainnet] [--confirm-mainnet]
 #
 # Configuration file precedence (highest to lowest):
 #   1. Explicit path via --config <path> flag
 #   2. Explicit path via CONFIG_FILE environment variable
 #   3. Default repository .env at the project root
+#
+# Mainnet safety: deploying to mainnet requires the explicit --confirm-mainnet
+# flag. Without it the script aborts before any signed deployment begins.
 
 set -e
 
-# Parse optional --config flag before positional args.
+# Parse optional --config and --confirm-mainnet flags before positional args.
 CONFIG_FILE="${CONFIG_FILE:-}"
+CONFIRM_MAINNET=0
 POSITIONAL=()
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -25,6 +29,10 @@ while [ $# -gt 0 ]; do
             ;;
         --config=*)
             CONFIG_FILE="${1#--config=}"
+            shift
+            ;;
+        --confirm-mainnet)
+            CONFIRM_MAINNET=1
             shift
             ;;
         *)
@@ -52,6 +60,14 @@ JOURNAL_FILE="$PROJECT_ROOT/.deploy-journal-$NETWORK.log"
 # conservative floor so the batch does not fail partway through. Overridable
 # via MIN_DEPLOYER_BALANCE_STROOPS (default 10 XLM = 100,000,000 stroops).
 MIN_DEPLOYER_BALANCE_STROOPS="${MIN_DEPLOYER_BALANCE_STROOPS:-100000000}"
+
+# Mainnet gate: refuse to begin signed deployments without explicit consent.
+if [ "$NETWORK" = "mainnet" ] && [ "$CONFIRM_MAINNET" -ne 1 ]; then
+    echo "❌ Refusing to deploy to mainnet without explicit acknowledgement." >&2
+    echo "   Re-run with the --confirm-mainnet flag to proceed:" >&2
+    echo "     ./scripts/deploy-all-contracts.sh mainnet --confirm-mainnet" >&2
+    exit 1
+fi
 
 # Resolve config file: explicit path (flag/env) wins, else default repo .env.
 if [ -n "$CONFIG_FILE" ]; then
@@ -166,6 +182,27 @@ fi
 echo "${GREEN}✓ Build successful${NC}"
 echo ""
 
+# Show the source account and artifact hashes before any submission so the
+# operator can verify exactly what will be signed and deployed.
+echo "${BLUE}Deployment summary (pre-submission)...${NC}"
+echo "   Network:        $NETWORK"
+echo "   Source account: $DEPLOYER_ADDRESS (identity: $DEPLOYER_IDENTITY)"
+echo "   Artifact hashes (sha256):"
+for contract in escrow_contract delivery_contract dispute_resolution_contract fleet_management_contract identity_reputation_contract settlement_contract; do
+    wasm_path="$PROJECT_ROOT/target/wasm32v1-none/release/${contract}.wasm"
+    if [ -f "$wasm_path" ]; then
+        if command -v sha256sum &> /dev/null; then
+            wasm_hash=$(sha256sum "$wasm_path" | awk '{print $1}')
+        else
+            wasm_hash=$(shasum -a 256 "$wasm_path" | awk '{print $1}')
+        fi
+        echo "     $contract: $wasm_hash"
+    else
+        echo "     $contract: (missing)"
+    fi
+done
+echo ""
+
 # Deploy function
 deploy_contract() {
     local contract_name=$1
@@ -226,60 +263,40 @@ for i in "${!CONTRACTS[@]}"; do
         if [ $? -ne 0 ]; then
             echo "${RED}❌ Deployment failed for $contract${NC}"
             echo "   Partial progress saved to: $JOURNAL_FILE"
-            echo "   Re-run this script to resume from the journal."
+            echo "   Re-run this script to resume from the journal"
             exit 1
         fi
 
-        # Record each successful deployment separately, as it happens.
         journal_record "$contract" "$contract_id"
     fi
 
     DEPLOYED_IDS+=("$contract_id")
-    echo ""
 done
 
-# All deployments succeeded: finalize the manifest atomically (temp + rename)
-# so readers never observe a partially written JSON file.
-TMP_OUTPUT="$(mktemp "${OUTPUT_FILE}.XXXXXX")"
-trap 'rm -f "$TMP_OUTPUT"' EXIT
+echo ""
+echo "${GREEN}✓ All contracts deployed${NC}"
+echo ""
+
+# Write contract IDs to output file
 {
     echo "{"
     echo "  \"network\": \"$NETWORK\","
-    echo "  \"deployed_at\": \"$(date -u +"%Y-%m-%dT%H:%M:%SZ")\","
+    echo "  \"deployed_at\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\","
     echo "  \"contracts\": {"
     for i in "${!CONTRACTS[@]}"; do
-        if [ $i -lt $((${#CONTRACTS[@]} - 1)) ]; then
-            echo "    \"${CONTRACTS[$i]}\": \"${DEPLOYED_IDS[$i]}\","
-        else
-            echo "    \"${CONTRACTS[$i]}\": \"${DEPLOYED_IDS[$i]}\""
+        comma=","
+        if [ $i -eq $((${#CONTRACTS[@]} - 1)) ]; then
+            comma=""
         fi
+        echo "    \"${CONTRACTS[$i]}\": \"${DEPLOYED_IDS[$i]}\"$comma"
     done
     echo "  }"
     echo "}"
-} > "$TMP_OUTPUT"
-mv -f "$TMP_OUTPUT" "$OUTPUT_FILE"
-trap - EXIT
+} > "$OUTPUT_FILE"
 
-# Batch complete: the journal is no longer needed for recovery.
-rm -f "$JOURNAL_FILE"
-
-echo ""
-echo "${GREEN}=================================="
-echo "✅ All contracts deployed successfully!"
-echo "==================================${NC}"
-echo ""
-echo "Contract IDs saved to: $OUTPUT_FILE"
+echo "${GREEN}✓ Contract IDs saved to: $OUTPUT_FILE${NC}"
 echo ""
 echo "${BLUE}Next steps:${NC}"
-echo "1. Initialize contracts with ./scripts/initialize-all-contracts.sh $NETWORK"
-echo "2. Verify deployments"
-echo "3. Configure frontend/backend with new contract IDs"
+echo "1. Initialize contracts: ./scripts/initialize-contract.sh $NETWORK"
+echo "2. Verify deployment: ./scripts/verify-deployment.sh $NETWORK"
 echo ""
-
-# Display summary
-echo "${BLUE}Deployment Summary:${NC}"
-for i in "${!CONTRACTS[@]}"; do
-    echo "  ${CONTRACTS[$i]}: ${DEPLOYED_IDS[$i]}"
-done
-
-exit 0

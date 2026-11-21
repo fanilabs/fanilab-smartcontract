@@ -1,16 +1,20 @@
 #!/bin/bash
 
 # FaniLab Smart Contracts - Single Contract Deployment Script
-# Usage: ./deploy-contract.sh <contract_name> [network]
+# Usage: ./deploy-contract.sh <contract_name> [network] [--config <path>] [--confirm-mainnet]
 #
 # Configuration file precedence (highest to lowest):
 #   1. --config <path> CLI flag
 #   2. CONFIG_FILE environment variable
 #   3. Default repository .env at the project root
+#
+# Mainnet safety: deploying to mainnet requires the explicit --confirm-mainnet
+# flag. Without it the script aborts before any signed transaction is built.
 
 set -e
 
 CONFIG_FILE=""
+CONFIRM_MAINNET=false
 ARGS=()
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -24,6 +28,10 @@ while [ $# -gt 0 ]; do
             ;;
         --config=*)
             CONFIG_FILE="${1#--config=}"
+            shift
+            ;;
+        --confirm-mainnet)
+            CONFIRM_MAINNET=true
             shift
             ;;
         *)
@@ -79,7 +87,7 @@ RED='\033[0;31m'
 NC='\033[0m' # No Color
 
 if [ -z "$CONTRACT_NAME" ]; then
-    echo "${RED}❌ Usage: $0 <contract_name> [network] [--config <path>]${NC}" >&2
+    echo "${RED}❌ Usage: $0 <contract_name> [network] [--config <path>] [--confirm-mainnet]${NC}" >&2
     echo "   Valid contract names: ${CONTRACTS[*]}" >&2
     exit 1
 fi
@@ -95,6 +103,14 @@ done
 if [ "$CONTRACT_KNOWN" = false ]; then
     echo "${RED}❌ Unknown contract: $CONTRACT_NAME${NC}" >&2
     echo "   Valid contract names: ${CONTRACTS[*]}" >&2
+    exit 1
+fi
+
+# Mainnet acknowledgement gate: refuse to proceed without an explicit flag so
+# automation can never begin signed mainnet deployments by accident.
+if [ "$NETWORK" = "mainnet" ] && [ "$CONFIRM_MAINNET" != true ]; then
+    echo "${RED}❌ Refusing to deploy to mainnet without explicit acknowledgement.${NC}" >&2
+    echo "   Re-run with --confirm-mainnet to proceed with signed mainnet deployments." >&2
     exit 1
 fi
 
@@ -186,6 +202,16 @@ if [ ! -f "$WASM_PATH" ]; then
     exit 1
 fi
 
+# Show the source account and artifact hash before any signed submission so
+# the operator can verify exactly what is about to be deployed.
+WASM_SHA256=$(sha256sum "$WASM_PATH" | awk '{ print $1 }')
+echo "${BLUE}Deployment summary (pre-submission):${NC}" >&2
+echo "   Source account: $DEPLOYER_IDENTITY ($DEPLOYER_ADDRESS)" >&2
+echo "   Network:        $NETWORK" >&2
+echo "   Artifact:       $WASM_PATH" >&2
+echo "   SHA-256:        $WASM_SHA256" >&2
+echo "" >&2
+
 # Deploy the contract
 echo "${YELLOW}Deploying $CONTRACT_NAME...${NC}" >&2
 
@@ -216,31 +242,28 @@ printf '%s %s\n' "$CONTRACT_NAME" "$CONTRACT_ID" >> "$JOURNAL_FILE"
 # from the existing manifest, then the just-deployed contract.
 declare -A DEPLOYED_IDS
 if [ -f "$JOURNAL_FILE" ]; then
-    while read -r jc jid; do
-        if [ -n "$jc" ] && [ -n "$jid" ]; then
-            DEPLOYED_IDS["$jc"]="$jid"
-        fi
+    while read -r name id; do
+        [ -n "$name" ] && [ -n "$id" ] && DEPLOYED_IDS["$name"]="$id"
     done < "$JOURNAL_FILE"
 fi
 if [ -f "$OUTPUT_FILE" ]; then
-    for c in "${CONTRACTS[@]}"; do
-        if [ -z "${DEPLOYED_IDS[$c]:-}" ]; then
-            existing_id=$(grep -o "\"$c\": *\"[^\"]*\"" "$OUTPUT_FILE" | grep -o '"[^"]*"$' | tr -d '"')
-            if [ -n "$existing_id" ]; then
-                DEPLOYED_IDS["$c"]="$existing_id"
-            fi
+    while IFS= read -r line; do
+        name=$(printf '%s' "$line" | sed -n 's/.*"\([a-z_]*\)"[[:space:]]*:[[:space:]]*"\([A-Z0-9]*\)".*/\1/p')
+        id=$(printf '%s' "$line" | sed -n 's/.*"\([a-z_]*\)"[[:space:]]*:[[:space:]]*"\([A-Z0-9]*\)".*/\2/p')
+        if [ -n "$name" ] && [ -n "$id" ]; then
+            DEPLOYED_IDS["$name"]="$id"
         fi
-    done
+    done < "$OUTPUT_FILE"
 fi
 DEPLOYED_IDS["$CONTRACT_NAME"]="$CONTRACT_ID"
 
-# Finalize the manifest atomically: write to a temp file, then rename. This
-# guarantees readers never observe a partially-written manifest.
-TMP_OUTPUT="$OUTPUT_FILE.tmp.$$"
+# Write the manifest atomically (temp file + mv) so a crash never leaves a
+# half-written JSON file behind.
+TMP_OUTPUT="$OUTPUT_FILE.tmp"
 {
     echo "{"
     echo "  \"network\": \"$NETWORK\","
-    echo "  \"deployed_at\": \"$(date -u +"%Y-%m-%dT%H:%M:%SZ")\","
+    echo "  \"deployed_at\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\","
     echo "  \"contracts\": {"
     first=true
     for c in "${CONTRACTS[@]}"; do
@@ -259,6 +282,7 @@ TMP_OUTPUT="$OUTPUT_FILE.tmp.$$"
 } > "$TMP_OUTPUT"
 mv "$TMP_OUTPUT" "$OUTPUT_FILE"
 
-echo "${GREEN}✓ Contract ID saved to: $OUTPUT_FILE${NC}" >&2
-
-echo "$CONTRACT_ID"
+echo "${GREEN}✓ Contract ID recorded in $OUTPUT_FILE${NC}" >&2
+echo "" >&2
+echo "${GREEN}🎉 Deployment complete!${NC}" >&2
+echo "Contract ID: $CONTRACT_ID" >&2

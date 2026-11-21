@@ -42,6 +42,10 @@ DEPLOYER_IDENTITY="${DEPLOYER_IDENTITY:-deployer}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 OUTPUT_FILE="$PROJECT_ROOT/contract-ids-$NETWORK.json"
+# Incremental recovery journal: one line per successful deployment, appended
+# as soon as each contract is deployed. Survives a mid-batch failure so a
+# retry can reuse already-deployed contract IDs instead of redeploying.
+JOURNAL_FILE="$PROJECT_ROOT/.deploy-journal-$NETWORK.log"
 
 # Resolve config file: explicit path (flag/env) wins, else default repo .env.
 if [ -n "$CONFIG_FILE" ]; then
@@ -151,11 +155,20 @@ deploy_contract() {
     fi
 }
 
-# Initialize JSON output
-echo "{" > "$OUTPUT_FILE"
-echo "  \"network\": \"$NETWORK\"," >> "$OUTPUT_FILE"
-echo "  \"deployed_at\": \"$(date -u +"%Y-%m-%dT%H:%M:%SZ")\"," >> "$OUTPUT_FILE"
-echo "  \"contracts\": {" >> "$OUTPUT_FILE"
+# Look up a previously journaled contract ID (recovery after mid-batch failure).
+journal_lookup() {
+    local contract_name=$1
+    [ -f "$JOURNAL_FILE" ] || return 1
+    # Journal format: <contract_name> <contract_id>
+    awk -v name="$contract_name" '$1 == name { id = $2 } END { if (id != "") { print id; exit 0 } exit 1 }' "$JOURNAL_FILE"
+}
+
+# Append a successful deployment to the journal immediately.
+journal_record() {
+    local contract_name=$1
+    local contract_id=$2
+    printf '%s %s\n' "$contract_name" "$contract_id" >> "$JOURNAL_FILE"
+}
 
 # Deploy contracts in order
 CONTRACTS=("escrow_contract" "delivery_contract" "dispute_resolution_contract" "fleet_management_contract" "identity_reputation_contract" "settlement_contract")
@@ -163,28 +176,53 @@ DEPLOYED_IDS=()
 
 for i in "${!CONTRACTS[@]}"; do
     contract="${CONTRACTS[$i]}"
-    contract_id=$(deploy_contract "$contract")
-    
-    if [ $? -ne 0 ]; then
-        echo "${RED}❌ Deployment failed for $contract${NC}"
-        exit 1
-    fi
-    
-    DEPLOYED_IDS+=("$contract_id")
-    
-    # Add to JSON (with comma except for last)
-    if [ $i -lt $((${#CONTRACTS[@]} - 1)) ]; then
-        echo "    \"$contract\": \"$contract_id\"," >> "$OUTPUT_FILE"
+
+    # Reuse an ID from a previous (failed) run if the journal already has it.
+    if existing_id=$(journal_lookup "$contract"); then
+        echo "${YELLOW}↺ Reusing journaled $contract: $existing_id${NC}"
+        contract_id="$existing_id"
     else
-        echo "    \"$contract\": \"$contract_id\"" >> "$OUTPUT_FILE"
+        contract_id=$(deploy_contract "$contract")
+
+        if [ $? -ne 0 ]; then
+            echo "${RED}❌ Deployment failed for $contract${NC}"
+            echo "   Partial progress saved to: $JOURNAL_FILE"
+            echo "   Re-run this script to resume from the journal."
+            exit 1
+        fi
+
+        # Record each successful deployment separately, as it happens.
+        journal_record "$contract" "$contract_id"
     fi
-    
+
+    DEPLOYED_IDS+=("$contract_id")
     echo ""
 done
 
-# Close JSON
-echo "  }" >> "$OUTPUT_FILE"
-echo "}" >> "$OUTPUT_FILE"
+# All deployments succeeded: finalize the manifest atomically (temp + rename)
+# so readers never observe a partially written JSON file.
+TMP_OUTPUT="$(mktemp "${OUTPUT_FILE}.XXXXXX")"
+trap 'rm -f "$TMP_OUTPUT"' EXIT
+{
+    echo "{"
+    echo "  \"network\": \"$NETWORK\","
+    echo "  \"deployed_at\": \"$(date -u +"%Y-%m-%dT%H:%M:%SZ")\","
+    echo "  \"contracts\": {"
+    for i in "${!CONTRACTS[@]}"; do
+        if [ $i -lt $((${#CONTRACTS[@]} - 1)) ]; then
+            echo "    \"${CONTRACTS[$i]}\": \"${DEPLOYED_IDS[$i]}\","
+        else
+            echo "    \"${CONTRACTS[$i]}\": \"${DEPLOYED_IDS[$i]}\""
+        fi
+    done
+    echo "  }"
+    echo "}"
+} > "$TMP_OUTPUT"
+mv -f "$TMP_OUTPUT" "$OUTPUT_FILE"
+trap - EXIT
+
+# Batch complete: the journal is no longer needed for recovery.
+rm -f "$JOURNAL_FILE"
 
 echo ""
 echo "${GREEN}=================================="

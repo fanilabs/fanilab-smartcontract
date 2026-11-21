@@ -43,6 +43,10 @@ DEPLOYER_IDENTITY="${DEPLOYER_IDENTITY:-deployer}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 OUTPUT_FILE="$PROJECT_ROOT/contract-ids-$NETWORK.json"
+# Incremental recovery journal: each successful deployment is appended here
+# immediately so a mid-batch failure can be recovered on retry. The final
+# manifest ($OUTPUT_FILE) is only written atomically once all contracts exist.
+JOURNAL_FILE="$PROJECT_ROOT/.contract-ids-$NETWORK.journal"
 
 # Resolve the configuration file: explicit flag > env var > default .env.
 if [ -z "$CONFIG_FILE" ]; then
@@ -157,19 +161,42 @@ CONTRACT_ID=$(stellar contract deploy \
 echo "${GREEN}✓ $CONTRACT_NAME deployed: $CONTRACT_ID${NC}" >&2
 echo "" >&2
 
+# Record this successful deployment in the incremental recovery journal
+# immediately, so a mid-batch failure never loses an already-deployed ID.
+# Format: one "<contract_name> <contract_id>" line per successful deploy.
+if [ -f "$JOURNAL_FILE" ]; then
+    grep -v "^$CONTRACT_NAME " "$JOURNAL_FILE" > "$JOURNAL_FILE.tmp" || true
+    mv "$JOURNAL_FILE.tmp" "$JOURNAL_FILE"
+fi
+printf '%s %s\n' "$CONTRACT_NAME" "$CONTRACT_ID" >> "$JOURNAL_FILE"
+
 # Merge this contract's ID into any existing output file for this network,
 # so deploying contracts one at a time doesn't clobber previously deployed IDs.
+# IDs are recovered from the journal first (survives mid-batch failures), then
+# from the existing manifest, then the just-deployed contract.
 declare -A DEPLOYED_IDS
+if [ -f "$JOURNAL_FILE" ]; then
+    while read -r jc jid; do
+        if [ -n "$jc" ] && [ -n "$jid" ]; then
+            DEPLOYED_IDS["$jc"]="$jid"
+        fi
+    done < "$JOURNAL_FILE"
+fi
 if [ -f "$OUTPUT_FILE" ]; then
     for c in "${CONTRACTS[@]}"; do
-        existing_id=$(grep -o "\"$c\": *\"[^\"]*\"" "$OUTPUT_FILE" | grep -o '"[^"]*"$' | tr -d '"')
-        if [ -n "$existing_id" ]; then
-            DEPLOYED_IDS["$c"]="$existing_id"
+        if [ -z "${DEPLOYED_IDS[$c]:-}" ]; then
+            existing_id=$(grep -o "\"$c\": *\"[^\"]*\"" "$OUTPUT_FILE" | grep -o '"[^"]*"$' | tr -d '"')
+            if [ -n "$existing_id" ]; then
+                DEPLOYED_IDS["$c"]="$existing_id"
+            fi
         fi
     done
 fi
 DEPLOYED_IDS["$CONTRACT_NAME"]="$CONTRACT_ID"
 
+# Finalize the manifest atomically: write to a temp file, then rename. This
+# guarantees readers never observe a partially-written manifest.
+TMP_OUTPUT="$OUTPUT_FILE.tmp.$$"
 {
     echo "{"
     echo "  \"network\": \"$NETWORK\","
@@ -189,7 +216,8 @@ DEPLOYED_IDS["$CONTRACT_NAME"]="$CONTRACT_ID"
     echo ""
     echo "  }"
     echo "}"
-} > "$OUTPUT_FILE"
+} > "$TMP_OUTPUT"
+mv "$TMP_OUTPUT" "$OUTPUT_FILE"
 
 echo "${GREEN}✓ Contract ID saved to: $OUTPUT_FILE${NC}" >&2
 

@@ -240,157 +240,26 @@ export class DeliveryClient {
   }
 
   /**
+   * Get deliveries by sender index
+   */
+  async getDeliveriesBySender(
+    sender: string,
+    options?: ContractInvokeOptions
+  ): Promise<DeliveryTypes.DeliveryPage> {
+    return decodeDeliveryPage(await this.invoker.call('get_deliveries_by_sender', [address(sender)], options));
+  }
+
+  /**
+   * Get deliveries by recipient index
+   */
+  async getDeliveriesByRecipient(
+    recipient: string,
+    options?: ContractInvokeOptions
+  ): Promise<DeliveryTypes.DeliveryPage> {
+    return decodeDeliveryPage(await this.invoker.call('get_deliveries_by_recipient', [address(recipient)], options));
+  }
+
+  /**
    * Check if a driver is registered
    */
-  async isDriverRegistered(driver: string): Promise<boolean> {
-    return Boolean(await this.identity().call('has_driver_profile', [address(driver)], undefined));
-  }
-
-  /**
-   * Check if a user is registered
-   */
-  async isUserRegistered(user: string): Promise<boolean> {
-    try {
-      await this.identity().call('get_user_profile', [address(user)], undefined);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  /**
-   * Get all deliveries for a sender
-   */
-  async getDeliveriesBySender(sender: string): Promise<bigint[]> {
-    return decodeIds(await this.invoker.call('get_deliveries_by_sender', [address(sender)], undefined));
-  }
-
-  /**
-   * Get all deliveries for a recipient
-   */
-  async getDeliveriesByRecipient(recipient: string): Promise<bigint[]> {
-    return decodeIds(await this.invoker.call('get_deliveries_by_recipient', [address(recipient)], undefined));
-  }
-
-  /**
-   * Get all deliveries for a driver
-   */
-  async getDeliveriesByDriver(driver: string): Promise<bigint[]> {
-    const result = await this.invoker.call('get_deliveries_by_driver', [address(driver)], undefined);
-    return decodeIds(result);
-  }
-
-  private identity(): ContractInvoker {
-    if (!this.identityInvoker) {
-      throw new Error('Identity contract is not configured');
-    }
-    return this.identityInvoker;
-  }
-}
-
-function decodeOptional(value: unknown): string | null {
-  return value === null || value === undefined ? null : String(value);
-}
-
-function decodeIds(value: unknown): bigint[] {
-  return (value as unknown[]).map((id) => BigInt(String(id)));
-}
-
-function decodeDriverProfile(value: unknown): DeliveryTypes.DeliveryDriverProfile {
-  const record = value as Record<string, unknown>;
-  return {
-    address: String(record.address),
-    deliveriesCompleted: Number(record.deliveries_completed),
-    reputationScore: Number(record.reputation_score),
-    registeredAt: Number(record.registered_at),
-    kycVerified: Boolean(record.kyc_verified),
-    status: String(record.status) as DeliveryTypes.DeliveryDriverProfile['status'],
-  };
-}
-
-function decodeCombinedState(value: unknown): DeliveryTypes.CombinedDeliveryState {
-  if (!Array.isArray(value) || value.length !== 3) {
-    throw new TypeError('Invalid combined delivery state returned by contract');
-  }
-  const [delivery, escrow, isSynchronized] = value;
-  return {
-    delivery: decodeDelivery(delivery),
-    escrow: escrow === null || escrow === undefined ? undefined : decodeDeliveryEscrow(escrow),
-    isSynchronized: Boolean(isSynchronized),
-  };
-}
-
-function decodeDeliveryEscrow(value: unknown): DeliveryTypes.DeliveryEscrowState {
-  const record = value as Record<string, unknown>;
-  return {
-    deliveryId: BigInt(String(record.delivery_id)),
-    sender: String(record.sender),
-    recipient: String(record.recipient),
-    driver: String(record.driver),
-    token: String(record.token),
-    amount: BigInt(String(record.amount)),
-    status: String(record.status) as DeliveryTypes.DeliveryEscrowState['status'],
-    createdAt: Number(record.created_at),
-    expiresAt: record.expires_at == null ? undefined : Number(record.expires_at),
-    disputedBy: record.disputed_by == null ? undefined : String(record.disputed_by),
-    disputedAt: record.disputed_at == null ? undefined : Number(record.disputed_at),
-    holdbackStartedAt: record.holdback_started_at == null
-      ? undefined
-      : Number(record.holdback_started_at),
-    fleetId: record.fleet_id == null ? undefined : BigInt(String(record.fleet_id)),
-  };
-}
-
-function decodeDeliveryPage(value: unknown): DeliveryTypes.DeliveryPage {
-  const record = value as Record<string, unknown>;
-  const items = (record.items as unknown[]) ?? [];
-  return {
-    items: items.map((item) => decodeDelivery(item)),
-    total: Number(record.total),
-    offset: Number(record.offset),
-    limit: Number(record.limit),
-  };
-}
-
-function decodeDelivery(value: unknown): DeliveryTypes.DeliveryRecord {
-  const record = value as Record<string, unknown>;
-  const metadata = record.metadata as Record<string, unknown>;
-  const cargo = metadata.cargo_description as Record<string, unknown>;
-  return {
-    deliveryId: BigInt(String(record.delivery_id)), sender: String(record.sender), recipient: String(record.recipient),
-    driver: record.driver === null ? undefined : String(record.driver), status: record.status as DeliveryTypes.DeliveryRecord['status'],
-    metadata: {
-      pickupLocation: String(metadata.origin),
-      dropoffLocation: String(metadata.destination),
-      cargoDescription: {
-        weightGrams: Number(cargo.weight_grams),
-        category: String(cargo.category) as DeliveryTypes.CargoCategory,
-        fragile: Boolean(cargo.fragile),
-      },
-      deliveryId: BigInt(String(metadata.delivery_id)),
-      createdAt: Number(metadata.created_at),
-      estimatedDelivery: Number(metadata.estimated_delivery),
-    }, createdAt: Number(record.created_at), deliveredAt: record.delivered_at === null ? undefined : Number(record.delivered_at),
-    transitStartedAt: record.transit_started_at === null ? undefined : Number(record.transit_started_at),
-  };
-}
-
-function encodeDeliveryMetadata(
-  deliveryId: bigint,
-  metadata: DeliveryTypes.DeliveryMetadata
-) {
-  const now = Math.floor(Date.now() / 1000);
-  const cargo = metadata.cargoDescription;
-  return map([
-    ['delivery_id', u64(deliveryId)],
-    ['origin', string(metadata.pickupLocation)],
-    ['destination', string(metadata.dropoffLocation)],
-    ['cargo_description', map([
-      ['weight_grams', u32(cargo?.weightGrams ?? 1)],
-      ['category', symbol(cargo?.category ?? DeliveryTypes.CargoCategory.General)],
-      ['fragile', bool(cargo?.fragile ?? false)],
-    ])],
-    ['created_at', u64(metadata.createdAt ?? now)],
-    ['estimated_delivery', u64(metadata.estimatedDelivery ?? now + (metadata.estimatedDistance ?? 0))],
-  ]);
-}
+  async isDriverRegistered(driver: string): Promise<boolean>

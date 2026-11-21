@@ -16,6 +16,27 @@ import { formatSorobanError } from './error-codes';
 export type ScVal = xdr.ScVal;
 
 /**
+ * Explicit invocation mode. `simulate` never submits a transaction and returns
+ * the simulated return value; `submit` requires a signer and submits the
+ * transaction, returning the native return value (or a receipt when requested).
+ */
+export type InvocationMode = 'simulate' | 'submit';
+
+/**
+ * Raised when a mutation is attempted without a signer. Previously this
+ * silently degraded into a simulation and resolved `void`, hiding the mistake.
+ */
+export class MissingSignerError extends Error {
+  constructor(functionName: string) {
+    super(
+      `Cannot submit mutation '${functionName}' without a signer. ` +
+        `Pass a signer to submit, or use mode: 'simulate' to simulate explicitly.`
+    );
+    this.name = 'MissingSignerError';
+  }
+}
+
+/**
  * Opt-in receipt describing a successful write invocation. Returned only when
  * `ContractInvokeOptions.returnReceipt` is enabled; otherwise `call` keeps
  * returning the native return value so existing callers are unaffected.
@@ -215,12 +236,53 @@ export class ContractInvoker {
     this.defaults = defaults;
   }
 
+  /**
+   * Resolve the effective invocation mode. An explicit `mode` always wins.
+   * Otherwise a signer implies `submit`; without a signer we default to
+   * `simulate` for backwards compatibility, but `submit` callers that omit a
+   * signer are rejected by `call` rather than silently simulated.
+   */
+  private resolveMode(config: ContractInvokeOptions): InvocationMode {
+    if (config.mode) {
+      return config.mode;
+    }
+    return config.signer ? 'submit' : 'simulate';
+  }
+
+  /**
+   * Simulate a contract call without submitting a transaction. Always returns
+   * the simulated return value and never requires a signer.
+   */
+  async simulate(
+    functionName: string,
+    args: ScVal[],
+    options: ContractInvokeOptions = {}
+  ): Promise<unknown> {
+    return this.call(functionName, args, { ...options, mode: 'simulate' });
+  }
+
+  /**
+   * Submit a contract mutation. Requires a signer; throws `MissingSignerError`
+   * when none is provided so accidental unsigned mutations are detectable.
+   */
+  async submit(
+    functionName: string,
+    args: ScVal[],
+    options: ContractInvokeOptions = {}
+  ): Promise<unknown> {
+    return this.call(functionName, args, { ...options, mode: 'submit' });
+  }
+
   async call(
     functionName: string,
     args: ScVal[],
     options: ContractInvokeOptions = {}
   ): Promise<unknown> {
     const config = { ...this.defaults, ...options };
+    const mode = this.resolveMode(config);
+    if (mode === 'submit' && !config.signer) {
+      throw new MissingSignerError(functionName);
+    }
     const server = this.server(config);
     const accountId = this.require(config.sourceAccount, 'sourceAccount');
     const networkPassphrase = this.require(config.networkPassphrase, 'networkPassphrase');
@@ -239,7 +301,7 @@ export class ContractInvoker {
     if (SorobanRpc.Api.isSimulationError(simulation)) {
       throw new Error(formatSorobanError('Soroban simulation failed', simulation.error));
     }
-    if (!config.signer) {
+    if (mode === 'simulate') {
       return simulation.result?.retval ? native(simulation.result.retval) : undefined;
     }
 
@@ -264,57 +326,6 @@ export class ContractInvoker {
       }
     }
 
-    const prepared = SorobanRpc.assembleTransaction(transaction, simulation).build();
-    prepared.sign(config.signer);
-    const submitted = await server.sendTransaction(prepared);
-    if (submitted.status === 'ERROR') {
-      throw new Error(
-        formatSorobanError(
-          'Soroban submission failed',
-          submitted.errorResult?.toString() ?? 'unknown error'
-        )
-      );
-    }
-    if (submitted.status === 'PENDING') {
-      const result = await this.waitForResult(server, submitted.hash, config);
-      if (config.returnReceipt) {
-        const receipt = await this.buildReceipt(server, submitted.hash, result, config);
-        return receipt;
-      }
-      return result;
-    }
-    return undefined;
-  }
+    const prepared 
 
-  /**
-   * Build an invocation receipt for a confirmed transaction, resolving the
-   * inclusion ledger from the network. Falls back to the latest known ledger
-   * when the transaction response does not expose one.
-   */
-  private async buildReceipt(
-    server: SorobanRpc.Server,
-    hash: string,
-    result: unknown,
-    config: ContractInvokeOptions
-  ): Promise<InvocationReceipt> {
-    let ledger = 0;
-    try {
-      const response = await server.getTransaction(hash);
-      if (response && typeof response.ledger === 'number') {
-        ledger = response.ledger;
-      }
-    } catch {
-      // Fall through to latest ledger lookup below.
-    }
-    if (ledger === 0) {
-      try {
-        const latest = await server.getLatestLedger();
-        ledger = latest.sequence;
-      } catch {
-        ledger = 0;
-      }
-    }
-    return { hash, ledger, result };
-  }
-
-/* … truncated 4716 chars — edit only what you need near the top … */
+/* … truncated 1652 chars — edit only what you need near the top … */

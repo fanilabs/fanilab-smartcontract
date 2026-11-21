@@ -177,24 +177,26 @@ export class ContractInvoker {
       return simulation.result?.retval ? native(simulation.result.retval) : undefined;
     }
 
-    const expiringKeys = await this.expiringFootprintKeys(
-      server,
-      simulation.transactionData,
-      config
-    );
-    if (expiringKeys.length > 0) {
-      await this.extendFootprintTtl(
+    if (config.ttlMaintenance !== false) {
+      const expiringKeys = await this.expiringFootprintKeys(
         server,
-        accountId,
-        networkPassphrase,
         simulation.transactionData,
-        expiringKeys,
         config
       );
-      transaction = await buildTransaction();
-      simulation = await server.simulateTransaction(transaction);
-      if (SorobanRpc.Api.isSimulationError(simulation)) {
-        throw new Error(formatSorobanError('Soroban simulation failed', simulation.error));
+      if (expiringKeys.length > 0) {
+        await this.extendFootprintTtl(
+          server,
+          accountId,
+          networkPassphrase,
+          simulation.transactionData,
+          expiringKeys,
+          config
+        );
+        transaction = await buildTransaction();
+        simulation = await server.simulateTransaction(transaction);
+        if (SorobanRpc.Api.isSimulationError(simulation)) {
+          throw new Error(formatSorobanError('Soroban simulation failed', simulation.error));
+        }
       }
     }
 
@@ -257,17 +259,24 @@ export class ContractInvoker {
     if (!Number.isSafeInteger(extendTo) || extendTo <= threshold) {
       throw new RangeError('ttlExtendToLedgers must be greater than ttlThresholdLedgers');
     }
-
-    const candidates = [
-      ...transactionData.getReadOnly(),
-      ...transactionData.getReadWrite(),
-    ].filter(canExtendTtl);
-    if (candidates.length === 0) {
+    const footprint = transactionData.build().resources().footprint();
+    const keys = [
+      ...footprint.readOnly(),
+      ...footprint.readWrite(),
+    ];
+    if (keys.length === 0) {
       return [];
     }
-
-    const ledgerEntries = await server.getLedgerEntries(...candidates);
-    return findExpiringPersistentKeys(ledgerEntries.entries, ledgerEntries.latestLedger, threshold);
+    const latestLedger = await this.latestLedger(server);
+    const entries = await server.getLedgerEntries(...keys);
+    return findExpiringPersistentKeys(
+      entries.entries.map((entry) => ({
+        key: entry.key,
+        liveUntilLedgerSeq: entry.liveUntilLedgerSeq,
+      })),
+      latestLedger,
+      threshold
+    );
   }
 
   private async extendFootprintTtl(
@@ -280,24 +289,36 @@ export class ContractInvoker {
   ): Promise<void> {
     const extendTo = config.ttlExtendToLedgers ?? DEFAULT_TTL_EXTEND_TO_LEDGERS;
     const account = await server.getAccount(accountId);
-    const ttlTransaction = new TransactionBuilder(account, {
-      fee: config.fee ?? '100000',
+    const builder = new TransactionBuilder(account, {
+      fee: config.ttlMaintenanceFee ?? config.fee ?? '100000',
       networkPassphrase,
-    })
-      .setTimeout(config.timeoutSeconds ?? 30)
-      .addOperation(Operation.extendFootprintTtl({ extendTo }))
-      .setSorobanData(
-        new SorobanDataBuilder(transactionData.build())
-          .setFootprint(keys, [])
-          .build()
-      )
-      .build();
-    const signed = await this.signPrepared(ttlTransaction, networkPassphrase, config);
+    }).setTimeout(config.timeoutSeconds ?? 30);
+    for (const key of keys) {
+      builder.addOperation(Operation.extendFootprintTtl({ extendTo }));
+    }
+    const ttlTransaction = builder.build();
+    const ttlSimulation = await server.simulateTransaction(ttlTransaction);
+    if (SorobanRpc.Api.isSimulationError(ttlSimulation)) {
+      throw new Error(formatSorobanError('TTL maintenance simulation failed', ttlSimulation.error));
+    }
+
+    const maxFee = config.ttlMaintenanceMaxFee;
+    if (maxFee !== undefined) {
+      const minFee = ttlSimulation.minResourceFee;
+      if (minFee !== undefined && BigInt(minFee) > BigInt(maxFee)) {
+        throw new Error(
+          `TTL maintenance resource fee ${minFee} exceeds configured ceiling ${maxFee}`
+        );
+      }
+    }
+
+    const prepared = SorobanRpc.assembleTransaction(ttlTransaction, ttlSimulation).build();
+    const signed = await this.signPrepared(prepared, networkPassphrase, config);
     const submitted = await server.sendTransaction(signed);
     if (submitted.status === 'ERROR') {
       throw new Error(
         formatSorobanError(
-          'TTL extension submission failed',
+          'TTL maintenance submission failed',
           submitted.errorResult?.toString() ?? 'unknown error'
         )
       );
@@ -307,15 +328,9 @@ export class ContractInvoker {
     }
   }
 
-  private server(config: ContractInvokeOptions): SorobanRpc.Server {
-    return new SorobanRpc.Server(this.require(config.rpcUrl, 'rpcUrl'));
-  }
-
-  private require<T>(value: T | undefined, name: string): T {
-    if (value === undefined) {
-      throw new Error(`ContractInvokeOptions.${name} is required`);
-    }
-    return value;
+  private async latestLedger(server: SorobanRpc.Server): Promise<number> {
+    const latest = await server.getLatestLedger();
+    return latest.sequence;
   }
 
   private async waitForResult(
@@ -329,7 +344,7 @@ export class ContractInvoker {
     while (Date.now() < deadline) {
       const result = await awaitPollResult(
         server.getTransaction(hash),
-        Math.max(deadline - Date.now(), 0),
+        Math.max(0, deadline - Date.now()),
         'Timed out waiting for transaction result',
         config.signal
       );
@@ -337,10 +352,21 @@ export class ContractInvoker {
         return result.returnValue ? native(result.returnValue) : undefined;
       }
       if (result.status === SorobanRpc.Api.GetTransactionStatus.FAILED) {
-        throw new Error(formatSorobanError('Soroban transaction failed', result.resultXdr?.toXDR('base64') ?? 'unknown error'));
+        throw new Error(formatSorobanError('Soroban transaction failed', hash));
       }
       await delay(intervalMs, config.signal);
     }
     throw new Error('Timed out waiting for transaction result');
+  }
+
+  private server(config: ContractInvokeOptions): SorobanRpc.Server {
+    return new SorobanRpc.Server(this.require(config.rpcUrl, 'rpcUrl'));
+  }
+
+  private require<T>(value: T | undefined, name: string): T {
+    if (value === undefined) {
+      throw new Error(`Missing required option: ${name}`);
+    }
+    return value;
   }
 }

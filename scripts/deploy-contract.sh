@@ -126,20 +126,45 @@ echo "" >&2
 # for the duration of the subshell and released automatically on exit.
 update_manifest() {
     declare -A DEPLOYED_IDS
+    declare -A DEPLOYED_AT
     if [ -f "$OUTPUT_FILE" ]; then
         for c in "${CONTRACTS[@]}"; do
             existing_id=$(grep -o "\"$c\": *\"[^\"]*\"" "$OUTPUT_FILE" | grep -o '"[^"]*"$' | tr -d '"')
             if [ -n "$existing_id" ]; then
                 DEPLOYED_IDS["$c"]="$existing_id"
             fi
+            # Preserve any previously recorded per-contract timestamp so only
+            # the contract being deployed now gets a fresh one.
+            existing_ts=$(grep -o "\"$c\": *\"[^\"]*\"" "$OUTPUT_FILE" | grep -o '"[^"]*"$' | tr -d '"')
+            if [ -n "$existing_ts" ]; then
+                DEPLOYED_AT["$c"]="$existing_ts"
+            fi
         done
     fi
     DEPLOYED_IDS["$CONTRACT_NAME"]="$CONTRACT_ID"
+    DEPLOYED_AT["$CONTRACT_NAME"]="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
     {
         echo "{"
         echo "  \"network\": \"$NETWORK\","
-        echo "  \"deployed_at\": \"$(date -u +"%Y-%m-%dT%H:%M:%SZ")\","
+        # Legacy single timestamp kept for backward compatibility with
+        # consumers of the old manifest format. It reflects the most recent
+        # deployment; per-contract times live in "deployed_at_by_contract".
+        echo "  \"deployed_at\": \"${DEPLOYED_AT[$CONTRACT_NAME]}\","
+        echo "  \"deployed_at_by_contract\": {"
+        first_ts=true
+        for c in "${CONTRACTS[@]}"; do
+            if [ -n "${DEPLOYED_AT[$c]:-}" ]; then
+                if [ "$first_ts" = true ]; then
+                    first_ts=false
+                else
+                    echo ","
+                fi
+                printf '    "%s": "%s"' "$c" "${DEPLOYED_AT[$c]}"
+            fi
+        done
+        echo ""
+        echo "  },"
         echo "  \"contracts\": {"
         first=true
         for c in "${CONTRACTS[@]}"; do

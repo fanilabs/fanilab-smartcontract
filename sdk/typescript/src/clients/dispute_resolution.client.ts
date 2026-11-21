@@ -185,40 +185,74 @@ function computeDisputesPageOffset(page: number, pageSize: number): number | nul
 }
 
 /**
- * Validate and decode a `BytesN<32>` evidence hash supplied as hex text.
+ * Normalize a Soroban enum value into its canonical variant name.
  *
- * `Buffer.from(text, 'hex')` silently truncates at the first invalid pair
- * and accepts odd-length input, so a malformed hash could reach the RPC as
- * a short byte buffer (Issue #726). Require exactly 64 hexadecimal
- * characters and reject anything else before decoding.
+ * Soroban enums are represented as `ScVal::Vec([Symbol(name)])` (or, in some
+ * bindings, as a bare `Symbol`/string or a numeric discriminant). This helper
+ * unwraps the tuple representation and returns the variant name so callers can
+ * map it to a typed `DisputeStatus` (Issue #728).
  */
-function decodeEvidenceHash(evidenceHash: string): Uint8Array {
-  if (typeof evidenceHash !== 'string' || !/^[0-9a-fA-F]{64}$/.test(evidenceHash)) {
-    throw new TypeError(
-      `Invalid evidence hash: expected exactly 64 hexadecimal characters, received ${JSON.stringify(evidenceHash)}`
-    );
+function normalizeEnumVariant(value: unknown): string {
+  if (Array.isArray(value)) {
+    if (value.length !== 1) {
+      throw new Error(`Invalid Soroban enum tuple: expected a single variant, received ${value.length}`);
+    }
+    return normalizeEnumVariant(value[0]);
   }
-  return new Uint8Array(Buffer.from(evidenceHash, 'hex'));
-}
-
-/**
- * Serialize a `BytesN<32>` evidence hash into its canonical lowercase hex
- * form. `scValToNative` hands back a byte buffer (`Uint8Array`/`Buffer`),
- * so a bare `String(...)` would yield "[object Uint8Array]" and destroy the
- * proof-of-delivery hash (Issue #474). A value that is already a string is
- * passed through unchanged so the decoder tolerates RPCs that surface the
- * hash as text.
- */
-function hexEncode(value: unknown): string {
   if (typeof value === 'string') {
     return value;
   }
-  if (value instanceof Uint8Array) {
-    return Buffer.from(value).toString('hex');
+  if (typeof value === 'object' && value !== null) {
+    const record = value as Record<string, unknown>;
+    if (typeof record.name === 'string') {
+      return record.name;
+    }
+    if (typeof record.value === 'string') {
+      return record.value;
+    }
+    if (typeof record.symbol === 'string') {
+      return record.symbol;
+    }
   }
-  throw new TypeError(`Expected a byte buffer evidence hash, received ${typeof value}`);
+  throw new Error(`Unsupported Soroban enum representation: ${String(value)}`);
 }
 
-functi
+/**
+ * Decode a native `DisputeStatus` value from a Soroban enum ScVal.
+ *
+ * Accepts the tuple-wrapped enum form (`[Symbol('Open')]`), a bare symbol
+ * name, or a numeric discriminant, and rejects unknown variants instead of
+ * returning an invalid status (Issue #728).
+ */
+function decodeDisputeStatus(value: unknown): DisputeStatus {
+  const variant = normalizeEnumVariant(value);
+  switch (variant) {
+    case 'Open':
+      return DisputeStatus.Open;
+    case 'Resolved':
+      return DisputeStatus.Resolved;
+    case 'Cancelled':
+      return DisputeStatus.Cancelled;
+    default:
+      throw new Error(`Unknown DisputeStatus variant: ${variant}`);
+  }
+}
 
-/* … truncated 784 chars — edit only what you need near the top … */
+/**
+ * Decode a native dispute case returned by the contract into a typed
+ * `DisputeCase`, normalizing the `status` enum representation (Issue #728).
+ */
+function decodeDispute(value: unknown): DisputeCase {
+  const record = value as Record<string, unknown>;
+  return {
+    ...(record as unknown as DisputeCase),
+    status: decodeDisputeStatus(record.status),
+  };
+}
+
+/**
+ * Validate and decode a `BytesN<32>` evidence hash supplied as hex text.
+ *
+ *
+
+/* … truncated 1402 chars — edit only what you need near the top … */

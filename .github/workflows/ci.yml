@@ -49,6 +49,36 @@ jobs:
           test "$size" -le "$limit" || exit 1
         done < .github/wasm-size-budgets.txt
 
+    - name: Validate internal documentation links
+      run: |
+        python3 -c "
+        import os, re, sys
+        broken = []
+        for root, dirs, files in os.walk('.'):
+          dirs[:] = [d for d in dirs if d not in ['.git', 'target', 'node_modules', 'coverage']]
+          for f in files:
+            if f.endswith('.md'):
+              path = os.path.join(root, f)
+              with open(path, 'r', encoding='utf-8', errors='ignore') as doc:
+                content = doc.read()
+              for m in re.finditer(r'\[([^\]]+)\]\(([^)]+)\)', content):
+                link = m.group(2).strip()
+                if link.startswith(('http://', 'https://', '#', 'mailto:')):
+                  continue
+                link_target = link.split('#')[0]
+                if not link_target:
+                  continue
+                target_path = os.path.normpath(os.path.join(root, link_target))
+                if not os.path.exists(target_path):
+                  broken.append((path, link, target_path))
+        if broken:
+          print('Broken internal documentation links found:')
+          for doc, lk, tgt in broken:
+            print(f'  {doc}: {lk} (target {tgt} does not exist)')
+          sys.exit(1)
+        print('All internal documentation links verified.')
+        "
+
     - name: Run Tests
       run: cargo test --locked --verbose
 

@@ -206,7 +206,7 @@ Veuillez consulter notre fichier `CONTRIBUTING.md` pour les détails sur notre c
 
 ## 🔒 Sécurité
 
-La sécurité est notre priorité absolue. Veuillez consulter [SECURITY.md](../SECURITY.md) pour notre politique de sécurité et notre processus de signalement des vulnérabilités.
+La sécurité est notre priorité absolue. Veuillez consulter [SECURITY.md](../../SECURITY.md) pour notre politique de sécurité et notre processus de signalement des vulnérabilités.
 
 **Bug Bounty** : Nous offrons des récompenses jusqu'à $50 000 pour les découvertes de sécurité critiques.
 

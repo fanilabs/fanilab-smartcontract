@@ -206,7 +206,7 @@ Tafadhali angalia faili letu la `CONTRIBUTING.md` kwa taarifa kuhusu kanuni yetu
 
 ## 🔒 Usalama
 
-Usalama ni kipaumbele chetu kuu. Tafadhali angalia [SECURITY.md](../SECURITY.md) kwa sera yetu ya usalama na mfumo wa kuripoti miundombinu.
+Usalama ni kipaumbele chetu kuu. Tafadhali angalia [SECURITY.md](../../SECURITY.md) kwa sera yetu ya usalama na mfumo wa kuripoti miundombinu.
 
 **Bug Bounty**: Tunatoa zawadi hadi $50,000 kwa utunzaji muhimu wa usalama.
 

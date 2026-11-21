@@ -154,7 +154,10 @@ export class ContractInvoker {
     args: ScVal[],
     options: ContractInvokeOptions = {}
   ): Promise<unknown> {
-    const config = { ...this.defaults, ...options };
+    const sanitizedOptions = Object.fromEntries(
+      Object.entries(options).filter(([_, v]) => v !== undefined)
+    );
+    const config = { ...this.defaults, ...sanitizedOptions };
     const server = this.server(config);
     const accountId = this.require(config.sourceAccount, 'sourceAccount');
     const networkPassphrase = this.require(config.networkPassphrase, 'networkPassphrase');

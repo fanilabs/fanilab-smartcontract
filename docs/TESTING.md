@@ -190,6 +190,15 @@ The existing examples live in the escrow and identity reputation crates, and the
 
 For benchmark guidance, use the authoritative recipe in `docs/PERFORMANCE.md`. The old `cargo test --release -- --nocapture | grep "instructions"` command was removed because it produced no output and was not backed by a real performance harness in this workspace.
 
+## Explicit Authorization Verification
+
+While Soroban test environments provide `env.mock_all_auths()`, relying on blanket authorization mocks can hide critical authorization bypass bugs or permission checks that fail in production.
+
+### Best Practices for Authorization Testing
+1. **Targeted Mocking**: Prefer `env.mock_auths(&[...])` over `env.mock_all_auths()` to verify exact call parameters and signing addresses.
+2. **Negative Authorization Cases**: Always verify that invoking privileged entrypoints with unauthorized addresses returns `Error::Unauthorized` or appropriate custom error variants.
+3. **Multi-Party Invocation Trees**: For cross-contract calls requiring multi-party authorizations (such as escrow settlement and delivery verification), construct explicit authorization trees to model real-world transaction envelopes.
+
 ## Best Practices
 
 1. **Test Names**: Descriptive, start with `test_`

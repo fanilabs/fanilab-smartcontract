@@ -66,6 +66,9 @@ export function native(value: ScVal): unknown {
 const DEFAULT_TTL_THRESHOLD_LEDGERS = 100_000;
 const DEFAULT_TTL_EXTEND_TO_LEDGERS = 518_400;
 
+const DEFAULT_SUBMISSION_MAX_ATTEMPTS = 5;
+const DEFAULT_SUBMISSION_RETRY_DELAY_MS = 1_000;
+
 function canExtendTtl(key: xdr.LedgerKey): boolean {
   return key.type === 'contractCode' ||
     (key.type === 'contractData' && key.contractData.durability.name === 'persistent');
@@ -200,19 +203,58 @@ export class ContractInvoker {
 
     const prepared = SorobanRpc.assembleTransaction(transaction, simulation).build();
     prepared.sign(config.signer);
-    const submitted = await server.sendTransaction(prepared);
-    if (submitted.status === 'ERROR') {
-      throw new Error(
-        formatSorobanError(
-          'Soroban submission failed',
-          submitted.errorResult?.toString() ?? 'unknown error'
-        )
-      );
-    }
+    const submitted = await this.submitWithRetry(server, prepared, config);
     // Any non-ERROR status (PENDING, DUPLICATE, TRY_AGAIN_LATER, etc.) carries a
     // transaction hash. Poll it through finality so duplicate submissions resolve
     // to the same successful or failed result instead of returning undefined.
     return this.waitForResult(server, submitted.hash, config);
+  }
+
+  private async submitWithRetry(
+    server: SorobanRpc.Server,
+    prepared: ReturnType<typeof SorobanRpc.assembleTransaction>['build'] extends () => infer T
+      ? T
+      : never,
+    config: ContractInvokeOptions
+  ): Promise<SorobanRpc.Api.SendTransactionResponse> {
+    const maxAttempts = config.submissionMaxAttempts ?? DEFAULT_SUBMISSION_MAX_ATTEMPTS;
+    const baseDelay = config.submissionRetryDelayMs ?? DEFAULT_SUBMISSION_RETRY_DELAY_MS;
+    if (!Number.isSafeInteger(maxAttempts) || maxAttempts <= 0) {
+      throw new RangeError('submissionMaxAttempts must be a positive integer');
+    }
+    if (!Number.isSafeInteger(baseDelay) || baseDelay < 0) {
+      throw new RangeError('submissionRetryDelayMs must be a non-negative integer');
+    }
+
+    let lastStatus: string | undefined;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      const submitted = await server.sendTransaction(prepared);
+      if (submitted.status === 'ERROR') {
+        throw new Error(
+          formatSorobanError(
+            'Soroban submission failed',
+            submitted.errorResult?.toString() ?? 'unknown error'
+          )
+        );
+      }
+      if (submitted.status !== 'TRY_AGAIN_LATER') {
+        return submitted;
+      }
+
+      lastStatus = submitted.status;
+      if (attempt < maxAttempts) {
+        await delay(baseDelay * attempt, config.signal);
+      }
+    }
+
+    throw new Error(
+      formatSorobanError(
+        'Soroban submission failed after retries',
+        `transaction ${prepared.hash.toString()} was not accepted after ${maxAttempts} attempts ` +
+          `(last status: ${lastStatus ?? 'unknown'}); the signed transaction was preserved and ` +
+          'can be resubmitted once the network is available'
+      )
+    );
   }
 
   private async expiringFootprintKeys(
@@ -256,10 +298,6 @@ export class ContractInvoker {
       networkPassphrase,
     })
       .setTimeout(config.timeoutSeconds ?? 30)
-      .addOperation(Operation.extendFootprintTtl({ extendTo }))
-      .setSorobanData(
-        new SorobanDataBuilder(transactionData.build())
-          .setFootprint(keys, [])
-        
+      .addOpe
 
-/* … truncated 3780 chars — edit only what you need near the top … */
+/* … truncated 244 chars — edit only what you need near the top … */

@@ -157,6 +157,26 @@ stellar network stop local
 
 ## Deploying to Testnet
 
+### Testnet Reset Recovery and Manifest Invalidation
+
+When Stellar resets the public Testnet (typically quarterly), all contract instances and ledger state are permanently wiped while local manifests (`contract-ids-testnet.json`) still point to non-existent addresses.
+
+#### Recovery Procedure
+1. **Invalidate Outdated Manifests**: Remove or archive stale manifests rather than attempting to interact with missing contracts:
+   ```bash
+   rm -f contract-ids-testnet.json
+   ```
+2. **Re-fund Deployer Account**: Testnet resets invalidate all keypair balances. Re-fund the deployer account:
+   ```bash
+   stellar keys fund deployer --network testnet
+   ```
+3. **Execute Clean Deployment**: Run the full deployment sequence from scratch:
+   ```bash
+   ./scripts/deploy-all-contracts.sh testnet
+   ```
+4. **Re-initialize Cross-Contract Bindings**: Ensure dependent addresses (e.g., escrow contract reference in delivery contract) are linked via `./scripts/initialize-contract.sh`.
+
+
 ### Deploy Individual Contract
 ```bash
 # Deploy escrow contract

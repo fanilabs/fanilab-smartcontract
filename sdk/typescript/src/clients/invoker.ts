@@ -162,6 +162,33 @@ function awaitPollResult<T>(
   });
 }
 
+/**
+ * Serializes submissions per source account so concurrent calls from the same
+ * account do not race on sequence numbers. Each account has its own tail
+ * promise; a new task chains onto the previous one and always releases the
+ * chain (even on failure) so later calls can proceed.
+ */
+export class AccountSequenceCoordinator {
+  private readonly tails = new Map<string, Promise<unknown>>();
+
+  run<T>(accountId: string, task: () => Promise<T>): Promise<T> {
+    const previous = this.tails.get(accountId) ?? Promise.resolve();
+    const next = previous.then(task, task);
+    // Keep the chain alive regardless of task outcome, but don't leak rejections.
+    const tail = next.then(
+      () => undefined,
+      () => undefined
+    );
+    this.tails.set(accountId, tail);
+    tail.then(() => {
+      if (this.tails.get(accountId) === tail) {
+        this.tails.delete(accountId);
+      }
+    });
+    return next;
+  }
+}
+
 export interface SubmissionErrorDetails {
   status: string;
   hash?: string;
@@ -191,6 +218,7 @@ export class SubmissionError extends Error {
 export class ContractInvoker {
   private readonly contract: Contract;
   private readonly defaults: ContractInvokeOptions;
+  private readonly sequences = new AccountSequenceCoordinator();
 
   constructor(contractId: string, defaults: ContractInvokeOptions = {}) {
     this.contract = new Contract(contractId);
@@ -205,8 +233,21 @@ export class ContractInvoker {
     const config = { ...this.defaults, ...options };
     const signal = config.signal;
     throwIfAborted(signal);
-    const server = this.server(config);
     const accountId = this.require(config.sourceAccount, 'sourceAccount');
+    return this.sequences.run(accountId, () =>
+      this.invoke(functionName, args, config, accountId)
+    );
+  }
+
+  private async invoke(
+    functionName: string,
+    args: ScVal[],
+    config: ContractInvokeOptions,
+    accountId: string
+  ): Promise<unknown> {
+    const signal = config.signal;
+    throwIfAborted(signal);
+    const server = this.server(config);
     const networkPassphrase = this.require(config.networkPassphrase, 'networkPassphrase');
     const buildTransaction = async () => {
       throwIfAborted(signal);
@@ -275,35 +316,6 @@ export class ContractInvoker {
         }
       );
     }
-    if (submitted.status === 'PENDING') {
-      return this.waitForResult(server, submitted.hash, config);
-    }
-    return undefined;
-  }
+    if (submitted.status ==
 
-  private async expiringFootprintKeys(
-    server: SorobanRpc.Server,
-    transactionData: SorobanDataBuilder,
-    config: ContractInvokeOptions
-  ): Promise<xdr.LedgerKey[]> {
-    const threshold = config.ttlThresholdLedgers ?? DEFAULT_TTL_THRESHOLD_LEDGERS;
-    const extendTo = config.ttlExtendToLedgers ?? DEFAULT_TTL_EXTEND_TO_LEDGERS;
-    if (!Number.isSafeInteger(threshold) || threshold <= 0) {
-      throw new RangeError('ttlThresholdLedgers must be a positive integer');
-    }
-    if (!Number.isSafeInteger(extendTo) || extendTo <= threshold) {
-      throw new RangeError('ttlExtendToLedgers must be greater than ttlThresholdLedgers');
-    }
-
-    const candidates = [
-      ...transactionData.getReadOnly(),
-      ...transactionData.getReadWrite(),
-    ].filter(canExtendTtl);
-    if (candidates.length === 0) {
-      return [];
-    }
-
-    throwIfAborted(config.signal);
-    const ledgerEntr
-
-/* … truncated 3271 chars — edit only what you need near the top … */
+/* … truncated 1086 chars — edit only what you need near the top … */

@@ -4,7 +4,7 @@
 
 import { ContractInvokeOptions } from '../types/common.types';
 import * as SettlementTypes from '../types/settlement.types';
-import { ContractInvoker, address, i128 } from './invoker';
+import { ContractInvoker, address, i128, u64 } from './invoker';
 
 export class SettlementClient {
   private readonly invoker: ContractInvoker;
@@ -37,17 +37,20 @@ export class SettlementClient {
     params: SettlementTypes.ExecuteSettlementSwapParams,
     options?: ContractInvokeOptions
   ): Promise<void> {
-    await this.invoker.call(
-      'execute_settlement_swap',
-      [
-        address(params.caller),
-        address(params.fromToken),
-        address(params.toToken),
-        address(params.recipient),
-        i128(params.amount),
-        i128(params.minAmountOut),
-      ],
-      options
-    );
+    // The contract's execute_settlement_swap ABI takes seven arguments:
+    // caller, from_token, to_token, recipient, amount, min_amount_out, deadline.
+    const args = [
+      address(params.caller),
+      address(params.fromToken),
+      address(params.toToken),
+      address(params.recipient),
+      i128(params.amount),
+      i128(params.minAmountOut),
+      u64(params.deadline),
+    ];
+    if (args.length !== 7) {
+      throw new Error(`execute_settlement_swap expects 7 arguments, got ${args.length}`);
+    }
+    await this.invoker.call('execute_settlement_swap', args, options);
   }
 }

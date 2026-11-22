@@ -5,10 +5,32 @@
   "description": "TypeScript SDK for FaniLab smart contracts on Stellar Soroban",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "browser": "./dist/index.js",
+      "node": {
+        "import": "./dist/index.js",
+        "require": "./dist/index.js"
+      },
+      "import": "./dist/index.js",
+      "require": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "browser": "dist/index.js",
+  "sideEffects": false,
   "scripts": {
     "build": "tsc --project tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
+    "smoke:browser": "node scripts/browser-import-smoke.mjs",
     "prepare": "npm run build"
   },
   "keywords": [
@@ -31,6 +53,6 @@
     "ts-jest": "^29.4.14"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.0.0"
   }
 }

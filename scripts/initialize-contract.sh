@@ -2,6 +2,11 @@
 
 # FaniLab Smart Contracts - Single Contract Initialization Script
 # Usage: ./initialize-contract.sh <contract_name> [network]
+#
+# Configuration file precedence (highest to lowest):
+#   1. Explicit path via --config <path> flag
+#   2. Explicit path via CONFIG_FILE environment variable
+#   3. Default repository .env ($PROJECT_ROOT/.env)
 
 set -e
 
@@ -16,6 +21,20 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 CONTRACT_IDS_FILE="$PROJECT_ROOT/contract-ids-$NETWORK.json"
 
+# Resolve the configuration file path. An explicit path (--config flag or
+# CONFIG_FILE env var) takes precedence over the default repository .env.
+CONFIG_FILE="${CONFIG_FILE:-}"
+if [ "$2" = "--config" ] || [ "$3" = "--config" ]; then
+    if [ "$2" = "--config" ]; then
+        CONFIG_FILE="$3"
+    else
+        CONFIG_FILE="$4"
+    fi
+fi
+if [ -z "$CONFIG_FILE" ]; then
+    CONFIG_FILE="$PROJECT_ROOT/.env"
+fi
+
 SUPPORTED_CONTRACTS=(
     "escrow_contract"
     "delivery_contract"
@@ -26,7 +45,7 @@ SUPPORTED_CONTRACTS=(
 )
 
 if [ -z "$CONTRACT_NAME" ]; then
-    echo "❌ Usage: $0 <contract_name> [network]"
+    echo "❌ Usage: $0 <contract_name> [network] [--config <path>]"
     echo "   Supported contract names: ${SUPPORTED_CONTRACTS[*]}"
     exit 1
 fi
@@ -35,6 +54,7 @@ echo "🔧 Initializing FaniLab Smart Contract"
 echo "======================================"
 echo "Contract: $CONTRACT_NAME"
 echo "Network: $NETWORK"
+echo "Config: $CONFIG_FILE"
 echo ""
 
 # Check if contract IDs file exists
@@ -44,11 +64,11 @@ if [ ! -f "$CONTRACT_IDS_FILE" ]; then
     exit 1
 fi
 
-# Load environment variables
-if [ -f "$PROJECT_ROOT/.env" ]; then
-    source "$PROJECT_ROOT/.env"
+# Load environment variables from the resolved configuration file.
+if [ -f "$CONFIG_FILE" ]; then
+    source "$CONFIG_FILE"
 else
-    echo "⚠️  No .env file found. Using defaults."
+    echo "⚠️  No config file found at '$CONFIG_FILE'. Using defaults."
 fi
 
 # Verify the signing identity exists before any invoke is attempted.
@@ -78,7 +98,7 @@ case "$CONTRACT_NAME" in
             exit 1
         fi
         if [ -z "$ADMIN_ADDRESS" ] || [ -z "$TOKEN_ADDRESS" ]; then
-            echo "❌ ADMIN_ADDRESS and TOKEN_ADDRESS must be set (in .env or the environment)"
+            echo "❌ ADMIN_ADDRESS and TOKEN_ADDRESS must be set (in $CONFIG_FILE or the environment)"
             exit 1
         fi
 
@@ -108,7 +128,7 @@ case "$CONTRACT_NAME" in
             exit 1
         fi
         if [ -z "$ADMIN_ADDRESS" ]; then
-            echo "❌ ADMIN_ADDRESS must be set (in .env or the environment)"
+            echo "❌ ADMIN_ADDRESS must be set (in $CONFIG_FILE or the environment)"
             exit 1
         fi
 
@@ -135,7 +155,7 @@ case "$CONTRACT_NAME" in
             exit 1
         fi
         if [ -z "$ADMIN_ADDRESS" ]; then
-            echo "❌ ADMIN_ADDRESS must be set (in .env or the environment)"
+            echo "❌ ADMIN_ADDRESS must be set (in $CONFIG_FILE or the environment)"
             exit 1
         fi
 
@@ -160,7 +180,7 @@ case "$CONTRACT_NAME" in
             exit 1
         fi
         if [ -z "$ADMIN_ADDRESS" ]; then
-            echo "❌ ADMIN_ADDRESS must be set (in .env or the environment)"
+            echo "❌ ADMIN_ADDRESS must be set (in $CONFIG_FILE or the environment)"
             exit 1
         fi
 
@@ -183,7 +203,7 @@ case "$CONTRACT_NAME" in
             exit 1
         fi
         if [ -z "$ADMIN_ADDRESS" ]; then
-            echo "❌ ADMIN_ADDRESS must be set (in .env or the environment)"
+            echo "❌ ADMIN_ADDRESS must be set (in $CONFIG_FILE or the environment)"
             exit 1
         fi
 
@@ -207,7 +227,7 @@ case "$CONTRACT_NAME" in
             exit 1
         fi
         if [ -z "$ADMIN_ADDRESS" ]; then
-            echo "❌ ADMIN_ADDRESS must be set (in .env or the environment)"
+            echo "❌ ADMIN_ADDRESS must be set (in $CONFIG_FILE or the environment)"
             exit 1
         fi
 
@@ -223,12 +243,11 @@ case "$CONTRACT_NAME" in
         echo "✓ Settlement initialized"
         ;;
     *)
-        echo "❌ Initialization for '$CONTRACT_NAME' is not yet supported by this script."
+        echo "❌ Unknown contract name: $CONTRACT_NAME"
         echo "   Supported contract names: ${SUPPORTED_CONTRACTS[*]}"
         exit 1
         ;;
 esac
 
 echo ""
-echo "✅ $CONTRACT_NAME initialized successfully!"
-exit 0
+echo "✅ Initialization complete for $CONTRACT_NAME"

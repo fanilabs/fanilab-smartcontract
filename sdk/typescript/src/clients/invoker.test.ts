@@ -1,41 +1,66 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { Invoker } from "./invoker";
 
-describe("Invoker polling validation", () => {
-  let sendTransaction: ReturnType<typeof vi.fn>;
+function makeAbortError(): Error {
+  const err = new Error("The operation was aborted");
+  err.name = "AbortError";
+  return err;
+}
+
+describe("Invoker cancellation", () => {
   let invoker: Invoker;
+  let submitTransaction: ReturnType<typeof vi.fn>;
+  let simulateTransaction: ReturnType<typeof vi.fn>;
+  let getAccount: ReturnType<typeof vi.fn>;
+  let extendTtl: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
-    sendTransaction = vi.fn().mockResolvedValue({ hash: "0xabc" });
+    submitTransaction = vi.fn().mockResolvedValue({ hash: "0xabc" });
+    simulateTransaction = vi.fn().mockResolvedValue({ success: true });
+    getAccount = vi.fn().mockResolvedValue({ sequence: 1n });
+    extendTtl = vi.fn().mockResolvedValue(undefined);
+
     invoker = new Invoker({
-      sendTransaction,
-      waitForResult: vi.fn(),
+      submitTransaction,
+      simulateTransaction,
+      getAccount,
+      extendTtl,
     } as any);
   });
 
-  it("rejects a non-positive polling interval before sending", async () => {
+  it("sends no transactions when the signal is already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort();
+
     await expect(
-      invoker.invoke({ pollingIntervalMs: 0 } as any),
-    ).rejects.toThrow(/polling/i);
-    expect(sendTransaction).not.toHaveBeenCalled();
+      invoker.invoke({
+        payload: { function: "0x1::coin::transfer", typeArguments: [], functionArguments: [] },
+        sender: "0x1",
+        signal: controller.signal,
+      } as any),
+    ).rejects.toMatchObject({ name: "AbortError" });
+
+    expect(getAccount).not.toHaveBeenCalled();
+    expect(simulateTransaction).not.toHaveBeenCalled();
+    expect(extendTtl).not.toHaveBeenCalled();
+    expect(submitTransaction).not.toHaveBeenCalled();
   });
 
-  it("rejects a non-positive polling timeout before sending", async () => {
-    await expect(
-      invoker.invoke({ pollingTimeoutMs: -1 } as any),
-    ).rejects.toThrow(/polling/i);
-    expect(sendTransaction).not.toHaveBeenCalled();
-  });
+  it("stops before submission when aborted after simulation", async () => {
+    const controller = new AbortController();
+    simulateTransaction.mockImplementation(async () => {
+      controller.abort();
+      return { success: true };
+    });
 
-  it("rejects a timeout shorter than the interval before sending", async () => {
     await expect(
-      invoker.invoke({ pollingIntervalMs: 1000, pollingTimeoutMs: 500 } as any),
-    ).rejects.toThrow(/polling/i);
-    expect(sendTransaction).not.toHaveBeenCalled();
-  });
+      invoker.invoke({
+        payload: { function: "0x1::coin::transfer", typeArguments: [], functionArguments: [] },
+        sender: "0x1",
+        signal: controller.signal,
+      } as any),
+    ).rejects.toMatchObject({ name: "AbortError" });
 
-  it("sends the transaction when polling settings are valid", async () => {
-    await invoker.invoke({ pollingIntervalMs: 100, pollingTimeoutMs: 5000 } as any);
-    expect(sendTransaction).toHaveBeenCalledTimes(1);
+    expect(submitTransaction).not.toHaveBeenCalled();
   });
 });

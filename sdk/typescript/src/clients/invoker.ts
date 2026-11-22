@@ -116,6 +116,7 @@ export function native(value: ScVal): unknown {
 
 const DEFAULT_TTL_THRESHOLD_LEDGERS = 100_000;
 const DEFAULT_TTL_EXTEND_TO_LEDGERS = 518_400;
+const LEDGER_ENTRY_BATCH_LIMIT = 200;
 
 const DEFAULT_SUBMISSION_MAX_ATTEMPTS = 5;
 const DEFAULT_SUBMISSION_RETRY_DELAY_MS = 1_000;
@@ -408,10 +409,7 @@ export class ContractInvoker {
     if (expiringKeys.length > 0) {
       await this.extendFootprintTtl(
         server,
-        accountId,
-        networkPassphrase,
         simulation.transactionData,
-        expiringKeys,
         config
       );
       throwIfAborted(signal);

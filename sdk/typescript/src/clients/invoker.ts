@@ -15,6 +15,41 @@ import { formatSorobanError } from './error-codes';
 
 export type ScVal = xdr.ScVal;
 
+/**
+ * Explicit invocation mode. `simulate` never submits a transaction and returns
+ * the simulated return value; `submit` requires a signer and submits the
+ * transaction, returning the native return value (or a receipt when requested).
+ */
+export type InvocationMode = 'simulate' | 'submit';
+
+/**
+ * Raised when a mutation is attempted without a signer. Previously this
+ * silently degraded into a simulation and resolved `void`, hiding the mistake.
+ */
+export class MissingSignerError extends Error {
+  constructor(functionName: string) {
+    super(
+      `Cannot submit mutation '${functionName}' without a signer. ` +
+        `Pass a signer to submit, or use mode: 'simulate' to simulate explicitly.`
+    );
+    this.name = 'MissingSignerError';
+  }
+}
+
+/**
+ * Opt-in receipt describing a successful write invocation. Returned only when
+ * `ContractInvokeOptions.returnReceipt` is enabled; otherwise `call` keeps
+ * returning the native return value so existing callers are unaffected.
+ */
+export interface InvocationReceipt {
+  /** Transaction hash of the submitted invocation. */
+  hash: string;
+  /** Ledger sequence in which the transaction was included. */
+  ledger: number;
+  /** Native return value of the invoked contract function, if any. */
+  result: unknown;
+}
+
 export function address(value: string): ScVal {
   return new Address(value).toScVal();
 }
@@ -90,20 +125,72 @@ function canExtendTtl(key: xdr.LedgerKey): boolean {
     (key.type === 'contractData' && key.contractData.durability.name === 'persistent');
 }
 
+function ledgerKeyId(key: xdr.LedgerKey): string {
+  return key.toXDR('base64');
+}
+
+function dedupeLedgerKeys(keys: xdr.LedgerKey[]): xdr.LedgerKey[] {
+  const seen = new Set<string>();
+  const unique: xdr.LedgerKey[] = [];
+  for (const key of keys) {
+    const id = ledgerKeyId(key);
+    if (seen.has(id)) {
+      continue;
+    }
+    seen.add(id);
+    unique.push(key);
+  }
+  return unique;
+}
+
 export function findExpiringPersistentKeys(
   entries: Array<{ key: xdr.LedgerKey; liveUntilLedgerSeq?: number }>,
   latestLedger: number,
   thresholdLedgers: number
 ): xdr.LedgerKey[] {
-  return entries
-    .filter(
-      (entry) =>
-        canExtendTtl(entry.key) &&
-        entry.liveUntilLedgerSeq !== undefined &&
-        entry.liveUntilLedgerSeq > latestLedger &&
-        entry.liveUntilLedgerSeq - latestLedger <= thresholdLedgers
-    )
-    .map((entry) => entry.key);
+  return dedupeLedgerKeys(
+    entries
+      .filter(
+        (entry) =>
+          canExtendTtl(entry.key) &&
+          entry.liveUntilLedgerSeq !== undefined &&
+          entry.liveUntilLedgerSeq > latestLedger &&
+          entry.liveUntilLedgerSeq - latestLedger <= thresholdLedgers
+      )
+      .map((entry) => entry.key)
+  );
+}
+
+/**
+ * Resolve the effective TTL extension target, honoring the network's maximum
+ * entry lifetime. Caller-provided values above the ceiling are clamped (with a
+ * warning) so the extension still succeeds; values that cannot be satisfied
+ * (e.g. not above the threshold) are rejected with a clear explanation.
+ */
+export function resolveTtlExtendTo(
+  requestedExtendTo: number,
+  thresholdLedgers: number,
+  networkMaxTtlLedgers: number
+): number {
+  if (!Number.isSafeInteger(networkMaxTtlLedgers) || networkMaxTtlLedgers <= 0) {
+    throw new RangeError('network maximum TTL must be a positive integer');
+  }
+  if (!Number.isSafeInteger(requestedExtendTo) || requestedExtendTo <= thresholdLedgers) {
+    throw new RangeError('ttlExtendToLedgers must be greater than ttlThresholdLedgers');
+  }
+  if (thresholdLedgers >= networkMaxTtlLedgers) {
+    throw new RangeError(
+      `ttlThresholdLedgers (${thresholdLedgers}) must be less than the network maximum TTL (${networkMaxTtlLedgers})`
+    );
+  }
+  if (requestedExtendTo > networkMaxTtlLedgers) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `ttlExtendToLedgers (${requestedExtendTo}) exceeds the network maximum TTL (${networkMaxTtlLedgers}); clamping to the network maximum`
+    );
+    return networkMaxTtlLedgers;
+  }
+  return requestedExtendTo;
 }
 
 function abortError(): Error {
@@ -228,6 +315,43 @@ export class ContractInvoker {
     this.defaults = defaults;
   }
 
+  /**
+   * Resolve the effective invocation mode. An explicit `mode` always wins.
+   * Otherwise a signer implies `submit`; without a signer we default to
+   * `simulate` for backwards compatibility, but `submit` callers that omit a
+   * signer are rejected by `call` rather than silently simulated.
+   */
+  private resolveMode(config: ContractInvokeOptions): InvocationMode {
+    if (config.mode) {
+      return config.mode;
+    }
+    return config.signer ? 'submit' : 'simulate';
+  }
+
+  /**
+   * Simulate a contract call without submitting a transaction. Always returns
+   * the simulated return value and never requires a signer.
+   */
+  async simulate(
+    functionName: string,
+    args: ScVal[],
+    options: ContractInvokeOptions = {}
+  ): Promise<unknown> {
+    return this.call(functionName, args, { ...options, mode: 'simulate' });
+  }
+
+  /**
+   * Submit a contract mutation. Requires a signer; throws `MissingSignerError`
+   * when none is provided so accidental unsigned mutations are detectable.
+   */
+  async submit(
+    functionName: string,
+    args: ScVal[],
+    options: ContractInvokeOptions = {}
+  ): Promise<unknown> {
+    return this.call(functionName, args, { ...options, mode: 'submit' });
+  }
+
   async call(
     functionName: string,
     args: ScVal[],
@@ -271,7 +395,7 @@ export class ContractInvoker {
     if (SorobanRpc.Api.isSimulationError(simulation)) {
       throw new Error(formatSorobanError('Soroban simulation failed', simulation.error));
     }
-    if (!config.signer) {
+    if (mode === 'simulate') {
       return simulation.result?.retval ? native(simulation.result.retval) : undefined;
     }
 

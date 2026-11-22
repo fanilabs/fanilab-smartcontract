@@ -71,7 +71,11 @@ if [ -f "$CONFIG_FILE" ]; then
     set +a
 fi
 
-CONTRACTS=("escrow_contract" "delivery_contract" "dispute_resolution_contract" "fleet_management_contract" "identity_reputation_contract" "settlement_contract")
+# Networks this script knows how to deploy to. The network argument is
+# interpolated into the manifest path (contract-ids-$NETWORK.json) and passed
+# to the Stellar CLI, so it must be validated against this allowlist before any
+# path is constructed or any file is written.
+SUPPORTED_NETWORKS=("testnet" "mainnet" "futurenet" "local")
 
 # Minimum native (XLM) balance, in stroops, the deployer must hold before a
 # deployment is attempted. Each contract deploy consumes fees + a storage
@@ -91,6 +95,39 @@ if [ -z "$CONTRACT_NAME" ]; then
     echo "   Valid contract names: ${CONTRACTS[*]}" >&2
     exit 1
 fi
+
+# Reject path separators / traversal sequences outright. This runs before any
+# manifest path is built so invalid input never touches the filesystem.
+case "$NETWORK" in
+    */*|*\\*|*..*)
+        echo "${RED}❌ Invalid network name: '$NETWORK'${NC}" >&2
+        echo "   Network names must not contain path separators or '..'." >&2
+        echo "   Supported networks: ${SUPPORTED_NETWORKS[*]}" >&2
+        exit 1
+        ;;
+esac
+
+NETWORK_KNOWN=false
+for n in "${SUPPORTED_NETWORKS[@]}"; do
+    if [ "$n" = "$NETWORK" ]; then
+        NETWORK_KNOWN=true
+        break
+    fi
+done
+
+if [ "$NETWORK_KNOWN" = false ]; then
+    echo "${RED}❌ Unsupported network: '$NETWORK'${NC}" >&2
+    echo "   Supported networks: ${SUPPORTED_NETWORKS[*]}" >&2
+    exit 1
+fi
+
+OUTPUT_FILE="$PROJECT_ROOT/contract-ids-$NETWORK.json"
+# Shared lock guarding the manifest read-modify-write below. Concurrent
+# single-contract deploys serialize on this file so neither loses the other's
+# added contract ID.
+LOCK_FILE="$OUTPUT_FILE.lock"
+
+CONTRACTS=("escrow_contract" "delivery_contract" "dispute_resolution_contract" "fleet_management_contract" "identity_reputation_contract" "settlement_contract")
 
 CONTRACT_KNOWN=false
 for c in "${CONTRACTS[@]}"; do

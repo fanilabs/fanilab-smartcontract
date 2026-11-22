@@ -100,8 +100,14 @@ jobs:
         echo "✅ No legacy wasm target references found in scripts/, Makefile, Makefile.windows, or .vscode/."
 
   typescript_sdk:
-    name: Build TypeScript SDK
+    name: Build TypeScript SDK (Node ${{ matrix.node-version }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Node 20 is the supported minimum runtime declared in
+        # sdk/typescript/package.json engines.node; Node 22 is the current LTS.
+        node-version: ['20', '22']
 
     steps:
     - name: Checkout repository
@@ -110,7 +116,7 @@ jobs:
     - name: Set up Node.js
       uses: actions/setup-node@v7
       with:
-        node-version: '20'
+        node-version: ${{ matrix.node-version }}
         cache: 'npm'
         cache-dependency-path: sdk/typescript/package-lock.json
 

@@ -339,6 +339,31 @@ if ! validate_manifest "$OUTPUT_FILE"; then
     exit 1
 fi
 
+# Record the expected WASM hash for each deployed contract so that
+# initialize-all-contracts.sh can verify on-chain identity before init.
+echo ""
+echo "${BLUE}Recording expected WASM hashes...${NC}"
+HASH_FILE="$PROJECT_ROOT/contract-hashes-$NETWORK.json"
+echo "{" > "$HASH_FILE"
+echo "  \"network\": \"$NETWORK\"," >> "$HASH_FILE"
+echo "  \"contracts\": {" >> "$HASH_FILE"
+for i in "${!CONTRACTS[@]}"; do
+    contract="${CONTRACTS[$i]}"
+    expected_hash=$(expected_wasm_hash "$contract")
+    if [ $? -ne 0 ] || [ -z "$expected_hash" ]; then
+        echo "${RED}❌ Could not compute expected WASM hash for $contract${NC}"
+        exit 1
+    fi
+    if [ $i -lt $((${#CONTRACTS[@]} - 1)) ]; then
+        echo "    \"$contract\": \"$expected_hash\"," >> "$HASH_FILE"
+    else
+        echo "    \"$contract\": \"$expected_hash\"" >> "$HASH_FILE"
+    fi
+done
+echo "  }" >> "$HASH_FILE"
+echo "}" >> "$HASH_FILE"
+echo "${GREEN}✓ Expected hashes saved to: $HASH_FILE${NC}"
+
 echo ""
 echo "${GREEN}✓ All contracts deployed${NC}"
 echo ""

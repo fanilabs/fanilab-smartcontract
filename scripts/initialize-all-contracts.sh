@@ -10,13 +10,24 @@ NETWORK=${1:-testnet}
 # Overridable, but the default must match the identity provisioned by
 # .github/workflows/deploy-testnet.yml and documented in docs/DEPLOYMENT.md.
 DEPLOYER_IDENTITY="${DEPLOYER_IDENTITY:-deployer}"
+# Opt-in escape hatch for cases where ADMIN_ADDRESS is intentionally a
+# multisig (or otherwise differs from the local signing identity). When set
+# to a truthy value the signer/admin compatibility preflight is skipped.
+ALLOW_MULTISIGNER_ADMIN="${ALLOW_MULTISIGNER_ADMIN:-false}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 CONTRACT_IDS_FILE="$PROJECT_ROOT/contract-ids-$NETWORK.json"
+# Durable receipt recording each confirmed initialization stage and its
+# transaction hash. Written incrementally so an interrupted run can be
+# reconciled/resumed by an operator.
+RECEIPT_FILE="${INIT_RECEIPT_FILE:-$PROJECT_ROOT/init-receipt-$NETWORK.json}"
+# When true, stages already recorded as confirmed in the receipt are skipped.
+RESUME_INIT="${RESUME_INIT:-true}"
 
 echo "🔧 Initializing FaniLab Smart Contracts"
 echo "======================================"
 echo "Network: $NETWORK"
+echo "Receipt: $RECEIPT_FILE"
 echo ""
 
 # Check if contract IDs file exists
@@ -25,6 +36,23 @@ if [ ! -f "$CONTRACT_IDS_FILE" ]; then
     echo "Please deploy contracts first using deploy-all-contracts.sh"
     exit 1
 fi
+
+# Verify the manifest's declared network matches the selected network before
+# any contract invocation. A mismatch means the IDs belong to a different
+# network and every invoke below would target the wrong deployment.
+MANIFEST_NETWORK=$(grep -o '"network": *"[^"]*"' "$CONTRACT_IDS_FILE" | head -n 1 | grep -o '"[^"]*"$' | tr -d '"')
+if [ -z "$MANIFEST_NETWORK" ]; then
+    echo "❌ Could not read the 'network' field from $CONTRACT_IDS_FILE"
+    echo "   Expected a \"network\": \"<name>\" entry in the manifest."
+    exit 1
+fi
+if [ "$MANIFEST_NETWORK" != "$NETWORK" ]; then
+    echo "❌ Network mismatch: selected network is '$NETWORK', but"
+    echo "   $CONTRACT_IDS_FILE declares network '$MANIFEST_NETWORK'."
+    echo "   Refusing to initialize contracts against the wrong network."
+    exit 1
+fi
+echo "✓ Manifest network '$MANIFEST_NETWORK' matches selected network '$NETWORK'"
 
 # Load environment variables
 if [ -f "$PROJECT_ROOT/.env" ]; then
@@ -218,13 +246,14 @@ init_if_needed() {
     echo "✓ $label initialized"
 }
 
-echo "Escrow Contract: $ESCROW_ID"
-echo "Delivery Contract: $DELIVERY_ID"
-echo "Dispute Resolution Contract: $DISPUTE_ID"
-echo "Fleet Management Contract: $FLEET_ID"
-echo "Identity Reputation Contract: $IDENTITY_ID"
-echo "Settlement Contract: $SETTLEMENT_ID"
 echo ""
+echo "Verifying deployed contracts..."
+verify_deployed_contract "escrow_contract" "$ESCROW_ID"
+verify_deployed_contract "delivery_contract" "$DELIVERY_ID"
+verify_deployed_contract "dispute_resolution_contract" "$DISPUTE_ID"
+verify_deployed_contract "fleet_management_contract" "$FLEET_ID"
+verify_deployed_contract "identity_reputation_contract" "$IDENTITY_ID"
+verify_deployed_contract "settlement_contract" "$SETTLEMENT_ID"
 
 echo "Initializing Escrow Contract..."
 init_if_needed "$ESCROW_ID" "Escrow" \

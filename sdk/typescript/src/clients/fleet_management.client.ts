@@ -15,10 +15,37 @@ import { ContractInvoker, address, u32, u64, vec } from './invoker';
 const DEFAULT_ROSTER_PAGE_SIZE = 100;
 
 /**
- * Expected number of elements in the `get_fleet_signers` tuple:
- * `(signers: Vec<Address>, threshold: u32)`.
+ * Explicitly decode the native `get_driver_fleet_status` result into a
+ * `DriverFleetStatus`. Soroban returns enum variants as single-element tuples
+ * (e.g. `['Pending']`, `['Active']`, `['Removed']`), so we normalize both the
+ * tuple form and bare string form, and map unknown variants to `null`.
  */
-const FLEET_SIGNERS_TUPLE_LENGTH = 2;
+function decodeDriverFleetStatus(value: unknown): DriverFleetStatus | null {
+  if (value == null) {
+    return null;
+  }
+
+  let raw: unknown = value;
+  if (Array.isArray(raw)) {
+    raw = raw.length > 0 ? raw[0] : null;
+  }
+
+  if (raw == null) {
+    return null;
+  }
+
+  const name = String(raw);
+  switch (name) {
+    case 'Pending':
+      return DriverFleetStatus.Pending;
+    case 'Active':
+      return DriverFleetStatus.Active;
+    case 'Removed':
+      return DriverFleetStatus.Removed;
+    default:
+      return null;
+  }
+}
 
 export class FleetManagementClient {
   private readonly invoker: ContractInvoker;
@@ -130,7 +157,7 @@ export class FleetManagementClient {
 
   async getDriverFleetStatus(fleetId: bigint, driver: string, options?: ContractInvokeOptions): Promise<DriverFleetStatus | null> {
     const result = await this.invoker.call('get_driver_fleet_status', [u64(fleetId), address(driver)], options);
-    return result == null ? null : (result as DriverFleetStatus);
+    return decodeDriverFleetStatus(result);
   }
 
   async getFleetRoster(params: FleetManagementTypes.GetFleetRosterParams, options?: ContractInvokeOptions): Promise<string[]> {
@@ -150,71 +177,6 @@ export class FleetManagementClient {
   }
 
   async getFleetSigners(fleetId: bigint, options?: ContractInvokeOptions): Promise<{ signers: string[]; threshold: number }> {
-    const result = await this.invoker.call('get_fleet_signers', [u64(fleetId)], options);
-    return decodeFleetSigners(result);
-  }
-}
+    c
 
-/**
- * Decode and validate the `get_fleet_signers` tuple response.
- *
- * The contract returns `(signers: Vec<Address>, threshold: u32)`. This helper
- * rejects malformed responses (wrong tuple length, non-vector signers, bad
- * per-entry signer values, or a missing/non-numeric threshold) with contextual
- * errors identifying which part of the tuple failed (Issue #730).
- */
-function decodeFleetSigners(result: unknown): { signers: string[]; threshold: number } {
-  if (!Array.isArray(result)) {
-    throw new Error(
-      `get_fleet_signers: expected tuple array of length ${FLEET_SIGNERS_TUPLE_LENGTH}, received ${describeValue(result)}`
-    );
-  }
-  if (result.length !== FLEET_SIGNERS_TUPLE_LENGTH) {
-    throw new Error(
-      `get_fleet_signers: expected tuple of length ${FLEET_SIGNERS_TUPLE_LENGTH}, received length ${result.length}`
-    );
-  }
-
-  const [rawSigners, rawThreshold] = result;
-
-  if (!Array.isArray(rawSigners)) {
-    throw new Error(
-      `get_fleet_signers: expected signers vector at tuple index 0, received ${describeValue(rawSigners)}`
-    );
-  }
-  const signers = rawSigners.map((entry, index) => {
-    if (entry == null || (typeof entry !== 'string' && typeof entry !== 'object')) {
-      throw new Error(
-        `get_fleet_signers: invalid signer at index ${index}, received ${describeValue(entry)}`
-      );
-    }
-    return String(entry);
-  });
-
-  if (rawThreshold == null) {
-    throw new Error('get_fleet_signers: missing threshold at tuple index 1');
-  }
-  const threshold = Number(rawThreshold);
-  if (!Number.isFinite(threshold) || !Number.isInteger(threshold) || threshold < 0) {
-    throw new Error(
-      `get_fleet_signers: expected numeric threshold at tuple index 1, received ${describeValue(rawThreshold)}`
-    );
-  }
-
-  return { signers, threshold };
-}
-
-function describeValue(value: unknown): string {
-  if (value === null) return 'null';
-  if (value === undefined) return 'undefined';
-  if (Array.isArray(value)) return `array(length ${value.length})`;
-  return typeof value;
-}
-
-function decodeFleet(value: unknown): FleetProfile {
-  return value as FleetProfile;
-}
-
-function decodePendingTreasury(value: unknown): PendingTreasuryChange {
-  return value as PendingTreasuryChange;
-}
+/* … truncated 949 chars — edit only what you need near the top … */

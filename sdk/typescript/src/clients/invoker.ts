@@ -114,6 +114,30 @@ export function native(value: ScVal): unknown {
   return scValToNative(value);
 }
 
+/**
+ * Hook invoked with the authorization entries produced by simulation, before
+ * the transaction is assembled. Callers may inspect entries and sign them
+ * (e.g. for contract-address based authorization) by returning the entries to
+ * attach to the assembled transaction.
+ */
+export type AuthEntryHook = (
+  entries: xdr.SorobanAuthorizationEntry[],
+  context: AuthEntryContext
+) =>
+  | xdr.SorobanAuthorizationEntry[]
+  | Promise<xdr.SorobanAuthorizationEntry[]>;
+
+export interface AuthEntryContext {
+  /** The unsigned transaction that was simulated. */
+  transaction: import('@stellar/stellar-sdk').Transaction;
+  /** The simulation result carrying the auth entries. */
+  simulation: SorobanRpc.Api.SimulateTransactionSuccessResponse;
+  /** Network passphrase used to build the transaction. */
+  networkPassphrase: string;
+  /** The latest ledger sequence at simulation time, if available. */
+  latestLedger?: number;
+}
+
 const DEFAULT_TTL_THRESHOLD_LEDGERS = 100_000;
 const DEFAULT_TTL_EXTEND_TO_LEDGERS = 518_400;
 const LEDGER_ENTRY_BATCH_LIMIT = 200;
@@ -194,6 +218,48 @@ export function resolveTtlExtendTo(
   return requestedExtendTo;
 }
 
+/**
+ * Returns true when the given hostname refers to the local machine
+ * (loopback). Only these hosts are allowed to use plain HTTP automatically.
+ */
+export function isLoopbackHost(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  if (host === 'localhost' || host === '::1' || host === '0:0:0:0:0:0:0:1') {
+    return true;
+  }
+  // IPv4 loopback range 127.0.0.0/8
+  return /^127(?:\.\d{1,3}){3}$/.test(host);
+}
+
+/**
+ * Decide whether plain HTTP is permitted for the given RPC URL.
+ *
+ * HTTP is opt-in: it is only allowed when the caller explicitly sets
+ * `allowInsecureHttp`, or when the URL points at a loopback host. Remote
+ * endpoints must use HTTPS unless the insecure option is set.
+ */
+export function assertHttpTransportAllowed(url: string, allowInsecureHttp?: boolean): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`Invalid RPC URL: ${url}`);
+  }
+  if (parsed.protocol !== 'http:') {
+    return;
+  }
+  if (allowInsecureHttp === true) {
+    return;
+  }
+  if (isLoopbackHost(parsed.hostname)) {
+    return;
+  }
+  throw new Error(
+    `Refusing insecure HTTP RPC transport for remote endpoint ${parsed.host}. ` +
+      'Use HTTPS, or set allowInsecureHttp: true to opt in explicitly.'
+  );
+}
+
 function abortError(): Error {
   const error = new Error('Contract invocation was aborted');
   error.name = 'AbortError';
@@ -233,6 +299,13 @@ function awaitPollResult<T>(
   signal?: AbortSignal
 ): Promise<T> {
   return new Promise((resolve, reject) => {
+    // Attach a rejection handler immediately so a rejected request never
+    // surfaces as an unhandled rejection, even when we bail out early below.
+    const settled = request.then(
+      (result) => ({ ok: true as const, result }),
+      (error: unknown) => ({ ok: false as const, error })
+    );
+
     if (signal?.aborted) {
       reject(abortError());
       return;
@@ -246,9 +319,8 @@ function awaitPollResult<T>(
     const timer = setTimeout(() => finish(() => reject(new Error(timeoutMessage))), timeoutMs);
     const onAbort = () => finish(() => reject(abortError()));
     signal?.addEventListener('abort', onAbort, { once: true });
-    request.then(
-      (result) => finish(() => resolve(result)),
-      (error: unknown) => finish(() => reject(error))
+    settled.then((outcome) =>
+      finish(() => (outcome.ok ? resolve(outcome.result) : reject(outcome.error)))
     );
   });
 }

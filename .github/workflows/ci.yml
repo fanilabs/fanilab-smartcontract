@@ -32,6 +32,25 @@ jobs:
             scripts/deploy-contract.sh \
             scripts/initialize-all-contracts.sh
 
+  rust_docs:
+    name: Rust Docs
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v7
+
+    - name: Build documentation (deny warnings)
+      # Policy:
+      # - `--workspace --lib` documents every workspace library target.
+      # - `--no-deps` excludes dependency documentation, so third-party crates
+      #   are not built; cross-crate links between workspace crates still
+      #   resolve because those crates are documented in the same invocation.
+      # - `RUSTDOCFLAGS='-D warnings'` turns broken intra-doc links and any
+      #   other rustdoc warning into a hard failure.
+      env:
+        RUSTDOCFLAGS: -D warnings
+      run: cargo doc --workspace --no-deps --lib
+
   rust:
     name: Rust
     runs-on: ubuntu-latest

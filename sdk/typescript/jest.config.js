@@ -12,9 +12,8 @@ module.exports = {
       'ts-jest',
       {
         tsconfig: 'tsconfig.json',
-        // Transpile-only. Type checking is enforced separately by
-        // `npm run typecheck`; running it here would fail every test suite on
-        // the pre-existing `SorobanRpc` drift in clients/invoker.ts.
+        // Transpile-only. Type checking is decoupled from test execution and
+        // enforced as an independent CI check via `npx tsc --noEmit`.
         diagnostics: false,
       },
     ],

@@ -2,7 +2,9 @@
 name = "shared_types"
 version.workspace = true
 edition = "2021"
+rust-version.workspace = true
 license = "MIT"
+publish = false
 
 [lib]
 path = "lib.rs"

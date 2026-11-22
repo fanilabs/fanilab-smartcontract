@@ -43,8 +43,18 @@ format:
 fmt: format
 
 # Lint
+# Runs the same target/feature combinations as CI:
+#   1. Host pass: clippy over all targets with all features.
+#   2. WASM pass: clippy for the wasm32v1-none target with all features.
+# Prerequisite for the WASM pass (install once):
+#   rustup target add wasm32v1-none
 lint:
 	cargo clippy --all-targets --all-features -- -D warnings
+	cargo clippy --target wasm32v1-none --all-features -- -D warnings
+
+# Lint only the WASM target (requires: rustup target add wasm32v1-none)
+lint-wasm:
+	cargo clippy --target wasm32v1-none --all-features -- -D warnings
 
 # Security audit
 audit:
@@ -62,4 +72,4 @@ clean:
 check:
 	cargo check --target wasm32v1-none
 
-.PHONY: default all build build-escrow build-delivery build-dispute build-fleet build-identity build-settlement test test-verbose format fmt lint audit coverage clean check
+.PHONY: default all build build-escrow build-delivery build-dispute build-fleet build-identity build-settlement test test-verbose format fmt lint lint-wasm audit coverage clean check

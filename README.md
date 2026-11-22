@@ -235,10 +235,15 @@ fanilab-smartcontract/
 ## ⚙️ Installation Instructions
 
 1. **Install Rust and standard utilities:**
+
+   The workspace declares a minimum supported Rust version (MSRV) via `rust-version` in `Cargo.toml`. Use a toolchain at or above that version (see `rust-toolchain.toml` / `Cargo.toml` for the exact value); CI enforces it with a dedicated MSRV check job.
+
    ```bash
    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
    rustup target add wasm32v1-none
    ```
+
+   > **Note:** `wasm32v1-none` is required not only for building but also for the local lint command (`make lint`), which runs the same host and WASM clippy passes as CI. Install it before running lint locally.
 
 2. **Install Stellar CLI:**
    ```bash
@@ -330,10 +335,18 @@ NETWORK_PASSPHRASE="Test SDF Network ; September 2015"
 
 This project uses GitHub Actions for CI/CD. The pipeline `.github/workflows/ci.yml` is configured to automatically:
 - Run Rust formatting checks (`cargo fmt`).
-- Run Rust linting (`cargo clippy`).
+- Run Rust linting (`cargo clippy`) for both the host and `wasm32v1-none` targets, matching the local `make lint` command.
+- Check the minimum supported Rust version (MSRV) declared in `Cargo.toml`.
+- Validate the Cargo publication policy (internal-only crates are marked `publish = false`).
 - Compile the Soroban contracts.
 - Verify the WASM build.
 - Execute all unit and integration tests.
+
+### Build policies
+
+- **Minimum supported Rust version (MSRV):** Declared consistently in the workspace and crate manifests and enforced by a CI job. Raising the MSRV requires review and a documented rationale in the pull request.
+- **Publication policy:** The contract crates and `shared_types` are **internal-only** and are not published to a registry (`publish = false`). Releases publish binaries via `.github/workflows/release.yml`, not crates.
+- **Advisory auditing:** `cargo-audit` is owned by `.github/workflows/security-audit.yml`, which runs on its schedule and on pull requests. `ci.yml` does not duplicate the audit.
 
 ## 📊 Project Status
 

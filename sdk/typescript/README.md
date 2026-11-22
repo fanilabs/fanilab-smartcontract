@@ -10,6 +10,64 @@ Typed SDK for interacting with FaniLab smart contracts on Stellar Soroban.
 npm install @fanilab/sdk
 ```
 
+## Runtime Support
+
+The SDK declares its supported runtimes in `package.json` (`engines` and `browser`).
+
+| Runtime | Support | Notes |
+|---|---|---|
+| Node.js | `>=18` | Primary target. Uses the built-in `Buffer` and Node globals. |
+| Browsers | Best-effort | Requires the polyfills listed below. No dedicated browser bundle is shipped yet. |
+| Deno / Bun | Untested | May work with Node compatibility flags; not officially supported. |
+
+### Browser usage and required polyfills
+
+The SDK relies on Node globals (`Buffer`, `process`) and Node types. When bundling
+for the browser you must provide these polyfills:
+
+- `Buffer` — e.g. `buffer` package, exposed as a global or via your bundler's `ProvidePlugin`/`define`.
+- `process` — e.g. `process` package, or a minimal `{ env: {} }` shim.
+
+Example (webpack):
+
+```js
+const webpack = require('webpack');
+
+module.exports = {
+  plugins: [
+    new webpack.ProvidePlugin({
+      Buffer: ['buffer', 'Buffer'],
+      process: 'process/browser',
+    }),
+  ],
+  resolve: {
+    fallback: { buffer: require.resolve('buffer/') },
+  },
+};
+```
+
+Example (Vite):
+
+```js
+// vite.config.js
+export default {
+  define: { global: 'globalThis' },
+  resolve: { alias: { buffer: 'buffer' } },
+};
+```
+
+### Verifying the browser-safe import
+
+After configuring polyfills, confirm the SDK imports cleanly in a browser-like
+environment:
+
+```bash
+node -e "require('@fanilab/sdk'); console.log('sdk import ok')"
+```
+
+For a browser smoke check, import the package in your bundler entry and confirm
+the build succeeds without unresolved `Buffer`/`process` errors.
+
 ## SDK Status
 
 This package is currently a typed API preview, not a connected runtime client. The generated method signatures are present, but the underlying Soroban invocation layer is not complete in this repository snapshot. The examples below intentionally fail at runtime with a clear "not implemented" message rather than silently pretending a chain call happened.
@@ -239,86 +297,4 @@ Resolve a dispute by splitting funds between sender and driver.
 Get the current platform fee in basis points.
 
 ##### `getAdmin(): Promise<string>`
-Get the admin address.
-
-##### `getEscrow(deliveryId: bigint): Promise<EscrowRecord>`
-Get an escrow record by delivery ID.
-
-##### `getEscrowsBySender(sender: string): Promise<bigint[]>`
-Get all escrow IDs for a sender.
-
-##### `getEscrowsByRecipient(recipient: string): Promise<bigint[]>`
-Get all escrow IDs for a recipient.
-
-##### `getEscrowsByDriver(driver: string): Promise<bigint[]>`
-Get all escrow IDs for a driver.
-
-##### `getTotalLocked(token: string): Promise<bigint>`
-Get the total amount of the token currently locked by escrows.
-
-##### `getUntrackedBalance(token: string): Promise<bigint>`
-Get the contract's token balance that is not tracked as locked escrow funds.
-
-##### `sweepUntrackedBalance(params: SweepUntrackedBalanceParams): Promise<bigint>`
-Sweep the untracked balance to a recipient (admin only) and return the amount
-transferred.
-
-##### `setVolumeTiers(params: SetVolumeTiersParams): Promise<void>`
-Configure the volume thresholds and fee discounts for senders (admin only).
-
-##### `getVolumeTiers(): Promise<VolumeTier[]>`
-Read the configured volume thresholds and discounts.
-
-##### `getSenderVolume(sender: string): Promise<number>`
-Read a sender's accumulated volume.
-
-### DeliveryClient
-
-#### Methods
-
-##### `init(escrowContractId: string, identityContractId: string, options?: ContractInvokeOptions): Promise<void>`
-Initialize the delivery contract.
-
-**Parameters:**
-- `escrowContractId`: Address of the escrow contract
-- `identityContractId`: Address of the identity contract
-
-##### `createDelivery(params: CreateDeliveryParams, options?: ContractInvokeOptions): Promise<bigint>`
-Create a new delivery.
-
-**Parameters:**
-- `params.sender`: Address creating the delivery
-- `params.recipient`: Address receiving delivery
-- `params.deliveryId`: Unique delivery identifier
-- `params.metadata`: Delivery metadata (location, items, notes, etc.)
-
-Delivery metadata accepts `pickupLocation`, `dropoffLocation`, and an optional
-`cargoDescription` with `weightGrams`, `category`, and `fragile`. The cargo
-category is one of `Documents`, `Electronics`, `Perishables`, `Clothing`, or
-`General`. Optional `createdAt` and `estimatedDelivery` values are Unix
-timestamps in seconds. If omitted, the SDK supplies the current creation time
-and estimates delivery from the legacy `estimatedDistance` value. Reads return
-the complete cargo description and all contract metadata fields.
-
-##### `assignDriver(params: AssignDriverParams, options?: ContractInvokeOptions): Promise<void>`
-Assign a driver to a delivery.
-
-**Parameters:**
-- `params.caller`: Authorized caller
-- `params.deliveryId`: Delivery identifier
-- `params.driver`: Driver address
-
-##### `confirmDelivery(params: ConfirmDeliveryParams, options?: ContractInvokeOptions): Promise<void>`
-Confirm that a delivery has been completed.
-
-**Parameters:**
-- `params.caller`: Recipient address
-- `params.deliveryId`: Delivery identifier
-
-##### `getDelivery(deliveryId: bigint): Promise<DeliveryRecord>`
-Get a delivery record.
-
-##### `getDriverProfile(driver: string): Promise<DeliveryDriverProfile>`
-Get the dri
-
-/* … truncated 1736 chars — edit only what you need near the top … */
+Get the admin addr

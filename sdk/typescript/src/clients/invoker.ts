@@ -15,12 +15,63 @@ import { formatSorobanError } from './error-codes';
 
 export type ScVal = xdr.ScVal;
 
+/**
+ * Explicit invocation mode. `simulate` never submits a transaction and returns
+ * the simulated return value; `submit` requires a signer and submits the
+ * transaction, returning the native return value (or a receipt when requested).
+ */
+export type InvocationMode = 'simulate' | 'submit';
+
+/**
+ * Raised when a mutation is attempted without a signer. Previously this
+ * silently degraded into a simulation and resolved `void`, hiding the mistake.
+ */
+export class MissingSignerError extends Error {
+  constructor(functionName: string) {
+    super(
+      `Cannot submit mutation '${functionName}' without a signer. ` +
+        `Pass a signer to submit, or use mode: 'simulate' to simulate explicitly.`
+    );
+    this.name = 'MissingSignerError';
+  }
+}
+
+/**
+ * Opt-in receipt describing a successful write invocation. Returned only when
+ * `ContractInvokeOptions.returnReceipt` is enabled; otherwise `call` keeps
+ * returning the native return value so existing callers are unaffected.
+ */
+export interface InvocationReceipt {
+  /** Transaction hash of the submitted invocation. */
+  hash: string;
+  /** Ledger sequence in which the transaction was included. */
+  ledger: number;
+  /** Native return value of the invoked contract function, if any. */
+  result: unknown;
+}
+
 export function address(value: string): ScVal {
   return new Address(value).toScVal();
 }
 
+const U64_MAX = (1n << 64n) - 1n;
+
 export function u64(value: bigint | number): ScVal {
-  return nativeToScVal(BigInt(value), { type: 'u64' });
+  let big: bigint;
+  if (typeof value === 'number') {
+    if (!Number.isSafeInteger(value)) {
+      throw new RangeError(
+        'u64 number input must be a safe integer; use bigint for values outside the safe integer range'
+      );
+    }
+    big = BigInt(value);
+  } else {
+    big = value;
+  }
+  if (big < 0n || big > U64_MAX) {
+    throw new RangeError('u64 value must be between 0 and 2^64-1');
+  }
+  return nativeToScVal(big, { type: 'u64' });
 }
 
 export function u32(value: number): ScVal {
@@ -66,9 +117,30 @@ export function native(value: ScVal): unknown {
 const DEFAULT_TTL_THRESHOLD_LEDGERS = 100_000;
 const DEFAULT_TTL_EXTEND_TO_LEDGERS = 518_400;
 
+const DEFAULT_SUBMISSION_MAX_ATTEMPTS = 5;
+const DEFAULT_SUBMISSION_RETRY_DELAY_MS = 1_000;
+
 function canExtendTtl(key: xdr.LedgerKey): boolean {
   return key.type === 'contractCode' ||
     (key.type === 'contractData' && key.contractData.durability.name === 'persistent');
+}
+
+function ledgerKeyId(key: xdr.LedgerKey): string {
+  return key.toXDR('base64');
+}
+
+function dedupeLedgerKeys(keys: xdr.LedgerKey[]): xdr.LedgerKey[] {
+  const seen = new Set<string>();
+  const unique: xdr.LedgerKey[] = [];
+  for (const key of keys) {
+    const id = ledgerKeyId(key);
+    if (seen.has(id)) {
+      continue;
+    }
+    seen.add(id);
+    unique.push(key);
+  }
+  return unique;
 }
 
 export function findExpiringPersistentKeys(
@@ -76,21 +148,61 @@ export function findExpiringPersistentKeys(
   latestLedger: number,
   thresholdLedgers: number
 ): xdr.LedgerKey[] {
-  return entries
-    .filter(
-      (entry) =>
-        canExtendTtl(entry.key) &&
-        entry.liveUntilLedgerSeq !== undefined &&
-        entry.liveUntilLedgerSeq > latestLedger &&
-        entry.liveUntilLedgerSeq - latestLedger <= thresholdLedgers
-    )
-    .map((entry) => entry.key);
+  return dedupeLedgerKeys(
+    entries
+      .filter(
+        (entry) =>
+          canExtendTtl(entry.key) &&
+          entry.liveUntilLedgerSeq !== undefined &&
+          entry.liveUntilLedgerSeq > latestLedger &&
+          entry.liveUntilLedgerSeq - latestLedger <= thresholdLedgers
+      )
+      .map((entry) => entry.key)
+  );
+}
+
+/**
+ * Resolve the effective TTL extension target, honoring the network's maximum
+ * entry lifetime. Caller-provided values above the ceiling are clamped (with a
+ * warning) so the extension still succeeds; values that cannot be satisfied
+ * (e.g. not above the threshold) are rejected with a clear explanation.
+ */
+export function resolveTtlExtendTo(
+  requestedExtendTo: number,
+  thresholdLedgers: number,
+  networkMaxTtlLedgers: number
+): number {
+  if (!Number.isSafeInteger(networkMaxTtlLedgers) || networkMaxTtlLedgers <= 0) {
+    throw new RangeError('network maximum TTL must be a positive integer');
+  }
+  if (!Number.isSafeInteger(requestedExtendTo) || requestedExtendTo <= thresholdLedgers) {
+    throw new RangeError('ttlExtendToLedgers must be greater than ttlThresholdLedgers');
+  }
+  if (thresholdLedgers >= networkMaxTtlLedgers) {
+    throw new RangeError(
+      `ttlThresholdLedgers (${thresholdLedgers}) must be less than the network maximum TTL (${networkMaxTtlLedgers})`
+    );
+  }
+  if (requestedExtendTo > networkMaxTtlLedgers) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `ttlExtendToLedgers (${requestedExtendTo}) exceeds the network maximum TTL (${networkMaxTtlLedgers}); clamping to the network maximum`
+    );
+    return networkMaxTtlLedgers;
+  }
+  return requestedExtendTo;
 }
 
 function abortError(): Error {
   const error = new Error('Contract invocation was aborted');
   error.name = 'AbortError';
   return error;
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw abortError();
+  }
 }
 
 function delay(milliseconds: number, signal?: AbortSignal): Promise<void> {
@@ -140,13 +252,104 @@ function awaitPollResult<T>(
   });
 }
 
+/**
+ * Serializes submissions per source account so concurrent calls from the same
+ * account do not race on sequence numbers. Each account has its own tail
+ * promise; a new task chains onto the previous one and always releases the
+ * chain (even on failure) so later calls can proceed.
+ */
+export class AccountSequenceCoordinator {
+  private readonly tails = new Map<string, Promise<unknown>>();
+
+  run<T>(accountId: string, task: () => Promise<T>): Promise<T> {
+    const previous = this.tails.get(accountId) ?? Promise.resolve();
+    const next = previous.then(task, task);
+    // Keep the chain alive regardless of task outcome, but don't leak rejections.
+    const tail = next.then(
+      () => undefined,
+      () => undefined
+    );
+    this.tails.set(accountId, tail);
+    tail.then(() => {
+      if (this.tails.get(accountId) === tail) {
+        this.tails.delete(accountId);
+      }
+    });
+    return next;
+  }
+}
+
+export interface SubmissionErrorDetails {
+  status: string;
+  hash?: string;
+  resultXdr?: string;
+  errorResult?: xdr.TransactionResult;
+  response: SorobanRpc.Api.SendTransactionResponse;
+}
+
+export class SubmissionError extends Error {
+  readonly status: string;
+  readonly hash?: string;
+  readonly resultXdr?: string;
+  readonly errorResult?: xdr.TransactionResult;
+  readonly response: SorobanRpc.Api.SendTransactionResponse;
+
+  constructor(message: string, details: SubmissionErrorDetails) {
+    super(message);
+    this.name = 'SubmissionError';
+    this.status = details.status;
+    this.hash = details.hash;
+    this.resultXdr = details.resultXdr;
+    this.errorResult = details.errorResult;
+    this.response = details.response;
+  }
+}
+
 export class ContractInvoker {
   private readonly contract: Contract;
   private readonly defaults: ContractInvokeOptions;
+  private readonly sequences = new AccountSequenceCoordinator();
 
   constructor(contractId: string, defaults: ContractInvokeOptions = {}) {
     this.contract = new Contract(contractId);
     this.defaults = defaults;
+  }
+
+  /**
+   * Resolve the effective invocation mode. An explicit `mode` always wins.
+   * Otherwise a signer implies `submit`; without a signer we default to
+   * `simulate` for backwards compatibility, but `submit` callers that omit a
+   * signer are rejected by `call` rather than silently simulated.
+   */
+  private resolveMode(config: ContractInvokeOptions): InvocationMode {
+    if (config.mode) {
+      return config.mode;
+    }
+    return config.signer ? 'submit' : 'simulate';
+  }
+
+  /**
+   * Simulate a contract call without submitting a transaction. Always returns
+   * the simulated return value and never requires a signer.
+   */
+  async simulate(
+    functionName: string,
+    args: ScVal[],
+    options: ContractInvokeOptions = {}
+  ): Promise<unknown> {
+    return this.call(functionName, args, { ...options, mode: 'simulate' });
+  }
+
+  /**
+   * Submit a contract mutation. Requires a signer; throws `MissingSignerError`
+   * when none is provided so accidental unsigned mutations are detectable.
+   */
+  async submit(
+    functionName: string,
+    args: ScVal[],
+    options: ContractInvokeOptions = {}
+  ): Promise<unknown> {
+    return this.call(functionName, args, { ...options, mode: 'submit' });
   }
 
   async call(
@@ -155,11 +358,28 @@ export class ContractInvoker {
     options: ContractInvokeOptions = {}
   ): Promise<unknown> {
     const config = { ...this.defaults, ...options };
-    const server = this.server(config);
+    const signal = config.signal;
+    throwIfAborted(signal);
     const accountId = this.require(config.sourceAccount, 'sourceAccount');
+    return this.sequences.run(accountId, () =>
+      this.invoke(functionName, args, config, accountId)
+    );
+  }
+
+  private async invoke(
+    functionName: string,
+    args: ScVal[],
+    config: ContractInvokeOptions,
+    accountId: string
+  ): Promise<unknown> {
+    const signal = config.signal;
+    throwIfAborted(signal);
+    const server = this.server(config);
     const networkPassphrase = this.require(config.networkPassphrase, 'networkPassphrase');
     const buildTransaction = async () => {
+      throwIfAborted(signal);
       const account = await server.getAccount(accountId);
+      throwIfAborted(signal);
       return new TransactionBuilder(account, {
         fee: config.fee ?? '100000',
         networkPassphrase,
@@ -169,11 +389,13 @@ export class ContractInvoker {
         .build();
     };
     let transaction = await buildTransaction();
+    throwIfAborted(signal);
     let simulation = await server.simulateTransaction(transaction);
+    throwIfAborted(signal);
     if (SorobanRpc.Api.isSimulationError(simulation)) {
       throw new Error(formatSorobanError('Soroban simulation failed', simulation.error));
     }
-    if (!config.signer) {
+    if (mode === 'simulate') {
       return simulation.result?.retval ? native(simulation.result.retval) : undefined;
     }
 
@@ -182,6 +404,7 @@ export class ContractInvoker {
       simulation.transactionData,
       config
     );
+    throwIfAborted(signal);
     if (expiringKeys.length > 0) {
       await this.extendFootprintTtl(
         server,
@@ -191,8 +414,11 @@ export class ContractInvoker {
         expiringKeys,
         config
       );
+      throwIfAborted(signal);
       transaction = await buildTransaction();
+      throwIfAborted(signal);
       simulation = await server.simulateTransaction(transaction);
+      throwIfAborted(signal);
       if (SorobanRpc.Api.isSimulationError(simulation)) {
         throw new Error(formatSorobanError('Soroban simulation failed', simulation.error));
       }
@@ -200,169 +426,23 @@ export class ContractInvoker {
 
     const prepared = SorobanRpc.assembleTransaction(transaction, simulation).build();
     prepared.sign(config.signer);
+    throwIfAborted(signal);
     const submitted = await server.sendTransaction(prepared);
     if (submitted.status === 'ERROR') {
-      throw new Error(
-        formatSorobanError(
-          'Soroban submission failed',
-          submitted.errorResult?.toString() ?? 'unknown error'
-        )
+      const errorResult = submitted.errorResult;
+      const resultXdr = errorResult?.toXDR('base64');
+      const decoded = errorResult?.toString() ?? 'unknown error';
+      throw new SubmissionError(
+        formatSorobanError('Soroban submission failed', decoded),
+        {
+          status: submitted.status,
+          hash: submitted.hash,
+          resultXdr,
+          errorResult,
+          response: submitted,
+        }
       );
     }
-    if (submitted.status === 'PENDING') {
-      return this.waitForResult(server, submitted.hash, config);
-    }
-    return undefined;
-  }
+    if (submitted.status ==
 
-  private async expiringFootprintKeys(
-    server: SorobanRpc.Server,
-    transactionData: SorobanDataBuilder,
-    config: ContractInvokeOptions
-  ): Promise<xdr.LedgerKey[]> {
-    const threshold = config.ttlThresholdLedgers ?? DEFAULT_TTL_THRESHOLD_LEDGERS;
-    const extendTo = config.ttlExtendToLedgers ?? DEFAULT_TTL_EXTEND_TO_LEDGERS;
-    if (!Number.isSafeInteger(threshold) || threshold <= 0) {
-      throw new RangeError('ttlThresholdLedgers must be a positive integer');
-    }
-    if (!Number.isSafeInteger(extendTo) || extendTo <= threshold) {
-      throw new RangeError('ttlExtendToLedgers must be greater than ttlThresholdLedgers');
-    }
-
-    const candidates = [
-      ...transactionData.getReadOnly(),
-      ...transactionData.getReadWrite(),
-    ].filter(canExtendTtl);
-    if (candidates.length === 0) {
-      return [];
-    }
-
-    const ledgerEntries = await server.getLedgerEntries(...candidates);
-    return findExpiringPersistentKeys(ledgerEntries.entries, ledgerEntries.latestLedger, threshold);
-  }
-
-  private async extendFootprintTtl(
-    server: SorobanRpc.Server,
-    accountId: string,
-    networkPassphrase: string,
-    transactionData: SorobanDataBuilder,
-    keys: xdr.LedgerKey[],
-    config: ContractInvokeOptions
-  ): Promise<void> {
-    const extendTo = config.ttlExtendToLedgers ?? DEFAULT_TTL_EXTEND_TO_LEDGERS;
-    const account = await server.getAccount(accountId);
-    const ttlTransaction = new TransactionBuilder(account, {
-      fee: config.fee ?? '100000',
-      networkPassphrase,
-    })
-      .setTimeout(config.timeoutSeconds ?? 30)
-      .addOperation(Operation.extendFootprintTtl({ extendTo }))
-      .setSorobanData(
-        new SorobanDataBuilder(transactionData.build())
-          .setFootprint(keys, [])
-          .build()
-      )
-      .build();
-    const simulation = await server.simulateTransaction(ttlTransaction);
-    if (SorobanRpc.Api.isSimulationError(simulation)) {
-      throw new Error(
-        formatSorobanError('Soroban TTL extension simulation failed', simulation.error)
-      );
-    }
-    const prepared = SorobanRpc.assembleTransaction(ttlTransaction, simulation).build();
-    prepared.sign(this.require(config.signer, 'signer'));
-
-    const submitted = await server.sendTransaction(prepared);
-    if (submitted.status === 'ERROR') {
-      throw new Error(
-        formatSorobanError(
-          'Soroban TTL extension submission failed',
-          submitted.errorResult?.toString() ?? 'unknown error'
-        )
-      );
-    }
-    if (submitted.status !== 'PENDING') {
-      throw new Error(`Soroban TTL extension returned unexpected status: ${submitted.status}`);
-    }
-    await this.waitForResult(server, submitted.hash, config);
-  }
-
-  private async waitForResult(
-    server: SorobanRpc.Server,
-    hash: string,
-    config: ContractInvokeOptions
-  ): Promise<unknown> {
-    const initialDelay = config.pollingIntervalMs ?? 1000;
-    const maxDelay = config.pollingMaxIntervalMs ?? 10_000;
-    const timeout = config.pollingTimeoutMs ?? 300_000;
-    if (!Number.isFinite(initialDelay) || initialDelay <= 0) {
-      throw new RangeError('pollingIntervalMs must be a positive number');
-    }
-    if (!Number.isFinite(maxDelay) || maxDelay < initialDelay) {
-      throw new RangeError('pollingMaxIntervalMs must be greater than or equal to pollingIntervalMs');
-    }
-    if (!Number.isFinite(timeout) || timeout <= 0) {
-      throw new RangeError('pollingTimeoutMs must be a positive number');
-    }
-
-    const deadline = Date.now() + timeout;
-    let interval = initialDelay;
-    for (;;) {
-      if (config.signal?.aborted) {
-        throw abortError();
-      }
-      if (Date.now() >= deadline) {
-        throw new Error(`Timed out waiting for Soroban transaction: ${hash}`);
-      }
-      const remaining = deadline - Date.now();
-      const result = await awaitPollResult(
-        server.getTransaction(hash),
-        remaining,
-        `Timed out waiting for Soroban transaction: ${hash}`,
-        config.signal
-      );
-      if (result.status === 'SUCCESS') {
-        return result.returnValue ? native(result.returnValue) : undefined;
-      }
-      if (result.status === 'FAILED') {
-        const errorCodes = result.diagnosticEventsXdr?.flatMap(({ event }) => {
-          const value = event.body.value.data;
-          return value.type === 'scvError' && value.error.type === 'sceContract'
-            ? [value.error.contractCode]
-            : [];
-        });
-        const failure = errorCodes?.length
-          ? `Error(Contract, #${errorCodes.join(', #')})`
-          : hash;
-        throw new Error(
-          formatSorobanError('Soroban transaction failed', failure, errorCodes ?? [])
-        );
-      }
-      const remainingAfterPoll = deadline - Date.now();
-      if (remainingAfterPoll <= 0) {
-        throw new Error(`Timed out waiting for Soroban transaction: ${hash}`);
-      }
-      await delay(Math.min(interval, remainingAfterPoll), config.signal);
-      interval = Math.min(interval * 2, maxDelay);
-    }
-  }
-
-  private server(config: ContractInvokeOptions): SorobanRpc.Server {
-    return new SorobanRpc.Server(
-      this.require(config.serverUrl, 'serverUrl'),
-      {
-        allowHttp: config.serverUrl?.startsWith('http://'),
-        ...(config.timeout === undefined ? {} : { timeout: config.timeout }),
-      }
-    );
-  }
-
-  private require<T>(value: T | undefined, name: string): T {
-    if (value === undefined) {
-      throw new Error(`Contract invocation requires ${name}`);
-    }
-    return value;
-  }
-}
-
-export type Signer = Keypair;
+/* … truncated 1086 chars — edit only what you need near the top … */

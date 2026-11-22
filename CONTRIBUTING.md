@@ -1,45 +1,48 @@
 # Contributing
 
-Thanks for your interest in improving this project! We welcome contributions of all kinds — bug reports, feature requests, documentation improvements, and code changes.
+Thanks for your interest in improving this project. This document covers how to
+report problems, propose changes, and get your work merged.
 
-## Reporting Security Vulnerabilities
+## Reporting security vulnerabilities
 
-**Please do not report security vulnerabilities through public GitHub issues, discussions, or pull requests.**
+**Please do not open public issues for security vulnerabilities.**
 
-If you believe you have found a security vulnerability, report it privately so we can investigate and address it before any public disclosure. GitHub private vulnerability reporting is not currently enabled on this repository, so please use the private contact channel below instead:
+This project uses [GitHub private security advisories](https://docs.github.com/en/code-security/security-advisories/guidance-on-reporting-and-writing-information-about-vulnerabilities/privately-reporting-a-security-vulnerability)
+as the sole supported channel for security reports:
 
-- **Email:** security@example.com
+1. Go to the repository's **Security** tab.
+2. Click **Report a vulnerability** to open a private advisory.
+3. Fill in the affected versions and any reproduction details you can share.
 
-When reporting, please include as much of the following as you can:
+GitHub private advisories are the only supported reporting channel; there is no
+separate email or chat address for security reports. If you are unsure whether
+something is a vulnerability, report it privately anyway and we will triage it.
 
-- A description of the vulnerability and its potential impact.
-- Steps to reproduce or a proof-of-concept (if available).
-- The affected version, commit, or environment.
-- Any suggested remediation.
+### What to expect
 
-We will acknowledge your report as quickly as possible and keep you updated on our progress. Please give us a reasonable amount of time to investigate and release a fix before disclosing the issue publicly.
+- **Acknowledgment:** we aim to acknowledge new advisories within a few business
+days.
+- **Triage:** we review and confirm (or dismiss) reports as quickly as we can;
+  complex reports may take longer.
+- **Updates:** we respond in the advisory thread. If you have not heard back and
+  want to check in, add a comment to the advisory rather than opening a public
+  issue.
 
-## Reporting Bugs
+Please keep technical details inside the private advisory until a fix has been
+released and coordinated disclosure has been agreed.
 
-For non-security bugs, please open a GitHub issue and include:
+## Reporting bugs and requesting features
 
-- A clear and descriptive title.
-- Steps to reproduce the problem.
-- The expected behavior and what actually happened.
-- Your environment (OS, version, etc.).
+For non-security issues, open a GitHub issue with a clear description, steps to
+reproduce, and the expected versus actual behavior.
 
-## Suggesting Features
+## Proposing changes
 
-Feature requests are welcome. Open an issue describing the problem you are trying to solve and the behavior you would like to see.
+1. Fork the repository and create a topic branch.
+2. Keep changes focused; avoid unrelated refactors in the same pull request.
+3. Describe the motivation and the change in the pull request body.
+4. Make sure existing tests and checks pass before requesting review.
 
-## Submitting Changes
+## Questions
 
-1. Fork the repository and create a branch from `main`.
-2. Make your changes, keeping them focused and scoped to a single concern.
-3. Follow the existing code style and conventions.
-4. Write clear commit messages describing what changed and why.
-5. Open a pull request and reference any related issues.
-
-## Code of Conduct
-
-Be respectful and constructive. We are committed to providing a welcoming and harassment-free experience for everyone.
+If anything here is unclear, open a regular issue and a maintainer will help.

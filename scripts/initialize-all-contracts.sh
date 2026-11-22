@@ -106,76 +106,144 @@ if [ -z "$ADMIN_ADDRESS" ] || [ -z "$TOKEN_ADDRESS" ]; then
     exit 1
 fi
 
-# Preflight: the signing identity must be able to authenticate as the
-# configured admin, otherwise every admin-gated invoke below fails after
-# partial setup. Fail before any mutation.
-case "$(printf '%s' "$ALLOW_MULTISIGNER_ADMIN" | tr '[:upper:]' '[:lower:]')" in
-    1|true|yes)
-        echo "⚠️  ALLOW_MULTISIGNER_ADMIN set: skipping signer/admin compatibility check."
-        echo "   Ensure ADMIN_ADDRESS ($ADMIN_ADDRESS) can authorize the calls below."
-        ;;
-    *)
-        SIGNER_ADDRESS=$(stellar keys address "$DEPLOYER_IDENTITY" 2>/dev/null | tr -d '[:space:]')
-        if [ -z "$SIGNER_ADDRESS" ]; then
-            echo "❌ Could not resolve the address for identity '$DEPLOYER_IDENTITY'."
-            echo "   Run 'stellar keys address $DEPLOYER_IDENTITY' to diagnose."
-            exit 1
-        fi
-        if [ "$SIGNER_ADDRESS" != "$ADMIN_ADDRESS" ]; then
-            echo "❌ Signer/admin mismatch: the CLI identity '$DEPLOYER_IDENTITY'"
-            echo "   resolves to $SIGNER_ADDRESS, but ADMIN_ADDRESS is $ADMIN_ADDRESS."
-            echo "   Admin-gated invokes would fail after partial setup."
-            echo "   To proceed, either:"
-            echo "     • set ADMIN_ADDRESS=$SIGNER_ADDRESS (or point DEPLOYER_IDENTITY"
-            echo "       at the identity that controls ADMIN_ADDRESS), or"
-            echo "     • if the admin is intentionally a multisig, re-run with"
-            echo "       ALLOW_MULTISIGNER_ADMIN=true and complete the multisig"
-            echo "       authorization out of band."
-            exit 1
-        fi
-        echo "✓ Signer '$DEPLOYER_IDENTITY' matches ADMIN_ADDRESS"
-        ;;
-esac
-
-# Preflight: verify each deployed contract actually exists on-chain and that
-# its WASM identity matches the expected value recorded in the manifest.
-# IDs are otherwise trusted blindly, so a stale/typo'd manifest entry would
-# send init calls to a missing or wrong contract. Abort before any mutation.
+# ---------------------------------------------------------------------------
+# Preflight validation
 #
-# Expected identity is read from an optional "<name>_wasm_hash" field in the
-# manifest (populated by deploy-all-contracts.sh). When absent, the check
-# falls back to confirming the contract exists on-chain.
-verify_deployed_contract() {
-    local name=$1
-    local contract_id=$2
-    local expected_hash
-    expected_hash=$(get_contract_id "${name}_wasm_hash")
+# Every initialization parameter is validated up front so that a bad setting
+# aborts the run *before* the first state-mutating invoke. All errors are
+# aggregated and reported together.
+# ---------------------------------------------------------------------------
+PREFLIGHT_ERRORS=()
 
-    local on_chain
-    if ! on_chain=$(stellar contract info wasm-hash \
-            --id "$contract_id" \
-            --network "$NETWORK" 2>/dev/null | tr -d '[:space:]'); then
-        echo "❌ Contract '$name' ($contract_id) was not found on network '$NETWORK'."
-        echo "   The manifest may be stale; redeploy before initializing."
-        exit 1
+# Validate a Stellar StrKey address: account (G...) or contract (C...).
+# StrKey is base32 (RFC 4648 alphabet) and 56 characters long.
+validate_address() {
+    local label=$1
+    local value=$2
+    if [ -z "$value" ]; then
+        PREFLIGHT_ERRORS+=("$label is required but empty")
+        return
     fi
-    if [ -z "$on_chain" ]; then
-        echo "❌ Could not read the WASM hash for '$name' ($contract_id) on '$NETWORK'."
-        exit 1
+    if ! [[ "$value" =~ ^[GC][A-Z2-7]{55}$ ]]; then
+        PREFLIGHT_ERRORS+=("$label is not a valid Stellar address (expected G.../C... StrKey, 56 chars): '$value'")
     fi
+}
 
-    if [ -n "$expected_hash" ]; then
-        if [ "$on_chain" != "$expected_hash" ]; then
-            echo "❌ Contract '$name' identity mismatch on '$NETWORK'."
-            echo "   Expected WASM hash: $expected_hash"
-            echo "   Deployed WASM hash: $on_chain"
-            echo "   Refusing to initialize a contract that does not match the manifest."
-            exit 1
-        fi
-        echo "✓ $name ($contract_id) verified (wasm $on_chain)"
-    else
-        echo "✓ $name ($contract_id) exists on-chain (wasm $on_chain; no expected hash in manifest)"
+# Validate an unsigned integer within an inclusive range.
+validate_uint() {
+    local label=$1
+    local value=$2
+    local min=$3
+    local max=$4
+    if [ -z "$value" ]; then
+        PREFLIGHT_ERRORS+=("$label is required but empty")
+        return
     fi
+    if ! [[ "$value" =~ ^[0-9]+$ ]]; then
+        PREFLIGHT_ERRORS+=("$label must be a non-negative integer: '$value'")
+        return
+    fi
+    if [ "$value" -lt "$min" ] || [ "$value" -gt "$max" ]; then
+        PREFLIGHT_ERRORS+=("$label must be between $min and $max: '$value'")
+    fi
+}
+
+PLATFORM_FEE_BPS=${PLATFORM_FEE_BPS:-250}
+DISPUTE_TIME_LIMIT=${DISPUTE_TIME_LIMIT:-86400}
+DISPUTE_RESOLUTION_LIMIT=${DISPUTE_RESOLUTION_LIMIT:-86400}
+
+# Address parameters
+validate_address "ADMIN_ADDRESS" "$ADMIN_ADDRESS"
+validate_address "TOKEN_ADDRESS" "$TOKEN_ADDRESS"
+validate_address "escrow_contract" "$ESCROW_ID"
+validate_address "delivery_contract" "$DELIVERY_ID"
+validate_address "dispute_resolution_contract" "$DISPUTE_ID"
+validate_address "fleet_management_contract" "$FLEET_ID"
+validate_address "identity_reputation_contract" "$IDENTITY_ID"
+validate_address "settlement_contract" "$SETTLEMENT_ID"
+
+# Numeric parameters
+# Platform fee is expressed in basis points (0-10000 = 0%-100%).
+validate_uint "PLATFORM_FEE_BPS" "$PLATFORM_FEE_BPS" 0 10000
+# Dispute time limits are durations in seconds; must be positive.
+validate_uint "DISPUTE_TIME_LIMIT" "$DISPUTE_TIME_LIMIT" 1 31536000
+validate_uint "DISPUTE_RESOLUTION_LIMIT" "$DISPUTE_RESOLUTION_LIMIT" 1 31536000
+
+if [ ${#PREFLIGHT_ERRORS[@]} -gt 0 ]; then
+    echo "❌ Preflight validation failed; no contracts were initialized:"
+    for err in "${PREFLIGHT_ERRORS[@]}"; do
+        echo "   • $err"
+    done
+    exit 1
+fi
+
+echo "✓ Preflight validation passed"
+echo ""
+
+invoke_contract() {
+    local contract_id=$1
+    shift
+    stellar contract invoke \
+        --id "$contract_id" \
+        --source "$DEPLOYER_IDENTITY" \
+        --network "$NETWORK" \
+        -- "$@"
+}
+
+# Read a currently-installed peer address from a contract's view function.
+# Returns the address on success, or an empty string if the view is not
+# available (e.g. not yet wired). Used to skip redundant timed peer setters
+# that would otherwise queue a pending proposal for an already-installed peer.
+read_active_address() {
+    local contract_id=$1
+    shift
+    invoke_contract "$contract_id" "$@" 2>/dev/null | tr -d '"' | tr -d '[:space:]' || true
+}
+
+# Invoke a timed peer setter only when the target differs from the active
+# installed address. Skips identical assignments so initial wiring leaves no
+# redundant pending proposals for current dependencies.
+set_peer_if_changed() {
+    local contract_id=$1
+    local view_fn=$2
+    local setter_fn=$3
+    local current=$4
+    shift 4
+
+    local active
+    active=$(read_active_address "$contract_id" "$view_fn")
+    if [ -n "$active" ] && [ "$active" = "$current" ]; then
+        echo "  ↷ $setter_fn already set to $current (skipping)"
+        return 0
+    fi
+    invoke_contract "$contract_id" "$setter_fn" "$@"
+}
+
+# Determine whether a contract has already been initialized by querying its
+# admin view. Returns 0 (initialized) when the view yields a non-empty address,
+# 1 (not initialized) otherwise. This lets a rerun after a partial failure
+# resume without re-invoking init on contracts that are already configured.
+is_initialized() {
+    local contract_id=$1
+    local admin
+    admin=$(read_active_address "$contract_id" get_admin)
+    [ -n "$admin" ]
+}
+
+# Run a contract's init only when it has not been initialized yet. Existing
+# configuration is preserved on resume; uninitialized contracts still get
+# initialized exactly as before.
+init_if_needed() {
+    local contract_id=$1
+    local label=$2
+    shift 2
+
+    if is_initialized "$contract_id"; then
+        echo "  ↷ $label already initialized (skipping)"
+        return 0
+    fi
+    invoke_contract "$contract_id" init "$@"
+    echo "✓ $label initialized"
 }
 
 echo ""
@@ -187,80 +255,65 @@ verify_deployed_contract "fleet_management_contract" "$FLEET_ID"
 verify_deployed_contract "identity_reputation_contract" "$IDENTITY_ID"
 verify_deployed_contract "settlement_contract" "$SETTLEMENT_ID"
 
+echo "Initializing Escrow Contract..."
+init_if_needed "$ESCROW_ID" "Escrow" \
+    --admin "$ADMIN_ADDRESS" \
+    --token "$TOKEN_ADDRESS" \
+    --platform_fee_bps "$PLATFORM_FEE_BPS"
+
+echo "Initializing Delivery Contract..."
+init_if_needed "$DELIVERY_ID" "Delivery" \
+    --admin "$ADMIN_ADDRESS" \
+    --escrow_contract "$ESCROW_ID"
+
+echo "Initializing Dispute Resolution Contract..."
+init_if_needed "$DISPUTE_ID" "Dispute resolution" \
+    --admin "$ADMIN_ADDRESS" \
+    --delivery_contract "$DELIVERY_ID" \
+    --escrow_contract "$ESCROW_ID" \
+    --dispute_time_limit "$DISPUTE_TIME_LIMIT" \
+    --dispute_resolution_limit "$DISPUTE_RESOLUTION_LIMIT"
+
+echo "Initializing Fleet Management Contract..."
+init_if_needed "$FLEET_ID" "Fleet management" \
+    --admin "$ADMIN_ADDRESS"
+
+echo "Initializing Identity Reputation Contract..."
+init_if_needed "$IDENTITY_ID" "Identity reputation" \
+    --admin "$ADMIN_ADDRESS" \
+    --delivery_contract "$DELIVERY_ID" \
+    --dispute_contract "$DISPUTE_ID"
+
+echo "Initializing Settlement Contract..."
+init_if_needed "$SETTLEMENT_ID" "Settlement" \
+    --admin "$ADMIN_ADDRESS" \
+    --escrow_contract "$ESCROW_ID"
 echo ""
 
-# ---------------------------------------------------------------------------
-# Durable initialization receipt
-# ---------------------------------------------------------------------------
-# The receipt is a JSON document written incrementally after each confirmed
-# stage. It records the network, the manifest, and for every stage the
-# contract, the invoked function, the transaction hash, and a timestamp.
-# Operators can inspect it after an interruption to see exactly which stages
-# completed and resume from there (RESUME_INIT=true, the default).
+echo "Wiring contract integrations..."
+set_peer_if_changed "$DELIVERY_ID" get_escrow_contract set_escrow_contract "$ESCROW_ID" \
+    --admin "$ADMIN_ADDRESS" \
+    --escrow_contract "$ESCROW_ID"
+set_peer_if_changed "$DELIVERY_ID" get_dispute_resolution_contract set_dispute_resolution_contract "$DISPUTE_ID" \
+    --admin "$ADMIN_ADDRESS" \
+    --dispute_contract "$DISPUTE_ID"
+set_peer_if_changed "$DELIVERY_ID" get_identity_reputation_contract set_identity_reputation_contract "$IDENTITY_ID" \
+    --admin "$ADMIN_ADDRESS" \
+    --identity_contract "$IDENTITY_ID"
 
-receipt_init() {
-    if [ -f "$RECEIPT_FILE" ]; then
-        echo "↻ Found existing receipt: $RECEIPT_FILE"
-        echo "  Confirmed stages will be skipped (set RESUME_INIT=false to re-run all)."
-        return
-    fi
-    local started_at
-    started_at=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-    cat > "$RECEIPT_FILE" <<EOF
-{
-  "network": "$NETWORK",
-  "manifest": "$CONTRACT_IDS_FILE",
-  "started_at": "$started_at",
-  "stages": []
-}
-EOF
-    echo "✓ Created receipt: $RECEIPT_FILE"
-}
+set_peer_if_changed "$DISPUTE_ID" get_delivery_contract set_delivery_contract "$DELIVERY_ID" \
+    --caller "$ADMIN_ADDRESS" \
+    --delivery_contract "$DELIVERY_ID"
+set_peer_if_changed "$DISPUTE_ID" get_escrow_contract set_escrow_contract "$ESCROW_ID" \
+    --caller "$ADMIN_ADDRESS" \
+    --escrow_contract "$ESCROW_ID"
+set_peer_if_changed "$DISPUTE_ID" get_identity_reputation_contract set_identity_reputation_contract "$IDENTITY_ID" \
+    --caller "$ADMIN_ADDRESS" \
+    --reputation_contract "$IDENTITY_ID"
 
-# Returns 0 if the given stage is already recorded as confirmed.
-receipt_has_stage() {
-    local stage=$1
-    [ -f "$RECEIPT_FILE" ] || return 1
-    grep -q "\"stage\": *\"$stage\"" "$RECEIPT_FILE"
-}
-
-# Append a confirmed stage (with its transaction hash) to the receipt.
-receipt_record_stage() {
-    local stage=$1
-    local contract_id=$2
-    local function_name=$3
-    local tx_hash=$4
-    local recorded_at
-    recorded_at=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-
-    local entry
-    entry=$(printf '    {"stage": "%s", "contract": "%s", "function": "%s", "tx_hash": "%s", "confirmed_at": "%s"}' \
-        "$stage" "$contract_id" "$function_name" "$tx_hash" "$recorded_at")
-
-    # Insert the entry before the closing "stages" array bracket. The receipt
-    # is small and machine-generated, so a targeted rewrite is sufficient.
-    local tmp
-    tmp=$(mktemp)
-    awk -v entry="$entry" '
-        /^  \]\$/ && !done {
-            if (last) { print last "," }
-            print entry
-            done = 1
-            next
-        }
-        { if (last) print last; last = $0 }
-        END { if (last) print last }
-    ' "$RECEIPT_FILE" > "$tmp"
-    mv "$tmp" "$RECEIPT_FILE"
-}
-
-receipt_init
-
-echo ""
-
-invoke_contract() {
-    local contract_id=$1
-    shift
-    ste
-
-/* … truncated 2179 chars — edit only what you need near the top … */
+set_peer_if_changed "$FLEET_ID" get_escrow_contract set_escrow_contract "$ESCROW_ID" \
+    --admin "$ADMIN_ADDRESS" \
+    --escrow_contract "$ESCROW_ID"
+set_peer_if_changed "$FLEET_ID" get_identity_contract set_identity_contract "$IDENTITY_ID" \
+    --admin "$ADMIN_ADDRESS" \
+    --identity_contract "$IDENTITY_ID"

@@ -20,6 +20,12 @@ Provide the path in one of two ways:
 - **CLI flag:** `--config <path>` (also accepts `--config=<path>`)
 - **Environment variable:** `CONFIG_FILE=<path>`
 
+# 2. Notify stakeholders
+# 3. Investigate issue
+# 4. Deploy fix or restore from backup
+```
+
+### Contract Upgrade
 ```bash
 # Via flag
 ./scripts/initialize-contract.sh --config "/path/with spaces/my.env"

@@ -46,9 +46,9 @@ NETWORK=${POSITIONAL[0]:-testnet}
 # Name of the Stellar CLI identity every deploy/initialize script signs with.
 # Overridable, but the default must match the identity provisioned by
 # .github/workflows/deploy-testnet.yml and documented in docs/DEPLOYMENT.md.
+# Resolved AFTER .env is sourced so it follows the same precedence as every
+# other setting (environment > .env > default).
 DEPLOYER_IDENTITY="${DEPLOYER_IDENTITY:-deployer}"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 OUTPUT_FILE="$PROJECT_ROOT/contract-ids-$NETWORK.json"
 # Incremental recovery journal: one line per successful deployment, appended
 # as soon as each contract is deployed. Survives a mid-batch failure so a
@@ -181,9 +181,7 @@ echo ""
 # Build contracts
 echo "${BLUE}Building contracts...${NC}"
 cd "$PROJECT_ROOT"
-cargo build --target wasm32v1-none --release
-
-if [ $? -ne 0 ]; then
+if ! cargo build --target wasm32v1-none --release; then
     echo "${RED}❌ Build failed${NC}"
     exit 1
 fi
@@ -216,15 +214,16 @@ echo ""
 deploy_contract() {
     local contract_name=$1
     local wasm_path="$PROJECT_ROOT/target/wasm32v1-none/release/${contract_name}.wasm"
-    
+    local contract_id
+
     echo "${YELLOW}Deploying $contract_name...${NC}"
-    
+
     if [ ! -f "$wasm_path" ]; then
         echo "${RED}❌ WASM file not found: $wasm_path${NC}" >&2
         return 1
     fi
-    
-    local contract_id=$(stellar contract deploy \
+
+    if contract_id=$(stellar contract deploy \
         --wasm "$wasm_path" \
         --source "$DEPLOYER_IDENTITY" \
         --network "$NETWORK" 2>&1)

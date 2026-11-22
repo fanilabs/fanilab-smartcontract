@@ -24,6 +24,36 @@ RECEIPT_FILE="${INIT_RECEIPT_FILE:-$PROJECT_ROOT/init-receipt-$NETWORK.json}"
 # When true, stages already recorded as confirmed in the receipt are skipped.
 RESUME_INIT="${RESUME_INIT:-true}"
 
+# Tracks the last stage that completed successfully so a timeout/failure can
+# report exactly where the sequence stopped.
+LAST_CONFIRMED_STAGE="(none)"
+
+# Run a CLI command under a bounded timeout. On timeout or failure, report the
+# last confirmed stage and exit non-zero instead of blocking indefinitely.
+run_with_timeout() {
+    local stage=$1
+    shift
+    local rc=0
+    if command -v timeout &> /dev/null; then
+        timeout "$STAGE_TIMEOUT" "$@" || rc=$?
+    else
+        "$@" || rc=$?
+    fi
+    if [ "$rc" -eq 124 ]; then
+        echo ""
+        echo "❌ Stage '$stage' timed out after ${STAGE_TIMEOUT}s"
+        echo "   Last confirmed stage: $LAST_CONFIRMED_STAGE"
+        echo "   Re-run with a larger STAGE_TIMEOUT if the network is slow."
+        exit 1
+    elif [ "$rc" -ne 0 ]; then
+        echo ""
+        echo "❌ Stage '$stage' failed (exit $rc)"
+        echo "   Last confirmed stage: $LAST_CONFIRMED_STAGE"
+        exit "$rc"
+    fi
+    LAST_CONFIRMED_STAGE=$stage
+}
+
 echo "🔧 Initializing FaniLab Smart Contracts"
 echo "======================================"
 echo "Network: $NETWORK"

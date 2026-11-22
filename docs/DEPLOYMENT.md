@@ -1,37 +1,41 @@
-# Contract Deployment
+# Deployment
 
-This document describes how contracts are deployed and how the deployed
-artifacts are recorded so that each on-chain contract ID can be independently
-verified against the exact WASM that was deployed.
+This document describes how to deploy the project and how the initialization
+scripts resolve their configuration.
 
-## Deployment
+## Configuration files
 
-Contracts are deployed with `scripts/deploy-contract.sh`. The script builds the
-WASM artifact, deploys it, and records the resulting contract ID in the
-deployment manifest.
+The initialization scripts (`scripts/initialize-contract.sh` and any companion
+initialization script) load environment configuration from a `.env` file. By
+default they use the repository `.env` located at the repository root.
 
-## Deployment manifest
+### Supplying an external configuration file
 
-For every deployment the manifest records, alongside the contract ID:
+You can point the scripts at an externally supplied configuration file instead
+of the repository `.env`. This is useful for isolated environments, CI runners,
+or per-environment configs kept outside the checkout.
 
-- `wasm_sha256` — the SHA-256 hash of the WASM artifact that was deployed.
-- `source_revision` — the git commit SHA of the source tree the artifact was
-  built from.
+Provide the path in one of two ways:
 
-These fields are written next to the contract ID so the artifact association is
-stored with the deployment itself.
+- **CLI flag:** `--config <path>` (also accepts `--config=<path>`)
+- **Environment variable:** `CONFIG_FILE=<path>`
 
-## Verifying a deployment
+```bash
+# Via flag
+./scripts/initialize-contract.sh --config "/path/with spaces/my.env"
 
-The artifact association is independently verifiable:
+# Via environment variable
+CONFIG_FILE="/path/with spaces/my.env" ./scripts/initialize-contract.sh
+```
 
-1. Rebuild the WASM from the recorded `source_revision` (check out that commit
-   and run the build).
-2. Compute the SHA-256 of the rebuilt artifact, e.g.
-   `sha256sum path/to/contract.wasm`.
-3. Compare it with the `wasm_sha256` recorded in the manifest for the contract
-   ID. A match confirms the deployed contract corresponds to that source
-   revision.
+### Precedence
 
-Because both the hash and the source revision are stored with the contract ID,
-anyone can reproduce and check the association without trusting the deployer.
+Configuration path resolution follows this order (highest priority first):
+
+1. Explicit `--config` CLI flag
+2. `CONFIG_FILE` environment variable
+3. Default repository `.env` (repository root)
+
+If no explicit path is supplied, the scripts retain their original behavior and
+use the repository `.env`. All path references are quoted, so paths containing
+spaces are supported.

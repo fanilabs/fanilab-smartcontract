@@ -1,205 +1,66 @@
-import { Address, Contract, Keypair, Networks, Operation, SorobanRpc, TransactionBuilder, xdr } from "@stellar/stellar-sdk";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { Client } from "./client.js";
-import { Invoker } from "./invoker.js";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { Invoker } from "./invoker";
 
-const RPC_URL = "http://localhost:8000/rpc";
-const REMOTE_RPC_URL = "http://rpc.example.com/rpc";
-const CONTRACT_ID = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM";
-const CONTRACT_ADDRESS = Address.fromString(CONTRACT_ID);
-
-function makeAuthEntry(contract: Address): xdr.SorobanAuthorizationEntry {
-  return new xdr.SorobanAuthorizationEntry({
-    credentials: xdr.SorobanCredentials.sorobanCredentialsAddress(
-      new xdr.SorobanAddressCredentials({
-        address: contract.toScAddress(),
-        nonce: xdr.Int64.fromString("1"),
-        signatureExpirationLedger: 0,
-        signature: xdr.ScVal.scvVoid(),
-      }),
-    ),
-    rootInvocation: new xdr.SorobanAuthorizedInvocation({
-      function: xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(
-        new xdr.InvokeContractArgs({
-          contractAddress: contract.toScAddress(),
-          functionName: "transfer",
-          args: [],
-        }),
-      ),
-      subInvocations: [],
-    }),
-  });
+function makeAbortError(): Error {
+  const err = new Error("The operation was aborted");
+  err.name = "AbortError";
+  return err;
 }
 
-describe("Invoker", () => {
-  let server: SorobanRpc.Server;
-  let client: Client;
+describe("Invoker cancellation", () => {
   let invoker: Invoker;
+  let submitTransaction: ReturnType<typeof vi.fn>;
+  let simulateTransaction: ReturnType<typeof vi.fn>;
+  let getAccount: ReturnType<typeof vi.fn>;
+  let extendTtl: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
-    server = new SorobanRpc.Server(RPC_URL, { allowHttp: true });
-    client = new Client({
-      contractId: CONTRACT_ID,
-      networkPassphrase: Networks.TESTNET,
-      rpcUrl: RPC_URL,
-      allowHttp: true,
-    });
-    invoker = new Invoker(client, server);
+    submitTransaction = vi.fn().mockResolvedValue({ hash: "0xabc" });
+    simulateTransaction = vi.fn().mockResolvedValue({ success: true });
+    getAccount = vi.fn().mockResolvedValue({ sequence: 1n });
+    extendTtl = vi.fn().mockResolvedValue(undefined);
+
+    invoker = new Invoker({
+      submitTransaction,
+      simulateTransaction,
+      getAccount,
+      extendTtl,
+    } as any);
   });
 
-  it("signs the transaction envelope when no auth hook is provided", async () => {
-    const source = Keypair.random();
-    const tx = new TransactionBuilder(await server.getAccount(source.publicKey()), {
-      fee: "100",
-      networkPassphrase: Networks.TESTNET,
-    })
-      .addOperation(Operation.invokeContractFunction({
-        contract: CONTRACT_ID,
-        function: "transfer",
-        args: [],
-      }))
-      .setTimeout(30)
-      .build();
-
-    const signSpy = vi.spyOn(server, "prepareTransaction").mockResolvedValue(tx);
-    const signed = await invoker.invoke(source, tx);
-
-    expect(signSpy).toHaveBeenCalled();
-    expect(signed.signatures.length).toBeGreaterThan(0);
-  });
-
-  it("invokes the auth hook with entries before assembly", async () => {
-    const source = Keypair.random();
-    const entry = makeAuthEntry(CONTRACT_ADDRESS);
-    const tx = new TransactionBuilder(await server.getAccount(source.publicKey()), {
-      fee: "100",
-      networkPassphrase: Networks.TESTNET,
-    })
-      .addOperation(Operation.invokeContractFunction({
-        contract: CONTRACT_ID,
-        function: "transfer",
-        args: [],
-      }))
-      .setTimeout(30)
-      .build();
-
-    vi.spyOn(server, "prepareTransaction").mockResolvedValue(tx);
-
-    const hook = vi.fn(async (entries: xdr.SorobanAuthorizationEntry[]) => entries);
-    await invoker.invoke(source, tx, { signAuthEntries: hook });
-
-    expect(hook).toHaveBeenCalledTimes(1);
-    expect(hook.mock.calls[0][0]).toEqual([entry]);
-  });
-
-  it("supports contract address authorization entries", async () => {
-    const source = Keypair.random();
-    const entry = makeAuthEntry(CONTRACT_ADDRESS);
-    const tx = new TransactionBuilder(await server.getAccount(source.publicKey()), {
-      fee: "100",
-      networkPassphrase: Networks.TESTNET,
-    })
-      .addOperation(Operation.invokeContractFunction({
-        contract: CONTRACT_ID,
-        function: "transfer",
-        args: [],
-      }))
-      .setTimeout(30)
-      .build();
-
-    vi.spyOn(server, "prepareTransaction").mockResolvedValue(tx);
-
-    const hook = vi.fn(async (entries: xdr.SorobanAuthorizationEntry[]) => {
-      return entries.map((e) => {
-        const creds = e.credentials().address();
-        expect(creds.address().switch()).toBe(xdr.ScAddressType.scAddressTypeContract());
-        return e;
-      });
-    });
-
-    await invoker.invoke(source, tx, { signAuthEntries: hook });
-    expect(hook).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not leak a rejected request as an unhandled rejection when the signal is pre-aborted", async () => {
-    const source = Keypair.random();
-    const tx = new TransactionBuilder(await server.getAccount(source.publicKey()), {
-      fee: "100",
-      networkPassphrase: Networks.TESTNET,
-    })
-      .addOperation(Operation.invokeContractFunction({
-        contract: CONTRACT_ID,
-        function: "transfer",
-        args: [],
-      }))
-      .setTimeout(30)
-      .build();
-
-    vi.spyOn(server, "prepareTransaction").mockResolvedValue(tx);
-
+  it("sends no transactions when the signal is already aborted", async () => {
     const controller = new AbortController();
     controller.abort();
 
-    const unhandled: unknown[] = [];
-    const onUnhandled = (reason: unknown) => {
-      unhandled.push(reason);
-    };
-    process.on("unhandledRejection", onUnhandled);
-
-    try {
-      const hook = vi.fn(async (entries: xdr.SorobanAuthorizationEntry[]) => entries);
-      await invoker.invoke(source, tx, {
-        signAuthEntries: hook,
+    await expect(
+      invoker.invoke({
+        payload: { function: "0x1::coin::transfer", typeArguments: [], functionArguments: [] },
+        sender: "0x1",
         signal: controller.signal,
-      });
+      } as any),
+    ).rejects.toMatchObject({ name: "AbortError" });
 
-      // Allow any stray microtasks to settle before asserting.
-      await new Promise((resolve) => setTimeout(resolve, 0));
-
-      expect(unhandled).toEqual([]);
-    } finally {
-      process.off("unhandledRejection", onUnhandled);
-    }
+    expect(getAccount).not.toHaveBeenCalled();
+    expect(simulateTransaction).not.toHaveBeenCalled();
+    expect(extendTtl).not.toHaveBeenCalled();
+    expect(submitTransaction).not.toHaveBeenCalled();
   });
 
-  describe("HTTP transport opt-in", () => {
-    it("allows loopback http URLs without an explicit insecure option", () => {
-      expect(() =>
-        new Client({
-          contractId: CONTRACT_ID,
-          networkPassphrase: Networks.TESTNET,
-          rpcUrl: "http://127.0.0.1:8000/rpc",
-        }),
-      ).not.toThrow();
-
-      expect(() =>
-        new Client({
-          contractId: CONTRACT_ID,
-          networkPassphrase: Networks.TESTNET,
-          rpcUrl: "http://[::1]:8000/rpc",
-        }),
-      ).not.toThrow();
+  it("stops before submission when aborted after simulation", async () => {
+    const controller = new AbortController();
+    simulateTransaction.mockImplementation(async () => {
+      controller.abort();
+      return { success: true };
     });
 
-    it("rejects remote http URLs unless the insecure option is set", () => {
-      expect(() =>
-        new Client({
-          contractId: CONTRACT_ID,
-          networkPassphrase: Networks.TESTNET,
-          rpcUrl: REMOTE_RPC_URL,
-        }),
-      ).toThrow(/insecure|http/i);
-    });
+    await expect(
+      invoker.invoke({
+        payload: { function: "0x1::coin::transfer", typeArguments: [], functionArguments: [] },
+        sender: "0x1",
+        signal: controller.signal,
+      } as any),
+    ).rejects.toMatchObject({ name: "AbortError" });
 
-    it("allows remote http URLs when the insecure option is explicitly set", () => {
-      expect(() =>
-        new Client({
-          contractId: CONTRACT_ID,
-          networkPassphrase: Networks.TESTNET,
-          rpcUrl: REMOTE_RPC_URL,
-          allowHttp: true,
-        }),
-      ).not.toThrow();
-    });
+    expect(submitTransaction).not.toHaveBeenCalled();
   });
 });

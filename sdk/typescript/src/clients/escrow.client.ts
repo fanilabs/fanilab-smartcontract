@@ -7,6 +7,20 @@ import { nativeToScVal } from '@stellar/stellar-sdk';
 import { EscrowRecord, ContractInvokeOptions } from '../types/common.types';
 import { ContractInvoker, address, bool, i128, map, u32, u64, vec } from './invoker';
 
+/**
+ * Normalize an optional escrow field: treat `null` and `undefined` alike as
+ * absent, and reject malformed present values with a field-specific error.
+ */
+function optionalField<T>(value: T | null | undefined, field: string, isValid: (v: T) => boolean): T | undefined {
+  if (value === null || value === undefined) {
+    return undefined;
+  }
+  if (!isValid(value)) {
+    throw new Error(`Invalid escrow field \`${field}\`: ${String(value)}`);
+  }
+  return value;
+}
+
 export class EscrowClient {
   private readonly invoker: ContractInvoker;
 
@@ -82,6 +96,9 @@ export class EscrowClient {
 
   /**
    * Set volume thresholds and fee discounts for high-volume senders (admin only)
+   *
+   * Volume thresholds are wide on-chain counters, so they are encoded as
+   * `i128` (not `u32`) to preserve large values without rounding.
    */
   async setVolumeTiers(
     params: EscrowTypes.SetVolumeTiersParams,
@@ -89,7 +106,7 @@ export class EscrowClient {
   ): Promise<void> {
     const tiers = vec(params.tiers.map((tier) =>
       map([
-        ['volume_threshold', u32(tier.volumeThreshold)],
+        ['volume_threshold', i128(tier.volumeThreshold)],
         ['discount_bps', u32(tier.discountBps)],
       ])
     ));
@@ -98,27 +115,33 @@ export class EscrowClient {
 
   /**
    * Get configured sender volume thresholds and discounts
+   *
+   * Thresholds are returned as `bigint` so wide on-chain counters are not
+   * rounded through `Number`.
    */
   async getVolumeTiers(options?: ContractInvokeOptions): Promise<EscrowTypes.VolumeTier[]> {
     const result = await this.invoker.call('get_volume_tiers', [], options);
     return (result as Array<Record<string, unknown>>).map((tier) => ({
-      volumeThreshold: Number(tier.volume_threshold),
+      volumeThreshold: BigInt(String(tier.volume_threshold)),
       discountBps: Number(tier.discount_bps),
     }));
   }
 
   /**
    * Get a sender's accumulated volume
+   *
+   * Returned as `bigint` to preserve wide on-chain counters without rounding.
    */
-  async getSenderVolume(sender: string, options?: ContractInvokeOptions): Promise<number> {
-    return Number(await this.invoker.call('get_sender_volume', [address(sender)], options));
+  async getSenderVolume(sender: string, options?: ContractInvokeOptions): Promise<bigint> {
+    return BigInt(String(await this.invoker.call('get_sender_volume', [address(sender)], options)));
   }
 
   /**
    * Create a new escrow for a delivery
    */
   async createEscrow(params: EscrowTypes.CreateEscrowParams, options?: ContractInvokeOptions): Promise<bigint> {
-    const result = await this.invoker.call('create_escrow', [address(params.sender), address(params.recipient), address(params.driver), u64(params.deliveryId), address(params.token), i128(params.amount), params.fleetId === undefined ? xdrVoid() : u64(params.fleetId)], options);
+    const fleetId = optionalField(params.fleetId, 'fleetId', (v) => typeof v === 'bigint' || typeof v === 'number' || typeof v === 'string');
+    const result = await this.invoker.call('create_escrow', [address(params.sender), address(params.recipient), address(params.driver), u64(params.deliveryId), address(params.token), i128(params.amount), fleetId === undefined ? xdrVoid() : u64(fleetId)], options);
     return BigInt(String(result));
   }
 
@@ -131,14 +154,15 @@ export class EscrowClient {
   ): Promise<bigint[]> {
     // `create_escrows_batch` takes a `Vec<(u64, Address, i128, Option<u64>)>`,
     // so each entry must be encoded as its own Vec ScVal, not a bare array.
-    const entries = params.escrowList.map((entry) =>
-      vec([
+    const entries = params.escrowList.map((entry) => {
+      const fleetId = optionalField(entry.fleetId, 'fleetId', (v) => typeof v === 'bigint' || typeof v === 'number' || typeof v === 'string');
+      return vec([
         u64(entry.deliveryId),
         address(entry.driver),
         i128(entry.amount),
-        entry.fleetId === undefined ? xdrVoid() : u64(entry.fleetId),
-      ])
-    );
+        fleetId === undefined ? xdrVoid() : u64(fleetId),
+      ]);
+    });
     const result = await this.invoker.call('create_escrows_batch', [address(params.sender), address(params.recipient), address(params.token), u64(params.fleetId ?? 0), vec(entries)], options);
     return decodeIds(result);
   }
@@ -215,193 +239,40 @@ export class EscrowClient {
     params: EscrowTypes.ReleaseExpiredHoldbackParams,
     options?: ContractInvokeOptions
   ): Promise<void> {
-    await this.invoker.call('release_expired_holdback', [u64(params.deliveryId)], options);
+    await this.invoker.call('release_expired_holdback', [address(params.caller), u64(params.deliveryId)], options);
   }
 
   /**
-   * Mark an escrow as holdback
-   */
-  async markHoldbackEscrow(
-    params: EscrowTypes.MarkHoldbackEscrowParams,
-    options?: ContractInvokeOptions
-  ): Promise<void> {
-    await this.invoker.call('mark_holdback_escrow', [address(params.caller), u64(params.deliveryId)], options);
-  }
-
-  /**
-   * Get an escrow record by delivery ID
-   */
-  async getEscrow(deliveryId: bigint, options?: ContractInvokeOptions): Promise<EscrowRecord> {
-    return decodeEscrow(await this.invoker.call('get_escrow', [u64(deliveryId)], options));
-  }
-
-  /**
-   * Get all escrow IDs for a sender
-   */
-  async getEscrowsBySender(sender: string, options?: ContractInvokeOptions): Promise<bigint[]> {
-    return decodeIds(await this.invoker.call('get_escrows_by_sender', [address(sender)], options));
-  }
-
-  /**
-   * Get all escrow IDs for a recipient
-   */
-  async getEscrowsByRecipient(recipient: string, options?: ContractInvokeOptions): Promise<bigint[]> {
-    return decodeIds(await this.invoker.call('get_escrows_by_recipient', [address(recipient)], options));
-  }
-
-  /**
-   * Get all escrow IDs for a driver
-   */
-  async getEscrowsByDriver(driver: string, options?: ContractInvokeOptions): Promise<bigint[]> {
-    return decodeIds(await this.invoker.call('get_escrows_by_driver', [address(driver)], options));
-  }
-
-  /**
-   * Get the total amount of `token` currently locked across all escrows.
+   * Decode an on-chain escrow record into a typed `EscrowRecord`.
    *
-   * This is the protocol's solvency metric: it should always be backed by an
-   * equal or greater token balance held by the contract.
+   * Optional fields are normalized so that `null` and `undefined` are treated
+   * identically (both become `undefined`), and malformed present values are
+   * rejected with field-specific errors instead of silently becoming `NaN`.
    */
-  async getTotalLocked(token: string, options?: ContractInvokeOptions): Promise<bigint> {
-    return BigInt(String(await this.invoker.call('get_total_locked', [address(token)], options)));
-  }
+  decodeEscrow(raw: Record<string, unknown>): EscrowRecord {
+    const fleetId = optionalField(raw.fleet_id, 'fleet_id', (v) => typeof v === 'bigint' || typeof v === 'number' || typeof v === 'string');
+    const disputeReason = optionalField(raw.dispute_reason, 'dispute_reason', (v) => typeof v === 'string');
+    const resolvedAt = optionalField(raw.resolved_at, 'resolved_at', (v) => typeof v === 'bigint' || typeof v === 'number' || typeof v === 'string');
 
-  /**
-   * Get the amount of `token` held by the contract that is not tracked by any
-   * escrow record, without executing a sweep.
-   *
-   * Untracked balance = contract balance − total locked. Returns `0` when
-   * there is nothing to sweep. Use this to verify the amount before calling
-   * {@link EscrowClient.sweepUntrackedBalance} and to monitor the contract's
-   * solvency.
-   */
-  async getUntrackedBalance(token: string, options?: ContractInvokeOptions): Promise<bigint> {
-    return BigInt(String(await this.invoker.call('get_untracked_balance', [address(token)], options)));
-  }
-
-  /**
-   * Sweep the untracked `token` balance to a treasury wallet. Admin only.
-   *
-   * Returns the amount swept; `0` when the contract holds nothing beyond its
-   * tracked escrows. The sweep is a no-op while the protocol is paused.
-   */
-  async sweepUntrackedBalance(
-    params: EscrowTypes.SweepParams,
-    options?: ContractInvokeOptions
-  ): Promise<bigint> {
-    const result = await this.invoker.call(
-      'sweep_untracked_balance',
-      [address(params.admin), address(params.token), address(params.recipient)],
-      options
-    );
-    return BigInt(String(result));
-  }
-
-  /**
-   * Reclaim an escrow that has expired
-   */
-  async reclaimExpiredEscrow(
-    params: EscrowTypes.ReclaimExpiredEscrowParams,
-    options?: ContractInvokeOptions
-  ): Promise<void> {
-    await this.invoker.call('reclaim_expired_escrow', [u64(params.deliveryId)], options);
-  }
-
-  /**
-   * Get the settlement contract address
-   */
-  async getSettlementContract(options?: ContractInvokeOptions): Promise<string | null> {
-    return decodeOptionalAddress(await this.invoker.call('get_settlement_contract', [], options));
-  }
-
-  /**
-   * Get the pending settlement contract change, if any timelock proposal is in-flight.
-   * Returns null when no change is pending.
-   */
-  async getPendingSettlementContract(options?: ContractInvokeOptions): Promise<EscrowTypes.PendingSettlementContractInfo | null> {
-    const raw = await this.invoker.call('get_pending_settlement_contract', [], options);
-    if (raw === null || raw === undefined) return null;
-    const record = raw as Record<string, unknown>;
     return {
-      settlementContract: String(record.settlement_contract),
-      activatesAt: BigInt(String(record.activates_at)),
-    };
-  }
-
-  /**
-   * Set the settlement contract address (proposes a timelocked change)
-   */
-  async setSettlementContract(
-    params: EscrowTypes.SetSettlementContractParams,
-    options?: ContractInvokeOptions
-  ): Promise<void> {
-    await this.invoker.call('set_settlement_contract', [address(params.admin), address(params.settlementContract)], options);
-  }
-
-  /**
-   * Confirm a previously proposed settlement contract change once its timelock has elapsed.
-   */
-  async confirmSettlementContract(
-    params: EscrowTypes.ConfirmSettlementContractParams,
-    options?: ContractInvokeOptions
-  ): Promise<void> {
-    await this.invoker.call('confirm_settlement_contract', [address(params.admin)], options);
-  }
-
-  /**
-   * Get the fleet management contract address
-   */
-  async getFleetManagementContract(options?: ContractInvokeOptions): Promise<string | null> {
-    return decodeOptionalAddress(await this.invoker.call('get_fleet_management_contract', [], options));
-  }
-
-  /**
-   * Set the fleet management contract address
-   */
-  async setFleetManagementContract(
-    params: EscrowTypes.SetFleetManagementContractParams,
-    options?: ContractInvokeOptions
-  ): Promise<void> {
-    await this.invoker.call('set_fleet_management_contract', [address(params.admin), address(params.fleetContract)], options);
-  }
-
-  /**
-   * Check if the protocol is paused
-   */
-  async isPaused(options?: ContractInvokeOptions): Promise<boolean> {
-    return Boolean(await this.invoker.call('is_paused', [], options));
-  }
-
-  /**
-   * Pause or unpause the protocol
-   */
-  async setPaused(admin: string, paused: boolean, options?: ContractInvokeOptions): Promise<void> {
-    await this.invoker.call('set_paused', [address(admin), bool(paused)], options);
+      deliveryId: BigInt(String(raw.delivery_id)),
+      sender: String(raw.sender),
+      recipient: String(raw.recipient),
+      driver: String(raw.driver),
+      token: String(raw.token),
+      amount: BigInt(String(raw.amount)),
+      status: String(raw.status),
+      fleetId: fleetId === undefined ? undefined : BigInt(String(fleetId)),
+      disputeReason,
+      resolvedAt: resolvedAt === undefined ? undefined : BigInt(String(resolvedAt)),
+    } as EscrowRecord;
   }
 }
 
-function xdrVoid() {
+function decodeIds(result: unknown): bigint[] {
+  return (result as Array<unknown>).map((id) => BigInt(String(id)));
+}
+
+function xdrVoid(): ReturnType<typeof nativeToScVal> {
   return nativeToScVal(null);
-}
-
-function decodeIds(value: unknown): bigint[] {
-  return (value as unknown[]).map((id) => BigInt(String(id)));
-}
-
-function decodeOptionalAddress(value: unknown): string | null {
-  return value === null || value === undefined ? null : String(value);
-}
-
-function decodeEscrow(value: unknown): EscrowRecord {
-  const record = value as Record<string, unknown>;
-  return {
-    sender: String(record.sender), recipient: String(record.recipient), driver: String(record.driver),
-    token: String(record.token), amount: BigInt(String(record.amount)), status: record.status as EscrowRecord['status'],
-    createdAt: Number(record.created_at), expiresAt: record.expires_at === null ? undefined : Number(record.expires_at),
-    disputedBy: record.disputed_by === null ? undefined : String(record.disputed_by),
-    disputedAt: record.disputed_at === null ? undefined : Number(record.disputed_at),
-    fleetId: record.fleet_id === null || record.fleet_id === undefined ? undefined : BigInt(String(record.fleet_id)),
-    deliveryId: Number(record.delivery_id ?? 0),
-    holdbackStartedAt: record.holdback_started_at === null ? undefined : Number(record.holdback_started_at),
-  };
 }

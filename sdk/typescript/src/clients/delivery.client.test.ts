@@ -92,4 +92,52 @@ describe('DeliveryClient', () => {
       expect(args[0]).toHaveLength(3);
     });
   });
+
+  describe('getDeliveriesBySender', () => {
+    it('forwards invocation options to the invoker', async () => {
+      const options = { source: 'GSOURCE', fee: 100 };
+
+      await client.getDeliveriesBySender('GSENDER', options as any);
+
+      expect(invokeContract).toHaveBeenCalledWith(
+        'get_deliveries_by_sender',
+        ['GSENDER'],
+        options,
+      );
+    });
+
+    it('passes undefined options through when omitted', async () => {
+      await client.getDeliveriesBySender('GSENDER');
+
+      expect(invokeContract).toHaveBeenCalledWith(
+        'get_deliveries_by_sender',
+        ['GSENDER'],
+        undefined,
+      );
+    });
+  });
+
+  describe('getDeliveriesByRecipient', () => {
+    it('forwards invocation options to the invoker', async () => {
+      const options = { source: 'GSOURCE', fee: 100 };
+
+      await client.getDeliveriesByRecipient('GRECIPIENT', options as any);
+
+      expect(invokeContract).toHaveBeenCalledWith(
+        'get_deliveries_by_recipient',
+        ['GRECIPIENT'],
+        options,
+      );
+    });
+
+    it('passes undefined options through when omitted', async () => {
+      await client.getDeliveriesByRecipient('GRECIPIENT');
+
+      expect(invokeContract).toHaveBeenCalledWith(
+        'get_deliveries_by_recipient',
+        ['GRECIPIENT'],
+        undefined,
+      );
+    });
+  });
 });

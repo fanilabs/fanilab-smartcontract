@@ -2,11 +2,34 @@
   "network": "testnet",
   "deployed_at": "2026-09-18T16:20:12Z",
   "deployer_address": "GAOS23MG6Y4V7IGWGY5YIEZPC54WHFGGJLJHSTQOQLKE3GMFO34TNXRY",
+  "source_revision": "0000000000000000000000000000000000000000",
   "contracts": {
     "escrow_contract": "CBQYOXOL7OQWU7TIDG3SJXYIETFDBRAAPQA3M2FVSC2GUSOQLC5IEEX2",
     "delivery_contract": "CCJ3QHXLFNUDQ5CYSSKZFP2DWOPJXJ4V6D24SBQYUJIBSDTFTQBBKFDE",
     "fleet_management_contract": "CCZLFXOWEPDE2MX6DNN7DWA3DFSYEPTK45NNAGYFATNZ7EKJPUAFSQZ7",
     "dispute_resolution_contract": "CALP2KTRQ5NTDDM7SC7QMJEVTYXTQS2ZC5LQVN6VCB5HDSPBWEUBXYXH",
     "identity_reputation_contract": "CBZ5BZSOAZUBGA2O5ZY2STGXAXR77DSVLV22WSQ6N4MO6P6GN6QZVDAB"
+  },
+  "artifacts": {
+    "escrow_contract": {
+      "wasm_sha256": "",
+      "source_revision": ""
+    },
+    "delivery_contract": {
+      "wasm_sha256": "",
+      "source_revision": ""
+    },
+    "fleet_management_contract": {
+      "wasm_sha256": "",
+      "source_revision": ""
+    },
+    "dispute_resolution_contract": {
+      "wasm_sha256": "",
+      "source_revision": ""
+    },
+    "identity_reputation_contract": {
+      "wasm_sha256": "",
+      "source_revision": ""
+    }
   }
 }

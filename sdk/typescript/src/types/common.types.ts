@@ -4,6 +4,12 @@ import { Keypair } from '@stellar/stellar-sdk';
  * Common types shared across FaniLab smart contracts
  */
 
+/**
+ * A Rust `u64` timestamp, represented as a `bigint` so values above
+ * `Number.MAX_SAFE_INTEGER` (2^53 - 1) are preserved losslessly.
+ */
+export type U64Timestamp = bigint;
+
 export enum EscrowStatus {
   Locked = 'Locked',
   Holdback = 'Holdback',
@@ -62,17 +68,17 @@ export interface EscrowRecord {
   token: string;
   amount: bigint;
   status: EscrowStatus;
-  createdAt: number;
-  expiresAt?: number;
+  createdAt: U64Timestamp;
+  expiresAt?: U64Timestamp;
   disputedBy?: string;
-  disputedAt?: number;
+  disputedAt?: U64Timestamp;
   fleetId?: bigint;
   /**
    * Timestamp at which the escrow entered the `Holdback` state, used together
    * with the configured holdback window to decide when
    * `release_expired_holdback` becomes available.
    */
-  holdbackStartedAt?: number;
+  holdbackStartedAt?: U64Timestamp;
 }
 
 export interface PartyAddresses {
@@ -85,7 +91,7 @@ export interface DriverProfile {
   address: string;
   deliveriesCompleted: number;
   reputationScore: number;
-  registeredAt: number;
+  registeredAt: U64Timestamp;
   kycVerified: boolean;
   /**
    * Lifecycle status of the driver, mirroring the contract's `DriverStatus`.
@@ -96,7 +102,7 @@ export interface DriverProfile {
 
 export interface UserProfile {
   address: string;
-  registeredAt: number;
+  registeredAt: U64Timestamp;
 }
 
 export interface ReputationConfig {
@@ -117,7 +123,7 @@ export interface FleetProfile {
 
 export interface PendingTreasuryChange {
   treasury: string;
-  activatesAt: number;
+  activatesAt: U64Timestamp;
 }
 
 export interface EvidenceEntry {
@@ -128,10 +134,10 @@ export interface EvidenceEntry {
 export interface DisputeCase {
   deliveryId: bigint;
   status: DisputeStatus;
-  raisedAt: number;
+  raisedAt: U64Timestamp;
   raisedBy: string;
   evidenceHashes: EvidenceEntry[];
-  resolvedAt?: number;
+  resolvedAt?: U64Timestamp;
   resolvedBy?: string;
 }
 

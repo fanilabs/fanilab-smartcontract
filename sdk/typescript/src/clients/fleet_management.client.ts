@@ -14,6 +14,39 @@ import { ContractInvoker, address, u32, u64, vec } from './invoker';
  */
 const DEFAULT_ROSTER_PAGE_SIZE = 100;
 
+/**
+ * Explicitly decode the native `get_driver_fleet_status` result into a
+ * `DriverFleetStatus`. Soroban returns enum variants as single-element tuples
+ * (e.g. `['Pending']`, `['Active']`, `['Removed']`), so we normalize both the
+ * tuple form and bare string form, and map unknown variants to `null`.
+ */
+function decodeDriverFleetStatus(value: unknown): DriverFleetStatus | null {
+  if (value == null) {
+    return null;
+  }
+
+  let raw: unknown = value;
+  if (Array.isArray(raw)) {
+    raw = raw.length > 0 ? raw[0] : null;
+  }
+
+  if (raw == null) {
+    return null;
+  }
+
+  const name = String(raw);
+  switch (name) {
+    case 'Pending':
+      return DriverFleetStatus.Pending;
+    case 'Active':
+      return DriverFleetStatus.Active;
+    case 'Removed':
+      return DriverFleetStatus.Removed;
+    default:
+      return null;
+  }
+}
+
 export class FleetManagementClient {
   private readonly invoker: ContractInvoker;
 
@@ -124,7 +157,7 @@ export class FleetManagementClient {
 
   async getDriverFleetStatus(fleetId: bigint, driver: string, options?: ContractInvokeOptions): Promise<DriverFleetStatus | null> {
     const result = await this.invoker.call('get_driver_fleet_status', [u64(fleetId), address(driver)], options);
-    return result == null ? null : (result as DriverFleetStatus);
+    return decodeDriverFleetStatus(result);
   }
 
   async getFleetRoster(params: FleetManagementTypes.GetFleetRosterParams, options?: ContractInvokeOptions): Promise<string[]> {
@@ -144,29 +177,6 @@ export class FleetManagementClient {
   }
 
   async getFleetSigners(fleetId: bigint, options?: ContractInvokeOptions): Promise<{ signers: string[]; threshold: number }> {
-    const result = await this.invoker.call('get_fleet_signers', [u64(fleetId)], options) as unknown[];
-    const signers = (result[0] as unknown[]).map((value) => String(value));
-    return { signers, threshold: Number(result[1]) };
-  }
-}
+    c
 
-function decodeFleet(value: unknown): FleetProfile {
-  const profile = value as Record<string, unknown>;
-  return {
-    fleetId: BigInt(String(profile.fleet_id)),
-    owner: String(profile.owner),
-    treasury: String(profile.treasury),
-    totalActiveDrivers: Number(profile.total_active_drivers),
-    signers: ((profile.signers as unknown[]) ?? []).map((value) => String(value)),
-    signatureThreshold: Number(profile.signature_threshold),
-    active: Boolean(profile.active),
-  };
-}
-
-function decodePendingTreasury(value: unknown): PendingTreasuryChange {
-  const change = value as Record<string, unknown>;
-  return {
-    treasury: String(change.treasury),
-    activatesAt: Number(change.activates_at),
-  };
-}
+/* … truncated 949 chars — edit only what you need near the top … */

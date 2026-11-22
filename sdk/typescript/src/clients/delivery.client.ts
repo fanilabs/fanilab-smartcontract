@@ -4,17 +4,13 @@
 
 import * as DeliveryTypes from '../types/delivery.types';
 import { ContractInvokeOptions } from '../types/common.types';
-import { ContractInvoker, address, bool, map, string, symbol, u32, u64 } from './invoker';
+import { ContractInvoker, ScVal, address, bool, map, string, symbol, u32, u64, vec } from './invoker';
 
 export class DeliveryClient {
   private readonly invoker: ContractInvoker;
-  private identityInvoker?: ContractInvoker;
 
   constructor(contractId: string, options: ContractInvokeOptions = {}) {
     this.invoker = new ContractInvoker(contractId, options);
-    if (options.identityContractId) {
-      this.identityInvoker = new ContractInvoker(options.identityContractId, options);
-    }
   }
 
   /**
@@ -29,7 +25,6 @@ export class DeliveryClient {
     if (!admin) {
       throw new Error('Delivery initialization requires options.sourceAccount as admin');
     }
-    this.identityInvoker = new ContractInvoker(identityContractId, options);
     await this.invoker.call('init', [address(admin), address(escrowContractId)], options);
     await this.invoker.call(
       'set_identity_reputation_contract',
@@ -49,7 +44,6 @@ export class DeliveryClient {
     if (!admin) {
       throw new Error('setIdentityReputationContract requires options.sourceAccount as admin');
     }
-    this.identityInvoker = new ContractInvoker(identityContractId, options);
     await this.invoker.call(
       'set_identity_reputation_contract',
       [address(admin), address(identityContractId)],
@@ -102,7 +96,7 @@ export class DeliveryClient {
     );
     const result = await this.invoker.call(
       'create_deliveries_batch',
-      [address(params.sender), address(params.recipient), metadatas],
+      [address(params.sender), address(params.recipient), vec(metadatas)],
       options
     );
     return decodeIds(result);
@@ -278,12 +272,20 @@ export class DeliveryClient {
 }
 
 const DELIVERY_STATUSES: ReadonlyArray<DeliveryTypes.DeliveryStatus> = [
-  'Pending',
-  'InTransit',
-  'Delivered',
-  'Cancelled',
-  'Disputed',
+  DeliveryTypes.DeliveryStatus.Pending,
+  DeliveryTypes.DeliveryStatus.Active,
+  DeliveryTypes.DeliveryStatus.InTransit,
+  DeliveryTypes.DeliveryStatus.Delivered,
+  DeliveryTypes.DeliveryStatus.Cancelled,
+  DeliveryTypes.DeliveryStatus.Disputed,
 ];
+
+function optionalNumber(value: unknown): number | undefined {
+  if (value === null || value === undefined) {
+    return undefined;
+  }
+  return Number(value);
+}
 
 function decodeDelivery(raw: unknown): DeliveryTypes.DeliveryRecord {
   const record = requireRecord(raw, 'delivery');
@@ -293,14 +295,29 @@ function decodeDelivery(raw: unknown): DeliveryTypes.DeliveryRecord {
       `Invalid delivery response: field 'status' has unexpected value ${JSON.stringify(status)}`
     );
   }
+  const metadata = requireRecord(record.metadata, 'delivery metadata');
+  const cargo = requireRecord(metadata.cargo_description, 'delivery cargo description');
   return {
-    deliveryId: requireField(record, 'deliveryId', 'delivery') as bigint,
-    sender: requireField(record, 'sender', 'delivery') as string,
-    recipient: requireField(record, 'recipient', 'delivery') as string,
-    driver: requireField(record, 'driver', 'delivery') as string,
+    deliveryId: BigInt(String(record.delivery_id)),
+    sender: String(record.sender),
+    recipient: String(record.recipient),
+    driver: record.driver === null || record.driver === undefined ? undefined : String(record.driver),
     status: status as DeliveryTypes.DeliveryStatus,
-    createdAt: requireField(record, 'createdAt', 'delivery') as bigint,
-    updatedAt: requireField(record, 'updatedAt', 'delivery') as bigint,
+    metadata: {
+      deliveryId: BigInt(String(metadata.delivery_id)),
+      pickupLocation: String(metadata.origin),
+      dropoffLocation: String(metadata.destination),
+      cargoDescription: {
+        weightGrams: Number(cargo.weight_grams),
+        category: cargo.category as DeliveryTypes.CargoCategory,
+        fragile: Boolean(cargo.fragile),
+      },
+      createdAt: optionalNumber(metadata.created_at),
+      estimatedDelivery: optionalNumber(metadata.estimated_delivery),
+    },
+    createdAt: Number(record.created_at),
+    deliveredAt: optionalNumber(record.delivered_at),
+    transitStartedAt: optionalNumber(record.transit_started_at),
   };
 }
 
@@ -335,17 +352,23 @@ function decodeIds(raw: unknown): bigint[] {
 function decodeDriverProfile(raw: unknown): DeliveryTypes.DeliveryDriverProfile {
   const record = requireRecord(raw, 'driver profile');
   return {
-    driver: requireField(record, 'driver', 'driver profile') as string,
-    reputation: requireField(record, 'reputation', 'driver profile') as bigint,
-    completedDeliveries: requireField(record, 'completedDeliveries', 'driver profile') as bigint,
+    address: String(record.address),
+    deliveriesCompleted: Number(record.deliveries_completed ?? 0),
+    reputationScore: Number(record.reputation_score ?? 0),
+    registeredAt: Number(record.registered_at ?? 0),
+    kycVerified: Boolean(record.kyc_verified),
+    status: String(record.status) as DeliveryTypes.DeliveryDriverProfile['status'],
   };
 }
 
 function decodeCombinedState(raw: unknown): DeliveryTypes.CombinedDeliveryState {
-  const record = requireRecord(raw, 'combined state');
+  if (!Array.isArray(raw) || raw.length < 3) {
+    throw new Error('Invalid combined state response: expected a (delivery, escrow, synced) tuple');
+  }
   return {
-    delivery: decodeDelivery(requireField(record, 'delivery', 'combined state')),
-    escrowStatus: requireField(record, 'escrowStatus', 'combined state') as string,
+    delivery: decodeDelivery(raw[0]),
+    escrow: raw[1] === null || raw[1] === undefined ? undefined : (raw[1] as DeliveryTypes.DeliveryEscrowState),
+    isSynchronized: Boolean(raw[2]),
   };
 }
 
@@ -357,15 +380,28 @@ function decodeDeliveryPage(raw: unknown): DeliveryTypes.DeliveryPage {
   }
   return {
     items: items.map((item) => decodeDelivery(item)),
-    total: requireField(record, 'total', 'delivery page') as bigint,
+    total: BigInt(String(record.total ?? items.length)),
   };
 }
 
-function encodeDeliveryMetadata(deliveryId: bigint, metadata: DeliveryTypes.DeliveryMetadata): unknown {
+function encodeDeliveryMetadata(deliveryId: bigint, metadata: DeliveryTypes.DeliveryMetadata): ScVal {
+  const cargo = metadata.cargoDescription;
+  if (!cargo) {
+    throw new Error('Delivery metadata requires cargoDescription');
+  }
   return map([
-    [symbol('delivery_id'), u64(deliveryId)],
-    [symbol('description'), string(metadata.description)],
-    [symbol('weight'), u32(metadata.weight)],
-    [symbol('is_fragile'), bool(metadata.isFragile)],
+    ['delivery_id', u64(deliveryId)],
+    ['origin', string(metadata.pickupLocation)],
+    ['destination', string(metadata.dropoffLocation)],
+    [
+      'cargo_description',
+      map([
+        ['weight_grams', u32(cargo.weightGrams)],
+        ['category', symbol(cargo.category)],
+        ['fragile', bool(cargo.fragile)],
+      ]),
+    ],
+    ['created_at', u64(metadata.createdAt ?? 0)],
+    ['estimated_delivery', u64(metadata.estimatedDelivery ?? 0)],
   ]);
 }

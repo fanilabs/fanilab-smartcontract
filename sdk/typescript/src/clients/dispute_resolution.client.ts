@@ -229,10 +229,12 @@ function decodeDisputeStatus(value: unknown): DisputeStatus {
   switch (variant) {
     case 'Open':
       return DisputeStatus.Open;
-    case 'Resolved':
-      return DisputeStatus.Resolved;
-    case 'Cancelled':
-      return DisputeStatus.Cancelled;
+    case 'ResolvedRefund':
+      return DisputeStatus.ResolvedRefund;
+    case 'ResolvedPayout':
+      return DisputeStatus.ResolvedPayout;
+    case 'Split':
+      return DisputeStatus.Split;
     default:
       throw new Error(`Unknown DisputeStatus variant: ${variant}`);
   }
@@ -245,14 +247,59 @@ function decodeDisputeStatus(value: unknown): DisputeStatus {
 function decodeDispute(value: unknown): DisputeCase {
   const record = value as Record<string, unknown>;
   return {
-    ...(record as unknown as DisputeCase),
+    deliveryId: BigInt(String(record.delivery_id)),
     status: decodeDisputeStatus(record.status),
+    raisedAt: BigInt(String(record.raised_at)),
+    raisedBy: String(record.raised_by),
+    evidenceHashes: ((record.evidence_hashes as unknown[]) ?? []).map((entry) => {
+      const item = entry as Record<string, unknown>;
+      return {
+        submitter: String(item.submitter),
+        hash: hexEncode(item.hash),
+      };
+    }),
+    resolvedAt:
+      record.resolved_at === null || record.resolved_at === undefined
+        ? undefined
+        : BigInt(String(record.resolved_at)),
+    resolvedBy:
+      record.resolved_by === null || record.resolved_by === undefined
+        ? undefined
+        : String(record.resolved_by),
   };
 }
 
 /**
  * Validate and decode a `BytesN<32>` evidence hash supplied as hex text.
  *
- *
+ * `Buffer.from(text, 'hex')` silently truncates at the first invalid pair
+ * and accepts odd-length input, so a malformed hash could reach the RPC as
+ * a short byte buffer (Issue #726). Require exactly 64 hexadecimal
+ * characters and reject anything else before decoding.
+ */
+function decodeEvidenceHash(evidenceHash: string): Uint8Array {
+  if (typeof evidenceHash !== 'string' || !/^[0-9a-fA-F]{64}$/.test(evidenceHash)) {
+    throw new TypeError(
+      `Invalid evidence hash: expected exactly 64 hexadecimal characters, received ${JSON.stringify(evidenceHash)}`
+    );
+  }
+  return new Uint8Array(Buffer.from(evidenceHash, 'hex'));
+}
 
-/* … truncated 1402 chars — edit only what you need near the top … */
+/**
+ * Serialize a `BytesN<32>` evidence hash into its canonical lowercase hex
+ * form. `scValToNative` hands back a byte buffer (`Uint8Array`/`Buffer`),
+ * so a bare `String(...)` would yield "[object Uint8Array]" and destroy the
+ * proof-of-delivery hash (Issue #474). A value that is already a string is
+ * passed through unchanged so the decoder tolerates RPCs that surface the
+ * hash as text.
+ */
+function hexEncode(value: unknown): string {
+  if (typeof value === 'string') {
+    return value;
+  }
+  if (value instanceof Uint8Array) {
+    return Buffer.from(value).toString('hex');
+  }
+  throw new TypeError(`Expected a byte buffer evidence hash, received ${typeof value}`);
+}

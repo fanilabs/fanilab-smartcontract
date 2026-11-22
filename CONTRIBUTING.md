@@ -43,6 +43,22 @@ reproduce, and the expected versus actual behavior.
 3. Describe the motivation and the change in the pull request body.
 4. Make sure existing tests and checks pass before requesting review.
 
+## TypeScript SDK checks
+
+The SDK runs TypeScript in strict mode with `noUnusedLocals` and
+`noUnusedParameters` enabled. Run the checks from `sdk/typescript`:
+
+```sh
+npm run typecheck
+npm test
+npm run build
+```
+
+When a parameter must stay in a signature for compatibility but is
+intentionally unused, prefix it with an underscore (for example `_args`).
+TypeScript ignores underscore-prefixed parameters for unused checks, so this
+is the supported way to document intent rather than deleting the parameter.
+
 ## Questions
 
 If anything here is unclear, open a regular issue and a maintainer will help.

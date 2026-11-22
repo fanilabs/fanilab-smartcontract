@@ -88,6 +88,10 @@ jobs:
       working-directory: sdk/typescript
       run: npm run build
 
+    - name: Verify rebuild removes stale artifacts
+      working-directory: sdk/typescript
+      run: npm run test:clean-build
+
     - name: Type check examples
       working-directory: sdk/typescript
       run: npx tsc --noEmit examples/basic-usage.ts

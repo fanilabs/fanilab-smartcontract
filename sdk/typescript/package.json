@@ -27,8 +27,10 @@
   "browser": "dist/index.js",
   "sideEffects": false,
   "scripts": {
-    "build": "tsc --project tsconfig.build.json",
+    "clean": "node scripts/clean.mjs",
+    "build": "npm run clean && tsc --project tsconfig.build.json",
     "typecheck": "tsc --noEmit",
+    "test:clean-build": "node scripts/verify-clean-build.mjs",
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
     "smoke:browser": "node scripts/browser-import-smoke.mjs",
     "prepare": "npm run build"

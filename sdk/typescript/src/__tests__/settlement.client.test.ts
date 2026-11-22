@@ -11,7 +11,7 @@ import { ContractInvoker } from '../clients/invoker';
  * and decoded the same way `ContractInvoker.call` decodes them.
  */
 function mockInvoker(retvals: Record<string, xdr.ScVal[]>): jest.SpyInstance {
-  const call = jest.fn(async (functionName: string, args: xdr.ScVal[]) => {
+  const call = jest.fn(async (functionName: string, _args: xdr.ScVal[]) => {
     const queue = retvals[functionName];
     if (!queue || queue.length === 0) {
       return undefined;

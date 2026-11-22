@@ -177,6 +177,29 @@ export class FleetManagementClient {
   }
 
   async getFleetSigners(fleetId: bigint, options?: ContractInvokeOptions): Promise<{ signers: string[]; threshold: number }> {
-    c
+    const result = await this.invoker.call('get_fleet_signers', [u64(fleetId)], options) as unknown[];
+    const signers = (result[0] as unknown[]).map((value) => String(value));
+    return { signers, threshold: Number(result[1]) };
+  }
+}
 
-/* … truncated 949 chars — edit only what you need near the top … */
+function decodeFleet(value: unknown): FleetProfile {
+  const profile = value as Record<string, unknown>;
+  return {
+    fleetId: BigInt(String(profile.fleet_id)),
+    owner: String(profile.owner),
+    treasury: String(profile.treasury),
+    totalActiveDrivers: Number(profile.total_active_drivers),
+    signers: ((profile.signers as unknown[]) ?? []).map((value) => String(value)),
+    signatureThreshold: Number(profile.signature_threshold),
+    active: Boolean(profile.active),
+  };
+}
+
+function decodePendingTreasury(value: unknown): PendingTreasuryChange {
+  const change = value as Record<string, unknown>;
+  return {
+    treasury: String(change.treasury),
+    activatesAt: BigInt(String(change.activates_at)),
+  };
+}

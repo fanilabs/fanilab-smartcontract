@@ -4,6 +4,8 @@
 
 import { DeliveryStatus, DriverStatus, EscrowStatus } from './common.types';
 
+export { DeliveryStatus };
+
 /**
  * Error codes emitted by the Rust `delivery_contract` as contract panics.
  * Maps directly to the `DeliveryError` `#[contracterror]` enum (repr u32).
@@ -89,6 +91,15 @@ export interface DeliveryMetadata {
   notes?: string;
 }
 
+export interface CreateDeliveriesBatchParams {
+  sender: string;
+  recipient: string;
+  deliveries: Array<{
+    deliveryId: bigint;
+    metadata: DeliveryMetadata;
+  }>;
+}
+
 export interface AssignDriverParams {
   caller: string;
   deliveryId: bigint;
@@ -139,6 +150,11 @@ export interface DeliveryDriverProfile {
   registeredAt: number;
   kycVerified: boolean;
   status: DriverStatus;
+}
+
+export interface DeliveryPage {
+  items: DeliveryRecord[];
+  total: bigint;
 }
 
 export interface DeliveryEscrowState {

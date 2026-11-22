@@ -51,6 +51,48 @@ jobs:
         fi
         echo "✅ No legacy wasm target references found in scripts/, Makefile, Makefile.windows, or .vscode/."
 
+  workflow_lint:
+    name: Workflow Lint (actionlint)
+    runs-on: ubuntu-latest
+    env:
+      # Pinned actionlint release. Bump deliberately; the checksum below must
+      # be updated in lockstep with the version.
+      ACTIONLINT_VERSION: '1.7.7'
+      ACTIONLINT_SHA256: '023070a287cd8cccd71515fedc843f1985bf96c436b7effa23f6b9e2a7a8f0a1'
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v7
+
+    - name: Install actionlint (pinned, checksum-verified)
+      run: |
+        set -euo pipefail
+        archive="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+        url="https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${archive}"
+        curl --fail --silent --show-error --location --output "${archive}" "${url}"
+        echo "${ACTIONLINT_SHA256}  ${archive}" | sha256sum --check --strict
+        tar --extract --gzip --file "${archive}" actionlint
+        install -m 0755 actionlint /usr/local/bin/actionlint
+        actionlint --version
+
+    - name: Run actionlint on all workflows
+      run: |
+        # Lints every workflow file, including expression syntax, `github.event.*`
+        # input references, job/step keys, and embedded shell (via shellcheck).
+        #
+        # Suppressions policy: suppressions must be narrowly scoped and justified.
+        #   * Prefer an inline `# actionlint-disable <rule> -- <rationale>` comment
+        #     on the offending line or the line immediately above it.
+        #   * Repo-wide or file-wide exceptions belong in `.github/actionlint.yaml`
+        #     with a per-rule justification comment; do not disable rules globally.
+        #
+        # This job fails on, for example:
+        #   * an invalid input reference such as
+        #       ${{ github.event.inputs.does_not_exist }}
+        #     (actionlint reports an undefined property on the inputs object), or
+        #   * an unsupported step key such as `uses` combined with `run`, or a
+        #     misspelled key like `withs:` (actionlint reports an unexpected key).
+        actionlint -color
+
   typescript_sdk:
     name: Build TypeScript SDK (Node ${{ matrix.node-version }})
     runs-on: ubuntu-latest
@@ -79,6 +121,21 @@ jobs:
     - name: Test SDK
       working-directory: sdk/typescript
       run: npm test
+
+    - name: Test SDK with coverage
+      if: matrix.node-version == '22'
+      working-directory: sdk/typescript
+      run: npm run test:coverage
+
+    - name: Upload SDK coverage to Codecov
+      if: matrix.node-version == '22'
+      uses: codecov/codecov-action@v4
+      with:
+        # Distinct flag keeps SDK coverage separate from the Rust report.
+        files: sdk/typescript/coverage/lcov.info
+        flags: typescript-sdk
+        name: typescript-sdk-node22
+        fail_ci_if_error: false
 
     - name: Type check SDK
       working-directory: sdk/typescript

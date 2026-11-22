@@ -82,6 +82,9 @@ export function native(value: ScVal): unknown {
 const DEFAULT_TTL_THRESHOLD_LEDGERS = 100_000;
 const DEFAULT_TTL_EXTEND_TO_LEDGERS = 518_400;
 
+const DEFAULT_SUBMISSION_MAX_ATTEMPTS = 5;
+const DEFAULT_SUBMISSION_RETRY_DELAY_MS = 1_000;
+
 function canExtendTtl(key: xdr.LedgerKey): boolean {
   return key.type === 'contractCode' ||
     (key.type === 'contractData' && key.contractData.durability.name === 'persistent');

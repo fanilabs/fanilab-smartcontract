@@ -257,9 +257,15 @@ if [ -f "$OUTPUT_FILE" ]; then
 fi
 DEPLOYED_IDS["$CONTRACT_NAME"]="$CONTRACT_ID"
 
-# Write the manifest atomically (temp file + mv) so a crash never leaves a
-# half-written JSON file behind.
-TMP_OUTPUT="$OUTPUT_FILE.tmp"
+# Write the manifest atomically: render into a temporary sibling file, validate
+# it, then rename over the target. A crash or interruption mid-write leaves the
+# previous manifest intact instead of a truncated one.
+TMP_FILE="$(mktemp "${OUTPUT_FILE}.XXXXXX.tmp")"
+cleanup_tmp() {
+    rm -f "$TMP_FILE"
+}
+trap cleanup_tmp EXIT
+
 {
     echo "{"
     echo "  \"network\": \"$NETWORK\","
@@ -279,8 +285,33 @@ TMP_OUTPUT="$OUTPUT_FILE.tmp"
     echo ""
     echo "  }"
     echo "}"
-} > "$TMP_OUTPUT"
-mv "$TMP_OUTPUT" "$OUTPUT_FILE"
+} > "$TMP_FILE"
+
+# Validate the temporary file before promoting it. Prefer a real JSON parser
+# when available, otherwise fall back to a basic structural sanity check.
+if command -v python3 &> /dev/null; then
+    if ! python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$TMP_FILE"; then
+        echo "${RED}❌ Generated manifest failed JSON validation; keeping existing $OUTPUT_FILE${NC}" >&2
+        exit 1
+    fi
+elif command -v jq &> /dev/null; then
+    if ! jq empty "$TMP_FILE" &> /dev/null; then
+        echo "${RED}❌ Generated manifest failed JSON validation; keeping existing $OUTPUT_FILE${NC}" >&2
+        exit 1
+    fi
+else
+    if [ ! -s "$TMP_FILE" ] || [ "$(head -c 1 "$TMP_FILE")" != "{" ] || [ "$(tail -c 1 "$TMP_FILE")" != "}" ]; then
+        echo "${RED}❌ Generated manifest failed sanity check; keeping existing $OUTPUT_FILE${NC}" >&2
+        exit 1
+    fi
+fi
+
+# Atomic promotion: rename is atomic on the same filesystem, so readers see
+# either the old manifest or the fully written new one, never a partial file.
+mv -f "$TMP_FILE" "$OUTPUT_FILE"
+trap - EXIT
+
+echo "${GREEN}✓ Contract ID saved to: $OUTPUT_FILE${NC}" >&2
 
 echo "${GREEN}✓ Contract ID recorded in $OUTPUT_FILE${NC}" >&2
 echo "" >&2

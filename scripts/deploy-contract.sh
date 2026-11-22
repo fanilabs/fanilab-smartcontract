@@ -136,6 +136,12 @@ if ! command -v cargo &> /dev/null; then
     exit 1
 fi
 
+if ! command -v jq &> /dev/null; then
+    echo "${RED}❌ jq not found. It is required to parse deployment manifests.${NC}" >&2
+    echo "   Install it from https://jqlang.github.io/jq/" >&2
+    exit 1
+fi
+
 if ! stellar keys address "$DEPLOYER_IDENTITY" &> /dev/null; then
     echo "${RED}❌ Stellar CLI identity '$DEPLOYER_IDENTITY' not found.${NC}" >&2
     echo "   Every deploy/initialize script signs with it (--source $DEPLOYER_IDENTITY)." >&2

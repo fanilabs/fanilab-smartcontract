@@ -109,9 +109,18 @@ jobs:
             echo "- ${display}"
           done
           echo ""
-          echo "## Checksums"
+          echo "## Checksums and Artifact Sizes"
           echo '```'
           cat release_artifacts/SHA256SUMS.txt
+          echo '```'
+          echo ""
+          echo "### Artifact Sizes"
+          echo '```'
+          for wasm in release_artifacts/*.wasm; do
+            filename=$(basename "$wasm")
+            size=$(wc -c < "$wasm")
+            printf "%-40s %10d bytes\n" "$filename" "$size"
+          done
           echo '```'
         } > RELEASE_NOTES.md
 

@@ -413,3 +413,6 @@ Built with ❤️ by the FaniLab Team | Powered by Stellar Soroban
 
 <!-- handsoff-issue-569 -->
 - #569: Dispute: Restrict Dispute Creation on Already Delivered Deliveries Beyond Allowed Window
+
+<!-- handsoff-issue-739 -->
+- #739: Add real ScVal fixtures to client decoder tests

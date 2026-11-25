@@ -21,6 +21,39 @@ function optionalField<T>(value: T | null | undefined, field: string, isValid: (
   return value;
 }
 
+/**
+ * Raised when a deployment's protocol version cannot be reconciled with the
+ * versions an application supports.
+ *
+ * `reason` distinguishes a deployment that reported a version the caller does
+ * not support (`'unsupported'`) from one whose version could not be read at all
+ * (`'unavailable'`).
+ */
+export class ProtocolCompatibilityError extends Error {
+  readonly deployedVersion: number | undefined;
+  readonly supportedVersions: readonly number[];
+  readonly reason: 'unsupported' | 'unavailable';
+
+  constructor(
+    reason: 'unsupported' | 'unavailable',
+    deployedVersion: number | undefined,
+    supportedVersions: readonly number[]
+  ) {
+    const message = reason === 'unavailable'
+      ? `Unable to determine the deployed protocol version; supported versions: ${formatVersions(supportedVersions)}`
+      : `Deployed protocol version ${String(deployedVersion)} is not supported; supported versions: ${formatVersions(supportedVersions)}`;
+    super(message);
+    this.name = 'ProtocolCompatibilityError';
+    this.reason = reason;
+    this.deployedVersion = deployedVersion;
+    this.supportedVersions = [...supportedVersions];
+  }
+}
+
+function formatVersions(versions: readonly number[]): string {
+  return versions.length === 0 ? '(none)' : versions.join(', ');
+}
+
 export class EscrowClient {
   private readonly invoker: ContractInvoker;
 
@@ -50,6 +83,41 @@ export class EscrowClient {
    */
   async getPlatformFee(options?: ContractInvokeOptions): Promise<number> {
     return Number(await this.invoker.call('get_platform_fee', [], options));
+  }
+
+  /**
+   * Assert that the deployed contract's protocol version is one the caller
+   * supports, before proceeding with writes.
+   *
+   * Performs a read-only `get_protocol_version` call (no mutation is
+   * submitted) and resolves with the deployed version when it is included in
+   * `supportedVersions`. Otherwise — including when the version cannot be read
+   * or is unavailable — rejects with a `ProtocolCompatibilityError`.
+   */
+  async assertProtocolCompatibility(
+    supportedVersions: readonly number[],
+    options?: ContractInvokeOptions
+  ): Promise<number> {
+    let deployedVersion: number | undefined;
+    try {
+      const result = await this.invoker.call('get_protocol_version', [], options);
+      if (result !== null && result !== undefined) {
+        const parsed = Number(String(result));
+        if (Number.isFinite(parsed)) {
+          deployedVersion = parsed;
+        }
+      }
+    } catch {
+      throw new ProtocolCompatibilityError('unavailable', undefined, supportedVersions);
+    }
+
+    if (deployedVersion === undefined) {
+      throw new ProtocolCompatibilityError('unavailable', undefined, supportedVersions);
+    }
+    if (!supportedVersions.includes(deployedVersion)) {
+      throw new ProtocolCompatibilityError('unsupported', deployedVersion, supportedVersions);
+    }
+    return deployedVersion;
   }
 
   /**

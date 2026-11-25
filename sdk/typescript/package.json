@@ -32,6 +32,7 @@
     "typecheck": "tsc --noEmit",
     "test:clean-build": "node scripts/verify-clean-build.mjs",
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
+    "test:coverage": "node --experimental-vm-modules node_modules/jest/bin/jest.js --coverage",
     "smoke:browser": "node scripts/browser-import-smoke.mjs",
     "prepare": "npm run build"
   },

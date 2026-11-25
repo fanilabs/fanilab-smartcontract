@@ -15,6 +15,8 @@ set -e
 
 CONFIG_FILE=""
 CONFIRM_MAINNET=false
+WASM_DIR=""
+WASM_FILE=""
 ARGS=()
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -28,6 +30,30 @@ while [ $# -gt 0 ]; do
             ;;
         --config=*)
             CONFIG_FILE="${1#--config=}"
+            shift
+            ;;
+        --wasm-dir)
+            if [ -z "${2:-}" ]; then
+                echo "❌ --wasm-dir requires a path argument" >&2
+                exit 1
+            fi
+            WASM_DIR="$2"
+            shift 2
+            ;;
+        --wasm-dir=*)
+            WASM_DIR="${1#--wasm-dir=}"
+            shift
+            ;;
+        --wasm)
+            if [ -z "${2:-}" ]; then
+                echo "❌ --wasm requires a path argument" >&2
+                exit 1
+            fi
+            WASM_FILE="$2"
+            shift 2
+            ;;
+        --wasm=*)
+            WASM_FILE="${1#--wasm=}"
             shift
             ;;
         --confirm-mainnet)
@@ -91,9 +117,21 @@ RED='\033[0;31m'
 NC='\033[0m' # No Color
 
 if [ -z "$CONTRACT_NAME" ]; then
-    echo "${RED}❌ Usage: $0 <contract_name> [network] [--config <path>] [--confirm-mainnet]${NC}" >&2
+    echo "${RED}❌ Usage: $0 <contract_name> [network] [--config <path>] [--wasm-dir <dir> | --wasm <path>] [--confirm-mainnet]${NC}" >&2
     echo "   Valid contract names: ${CONTRACTS[*]}" >&2
     exit 1
+fi
+
+# Prebuilt-artifact mode: when an explicit WASM path or directory is supplied,
+# deploy exactly those bytes and never rebuild from source. This is what CI
+# uses so the reviewed/staged workflow artifacts are the deployment input.
+if [ -n "$WASM_DIR" ] && [ -n "$WASM_FILE" ]; then
+    echo "${RED}❌ --wasm-dir and --wasm are mutually exclusive.${NC}" >&2
+    exit 1
+fi
+PREBUILT_MODE=false
+if [ -n "$WASM_DIR" ] || [ -n "$WASM_FILE" ]; then
+    PREBUILT_MODE=true
 fi
 
 # Reject path separators / traversal sequences outright. This runs before any
@@ -231,18 +269,32 @@ fi
 echo "${GREEN}✓ Prerequisites OK (deployer balance: $DEPLOYER_BALANCE_STROOPS stroops)${NC}" >&2
 echo "" >&2
 
-# Build the contract
-echo "${BLUE}Building $CONTRACT_NAME...${NC}" >&2
-cd "$PROJECT_ROOT"
-cargo build --target wasm32v1-none --release -p "$CONTRACT_NAME"
-echo "${GREEN}✓ Build successful${NC}" >&2
-echo "" >&2
+if [ "$PREBUILT_MODE" = true ]; then
+    # Deploy the supplied artifact verbatim; no source rebuild in this mode.
+    if [ -n "$WASM_FILE" ]; then
+        WASM_PATH="$WASM_FILE"
+    else
+        WASM_PATH="$WASM_DIR/${CONTRACT_NAME}.wasm"
+    fi
+    echo "${BLUE}Using prebuilt artifact (no rebuild): $WASM_PATH${NC}" >&2
+    if [ ! -f "$WASM_PATH" ]; then
+        echo "${RED}❌ Prebuilt WASM file not found: $WASM_PATH${NC}" >&2
+        exit 1
+    fi
+else
+    # Build the contract
+    echo "${BLUE}Building $CONTRACT_NAME...${NC}" >&2
+    cd "$PROJECT_ROOT"
+    cargo build --target wasm32v1-none --release -p "$CONTRACT_NAME"
+    echo "${GREEN}✓ Build successful${NC}" >&2
+    echo "" >&2
 
-WASM_PATH="$PROJECT_ROOT/target/wasm32v1-none/release/${CONTRACT_NAME}.wasm"
+    WASM_PATH="$PROJECT_ROOT/target/wasm32v1-none/release/${CONTRACT_NAME}.wasm"
 
-if [ ! -f "$WASM_PATH" ]; then
-    echo "${RED}❌ WASM file not found: $WASM_PATH${NC}" >&2
-    exit 1
+    if [ ! -f "$WASM_PATH" ]; then
+        echo "${RED}❌ WASM file not found: $WASM_PATH${NC}" >&2
+        exit 1
+    fi
 fi
 
 # Show the source account and artifact hash before any signed submission so
@@ -253,6 +305,7 @@ echo "   Source account: $DEPLOYER_IDENTITY ($DEPLOYER_ADDRESS)" >&2
 echo "   Network:        $NETWORK" >&2
 echo "   Artifact:       $WASM_PATH" >&2
 echo "   SHA-256:        $WASM_SHA256" >&2
+echo "   Mode:           $([ "$PREBUILT_MODE" = true ] && echo 'prebuilt (no rebuild)' || echo 'source build')" >&2
 echo "" >&2
 
 # Deploy the contract
@@ -272,21 +325,27 @@ echo "" >&2
 
 # Record this successful deployment in the incremental recovery journal
 # immediately, so a mid-batch failure never loses an already-deployed ID.
-# Format: one "<contract_name> <contract_id>" line per successful deploy.
+# Format: one "<contract_name> <contract_id> <sha256>" line per successful
+# deploy. The artifact hash is carried through so the final manifest can
+# identify the exact bytes that were deployed.
 if [ -f "$JOURNAL_FILE" ]; then
     grep -v "^$CONTRACT_NAME " "$JOURNAL_FILE" > "$JOURNAL_FILE.tmp" || true
     mv "$JOURNAL_FILE.tmp" "$JOURNAL_FILE"
 fi
-printf '%s %s\n' "$CONTRACT_NAME" "$CONTRACT_ID" >> "$JOURNAL_FILE"
+printf '%s %s %s\n' "$CONTRACT_NAME" "$CONTRACT_ID" "$WASM_SHA256" >> "$JOURNAL_FILE"
 
 # Merge this contract's ID into any existing output file for this network,
 # so deploying contracts one at a time doesn't clobber previously deployed IDs.
 # IDs are recovered from the journal first (survives mid-batch failures), then
 # from the existing manifest, then the just-deployed contract.
 declare -A DEPLOYED_IDS
+declare -A DEPLOYED_SHA256
 if [ -f "$JOURNAL_FILE" ]; then
-    while read -r name id; do
-        [ -n "$name" ] && [ -n "$id" ] && DEPLOYED_IDS["$name"]="$id"
+    while read -r name id sha; do
+        if [ -n "$name" ] && [ -n "$id" ]; then
+            DEPLOYED_IDS["$name"]="$id"
+            [ -n "$sha" ] && DEPLOYED_SHA256["$name"]="$sha"
+        fi
     done < "$JOURNAL_FILE"
 fi
 if [ -f "$OUTPUT_FILE" ]; then
@@ -299,6 +358,7 @@ if [ -f "$OUTPUT_FILE" ]; then
     done < "$OUTPUT_FILE"
 fi
 DEPLOYED_IDS["$CONTRACT_NAME"]="$CONTRACT_ID"
+DEPLOYED_SHA256["$CONTRACT_NAME"]="$WASM_SHA256"
 
 # Write the manifest atomically: render into a temporary sibling file, validate
 # it, then rename over the target. A crash or interruption mid-write leaves the
@@ -323,6 +383,22 @@ trap cleanup_tmp EXIT
                 echo ","
             fi
             printf '    "%s": "%s"' "$c" "${DEPLOYED_IDS[$c]}"
+        fi
+    done
+    echo ""
+    echo "  },"
+    # Artifact provenance: record the exact SHA-256 of the bytes supplied to
+    # the CLI for each deployed contract. No credentials are ever written here.
+    echo "  \"artifacts\": {"
+    first=true
+    for c in "${CONTRACTS[@]}"; do
+        if [ -n "${DEPLOYED_IDS[$c]:-}" ] && [ -n "${DEPLOYED_SHA256[$c]:-}" ]; then
+            if [ "$first" = true ]; then
+                first=false
+            else
+                echo ","
+            fi
+            printf '    "%s": { "sha256": "%s" }' "$c" "${DEPLOYED_SHA256[$c]}"
         fi
     done
     echo ""

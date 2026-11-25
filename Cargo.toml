@@ -6,9 +6,29 @@ members = [
 
 [workspace.package]
 version = "0.2.0"
+# Minimum Supported Rust Version (MSRV) for the entire workspace.
+# Every member crate inherits this via `rust-version.workspace = true`.
+#
+# This is the single source of truth for the minimum compiler contract
+# (issue #819). It is checked in CI with the pinned toolchain.
+#
+# Raising the MSRV requires a dedicated PR reviewed by maintainers, with
+# justification (e.g. a locked dependency now requires a newer compiler).
+# Do not bump it as a side effect of unrelated changes.
+rust-version = "1.84"
 
 [workspace.dependencies]
 soroban-sdk = "28.0.0"
+
+[workspace.metadata]
+# Publication policy (issue #820): the contract crates and shared_types are
+# internal-only and are NOT published to a registry. They are maintained as a
+# WASM workspace with path dependencies; the release workflow publishes
+# binaries, not crates. Each member crate sets `publish = false`.
+#
+# MSRV policy (issue #819): `rust-version` above is the minimum supported
+# compiler. Raising it requires a dedicated PR reviewed by maintainers.
+msrv = "1.84"
 
 [profile.release]
 opt-level = "z"

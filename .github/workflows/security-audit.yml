@@ -18,6 +18,11 @@ env:
 permissions:
   contents: read
 
+# This workflow is the single owner of Cargo advisory auditing (#822).
+# `cargo audit` runs here on every push, pull request, and schedule, so
+# advisory failures stay visible for PRs and scheduled runs alike.
+# ci.yml must NOT duplicate the audit; it relies on this workflow for
+# advisory results to avoid duplicate work and inconsistent findings.
 jobs:
   security_audit:
     name: Security Audit
@@ -58,4 +63,3 @@ jobs:
 
     - name: Dependency Review
       uses: actions/dependency-review-action@v5
-

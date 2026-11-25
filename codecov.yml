@@ -16,6 +16,17 @@ coverage:
       default:
         target: 80%
 
+flags:
+  rust:
+    paths:
+      - "src/"
+      - "crates/"
+    carryforward: true
+  typescript-sdk:
+    paths:
+      - "sdk/typescript/"
+    carryforward: true
+
 comment:
   layout: "reach,diff,flags,tree"
   behavior: default
@@ -25,3 +36,6 @@ ignore:
   - "tests/"
   - "**/*test.rs"
   - "**/test.rs"
+  - "sdk/typescript/coverage/"
+  - "sdk/typescript/dist/"
+  - "sdk/typescript/node_modules/"

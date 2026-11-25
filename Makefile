@@ -45,8 +45,15 @@ format:
 fmt:
 	$(MAKE) format
 
-lint:
+# Lint matches the CI target matrix: a host pass and a wasm32v1-none pass.
+# Prerequisite for the wasm pass: rustup target add wasm32v1-none
+lint: lint-host lint-wasm
+
+lint-host:
 	cargo clippy --all-targets --all-features -- -D warnings
+
+lint-wasm:
+	cargo clippy --target wasm32v1-none --all-features -- -D warnings
 
 audit:
 	cargo audit
@@ -57,4 +64,4 @@ coverage:
 check:
 	cargo check
 
-.PHONY: default all test test-verbose build build-escrow build-delivery build-dispute build-fleet build-identity build-settlement clean format fmt lint audit coverage check
+.PHONY: default all test test-verbose build build-escrow build-delivery build-dispute build-fleet build-identity build-settlement clean format fmt lint lint-host lint-wasm audit coverage check

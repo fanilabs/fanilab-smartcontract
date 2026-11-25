@@ -13,8 +13,12 @@
 
 set -e
 
-# Parse optional --config and --confirm-mainnet flags before positional args.
+# Parse optional --config, --wasm-dir and --confirm-mainnet flags before
+# positional args.
 CONFIG_FILE="${CONFIG_FILE:-}"
+# When set, deploy prebuilt WASM artifacts from this directory instead of
+# rebuilding from source. Each contract is read from "$WASM_DIR/<name>.wasm".
+WASM_DIR="${WASM_DIR:-}"
 CONFIRM_MAINNET=0
 POSITIONAL=()
 while [ $# -gt 0 ]; do
@@ -29,6 +33,18 @@ while [ $# -gt 0 ]; do
             ;;
         --config=*)
             CONFIG_FILE="${1#--config=}"
+            shift
+            ;;
+        --wasm-dir)
+            if [ -z "${2:-}" ]; then
+                echo "❌ --wasm-dir requires a path argument" >&2
+                exit 1
+            fi
+            WASM_DIR="$2"
+            shift 2
+            ;;
+        --wasm-dir=*)
+            WASM_DIR="${1#--wasm-dir=}"
             shift
             ;;
         --confirm-mainnet)
@@ -178,15 +194,45 @@ echo "${GREEN}✓ Deployer funded: $DEPLOYER_BALANCE_STROOPS stroops (min $MIN_D
 echo "${GREEN}✓ Prerequisites OK${NC}"
 echo ""
 
-# Build contracts
-echo "${BLUE}Building contracts...${NC}"
-cd "$PROJECT_ROOT"
-if ! cargo build --target wasm32v1-none --release; then
-    echo "${RED}❌ Build failed${NC}"
-    exit 1
-fi
+# Resolve the WASM path for a contract. In prebuilt mode the artifact is read
+# from $WASM_DIR; otherwise from the cargo target directory.
+wasm_path_for() {
+    local contract_name=$1
+    if [ -n "$WASM_DIR" ]; then
+        echo "$WASM_DIR/${contract_name}.wasm"
+    else
+        echo "$PROJECT_ROOT/target/wasm32v1-none/release/${contract_name}.wasm"
+    fi
+}
 
-echo "${GREEN}✓ Build successful${NC}"
+# Compute the SHA-256 of a file, using whichever tool is available.
+sha256_of() {
+    local path=$1
+    if command -v sha256sum &> /dev/null; then
+        sha256sum "$path" | awk '{print $1}'
+    else
+        shasum -a 256 "$path" | awk '{print $1}'
+    fi
+}
+
+# Build contracts (skipped when deploying prebuilt artifacts).
+if [ -n "$WASM_DIR" ]; then
+    echo "${BLUE}Using prebuilt WASM artifacts from: $WASM_DIR${NC}"
+    if [ ! -d "$WASM_DIR" ]; then
+        echo "${RED}❌ WASM directory not found: $WASM_DIR${NC}"
+        exit 1
+    fi
+    echo "${GREEN}✓ Skipping source build (prebuilt mode)${NC}"
+else
+    echo "${BLUE}Building contracts...${NC}"
+    cd "$PROJECT_ROOT"
+    if ! cargo build --target wasm32v1-none --release; then
+        echo "${RED}❌ Build failed${NC}"
+        exit 1
+    fi
+
+    echo "${GREEN}✓ Build successful${NC}"
+fi
 echo ""
 
 # Show the source account and artifact hashes before any submission so the
@@ -194,18 +240,15 @@ echo ""
 echo "${BLUE}Deployment summary (pre-submission)...${NC}"
 echo "   Network:        $NETWORK"
 echo "   Source account: $DEPLOYER_ADDRESS (identity: $DEPLOYER_IDENTITY)"
+echo "   Artifact source: $([ -n "$WASM_DIR" ] && echo "prebuilt ($WASM_DIR)" || echo "source build")"
 echo "   Artifact hashes (sha256):"
-for contract in escrow_contract delivery_contract dispute_resolution_contract fleet_management_contract identity_reputation_contract settlement_contract; do
-    wasm_path="$PROJECT_ROOT/target/wasm32v1-none/release/${contract}.wasm"
+for contract in "${CONTRACTS[@]}"; do
+    wasm_path=$(wasm_path_for "$contract")
     if [ -f "$wasm_path" ]; then
-        if command -v sha256sum &> /dev/null; then
-            wasm_hash=$(sha256sum "$wasm_path" | awk '{print $1}')
-        else
-            wasm_hash=$(shasum -a 256 "$wasm_path" | awk '{print $1}')
-        fi
-        echo "     $contract: $wasm_hash"
+        wasm_hash=$(sha256_of "$wasm_path")
+        echo "     $contract: $wasm_hash ($wasm_path)"
     else
-        echo "     $contract: (missing)"
+        echo "     $contract: (missing: $wasm_path)"
     fi
 done
 echo ""
@@ -213,7 +256,8 @@ echo ""
 # Deploy function
 deploy_contract() {
     local contract_name=$1
-    local wasm_path="$PROJECT_ROOT/target/wasm32v1-none/release/${contract_name}.wasm"
+    local wasm_path
+    wasm_path=$(wasm_path_for "$contract_name")
     local contract_id
 
     echo "${YELLOW}Deploying $contract_name...${NC}"
@@ -367,11 +411,14 @@ echo ""
 echo "${GREEN}✓ All contracts deployed${NC}"
 echo ""
 
-# Write contract IDs to output file
+# Write contract IDs to output file, along with the exact artifact path and
+# SHA-256 of the bytes supplied to the Stellar CLI for each contract. This
+# makes the uploaded deployment record identify the deployed artifact bytes.
 {
     echo "{"
     echo "  \"network\": \"$NETWORK\","
     echo "  \"deployed_at\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\","
+    echo "  \"artifact_source\": \"$([ -n "$WASM_DIR" ] && echo "prebuilt" || echo "source-build")\","
     echo "  \"contracts\": {"
     for i in "${!CONTRACTS[@]}"; do
         comma=","
@@ -379,6 +426,18 @@ echo ""
             comma=""
         fi
         echo "    \"${CONTRACTS[$i]}\": \"${DEPLOYED_IDS[$i]}\"$comma"
+    done
+    echo "  },"
+    echo "  \"artifacts\": {"
+    for i in "${!CONTRACTS[@]}"; do
+        contract="${CONTRACTS[$i]}"
+        artifact_path=$(wasm_path_for "$contract")
+        artifact_hash=$(sha256_of "$artifact_path")
+        comma=","
+        if [ $i -eq $((${#CONTRACTS[@]} - 1)) ]; then
+            comma=""
+        fi
+        echo "    \"$contract\": {\"path\": \"$artifact_path\", \"sha256\": \"$artifact_hash\"}$comma"
     done
     echo "  }"
     echo "}"

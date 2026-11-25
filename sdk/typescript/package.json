@@ -30,6 +30,7 @@
     "build": "tsc --project tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
+    "test:coverage": "node --experimental-vm-modules node_modules/jest/bin/jest.js --coverage",
     "smoke:browser": "node scripts/browser-import-smoke.mjs",
     "prepare": "npm run build"
   },

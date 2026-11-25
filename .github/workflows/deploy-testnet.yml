@@ -26,8 +26,49 @@ permissions:
   contents: read
 
 jobs:
+  # Build once, stage the exact WASM bytes, and hand them to the deploy job.
+  # The deploy job never rebuilds from source, so the reviewed build is what
+  # gets installed (#823).
+  build:
+    name: Build WASM Artifacts
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v7
+
+    - name: Set up Rust toolchain
+      uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      with:
+        targets: wasm32v1-none
+
+    - name: Cache dependencies
+      uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+    - name: Build Contracts
+      run: cargo build --locked --target wasm32v1-none --release
+
+    - name: Stage WASM
+      run: |
+        mkdir -p release_artifacts
+        for contract in target/wasm32v1-none/release/*.wasm; do
+          filename=$(basename "$contract")
+          cp "$contract" "release_artifacts/$filename"
+        done
+
+    - name: Upload WASM Artifacts
+      uses: actions/upload-artifact@v7
+      with:
+        name: wasm-artifacts
+        path: release_artifacts/*.wasm
+        if-no-files-found: error
+        # Deployment inputs are retained for the operational recovery horizon
+        # (90 days) so a reviewed build can be re-deployed or audited (#826).
+        retention-days: 90
+
   deploy:
     name: Deploy Contract to Testnet
+    needs: build
     runs-on: ubuntu-latest
     environment: testnet
     
@@ -47,16 +88,11 @@ jobs:
       run: |
         cargo install --locked stellar-cli --features opt
 
-    - name: Build Contracts
-      run: cargo build --locked --target wasm32v1-none --release
-
-    - name: Optimize WASM
-      run: |
-        mkdir -p release_artifacts
-        for contract in target/wasm32v1-none/release/*.wasm; do
-          filename=$(basename "$contract")
-          cp "$contract" "release_artifacts/$filename"
-        done
+    - name: Download WASM Artifacts
+      uses: actions/download-artifact@v5
+      with:
+        name: wasm-artifacts
+        path: release_artifacts
 
     - name: Configure deployer identity
       env:
@@ -78,9 +114,9 @@ jobs:
     - name: Deploy Contract
       run: |
         if [ "${{ github.event.inputs.contract }}" = "all" ]; then
-          bash scripts/deploy-all-contracts.sh
+          bash scripts/deploy-all-contracts.sh --wasm-dir release_artifacts
         else
-          bash scripts/deploy-contract.sh ${{ github.event.inputs.contract }}
+          bash scripts/deploy-contract.sh ${{ github.event.inputs.contract }} --wasm-dir release_artifacts
         fi
 
     - name: Save Deployment Artifacts
@@ -90,4 +126,7 @@ jobs:
         name: deployment-info
         path: contract-ids-*.json
         if-no-files-found: warn
+        # Deployment receipts are the workflow's only saved deployment output;
+        # retain them for the operational recovery horizon (90 days) (#826).
+        retention-days: 90
 

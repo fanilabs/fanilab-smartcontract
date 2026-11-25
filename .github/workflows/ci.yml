@@ -58,6 +58,20 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v7
 
+    - name: Validate Cargo publish policy
+      run: |
+        # Contract crates and shared_types are internal-only and must declare
+        # `publish = false`. Fail if any workspace crate is publishable.
+        if cargo metadata --no-deps --format-version 1 \
+          | jq -e '.packages[] | select(.publish != [])' > /dev/null; then
+          echo "❌ ERROR: One or more workspace crates are publishable."
+          echo "   Contract crates are internal-only; set 'publish = false'."
+          cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.publish != []) | "  - \(.name) (\(.manifest_path))"'
+          exit 1
+        fi
+        echo "✅ All workspace crates declare publish = false."
+
     - name: Check deployment scripts use wasm32v1-none
       run: |
         echo "Scanning scripts/, Makefile, Makefile.windows, and .vscode/ for legacy wasm32-unknown-unknown target references..."

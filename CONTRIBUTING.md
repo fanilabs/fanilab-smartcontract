@@ -43,6 +43,47 @@ reproduce, and the expected versus actual behavior.
 3. Describe the motivation and the change in the pull request body.
 4. Make sure existing tests and checks pass before requesting review.
 
+## Minimum supported Rust version (MSRV)
+
+The workspace declares a minimum supported Rust version (MSRV) via the
+`rust-version` field in the root `Cargo.toml`. All workspace crates inherit this
+value, so the minimum compiler contract is defined in exactly one place.
+
+- **CI enforcement:** the CI workflow checks the MSRV with the pinned toolchain,
+  so a dependency update that silently raises the required compiler will fail
+  the build rather than land unnoticed.
+- **Raising the MSRV:** raising the minimum is a deliberate, reviewed change.
+  Open a dedicated pull request that only bumps `rust-version` (and any
+  dependency changes that require it), get maintainer approval, and add a
+  changelog entry describing the new minimum and the reason for the bump. Do not
+  fold an MSRV bump into an unrelated feature or refactor PR.
+
+## Cargo publication policy
+
+This repository is a WASM workspace built from path dependencies. The contract
+crates and `shared_types` are **internal-only** and are marked `publish = false`
+in their manifests. They are not published to crates.io.
+
+Releases ship compiled WASM binaries through `.github/workflows/release.yml`.
+If you add a new crate, keep it internal (`publish = false`) unless there is an
+explicit, reviewed decision to publish it, in which case it must carry the
+required publishable metadata and a versioned dependency policy.
+
+## Local lint workflow
+
+`make lint` runs the same target/feature combinations as CI: a host clippy pass
+and a `wasm32v1-none` clippy pass. Passing only one of them locally does not
+guarantee CI will pass, so run the full command before opening a pull request.
+
+Before running the WASM lint pass for the first time, install the target:
+
+```sh
+rustup target add wasm32v1-none
+```
+
+The Unix (`Makefile`) and Windows (`Makefile.windows`) lint targets invoke the
+same checks so behavior stays aligned across platforms.
+
 ## Questions
 
 If anything here is unclear, open a regular issue and a maintainer will help.

@@ -1,12 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { Invoker } from "./invoker";
 
-function makeAbortError(): Error {
-  const err = new Error("The operation was aborted");
-  err.name = "AbortError";
-  return err;
-}
-
 describe("Invoker cancellation", () => {
   let invoker: Invoker;
   let submitTransaction: ReturnType<typeof vi.fn>;

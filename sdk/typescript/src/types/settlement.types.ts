@@ -15,4 +15,6 @@ export interface ExecuteSettlementSwapParams {
   recipient: string;
   amount: bigint;
   minAmountOut: bigint;
+  /** Absolute Unix timestamp (seconds) after which the swap is rejected. */
+  deadline: bigint;
 }

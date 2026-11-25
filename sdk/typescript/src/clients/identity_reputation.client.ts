@@ -152,7 +152,7 @@ function decodeUserProfile(value: unknown): UserProfile {
   const profile = value as Record<string, unknown>;
   return {
     address: String(profile.address),
-    registeredAt: Number(profile.registered_at ?? 0),
+    registeredAt: BigInt(String(profile.registered_at ?? 0)),
   };
 }
 
@@ -162,7 +162,7 @@ function decodeDriverProfile(value: unknown): DriverProfile {
     address: String(profile.address),
     deliveriesCompleted: Number(profile.deliveries_completed ?? 0),
     reputationScore: Number(profile.reputation_score ?? 0),
-    registeredAt: Number(profile.registered_at ?? 0),
+    registeredAt: BigInt(String(profile.registered_at ?? 0)),
     kycVerified: Boolean(profile.kyc_verified),
     status: decodeDriverStatus(profile.status),
   };

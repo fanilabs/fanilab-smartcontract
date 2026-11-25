@@ -151,7 +151,12 @@ function canExtendTtl(key: xdr.LedgerKey): boolean {
 }
 
 function ledgerKeyId(key: xdr.LedgerKey): string {
-  return key.toXDR('base64');
+  // Real ledger keys serialize themselves; plain-object test doubles do not,
+  // so fall back to a structural key for deduplication.
+  const serializable = key as { toXDR?: (encoding: string) => string };
+  return typeof serializable.toXDR === 'function'
+    ? serializable.toXDR('base64')
+    : JSON.stringify(key);
 }
 
 function dedupeLedgerKeys(keys: xdr.LedgerKey[]): xdr.LedgerKey[] {
@@ -447,6 +452,10 @@ export class ContractInvoker {
   ): Promise<unknown> {
     const signal = config.signal;
     throwIfAborted(signal);
+    const mode = this.resolveMode(config);
+    if (mode === 'submit' && config.signer === undefined) {
+      throw new MissingSignerError(functionName);
+    }
     const server = this.server(config);
     const networkPassphrase = this.require(config.networkPassphrase, 'networkPassphrase');
     const buildTransaction = async () => {
@@ -481,7 +490,10 @@ export class ContractInvoker {
     if (expiringKeys.length > 0) {
       await this.extendFootprintTtl(
         server,
+        accountId,
+        networkPassphrase,
         simulation.transactionData,
+        expiringKeys,
         config
       );
       throwIfAborted(signal);
@@ -495,24 +507,260 @@ export class ContractInvoker {
     }
 
     const prepared = SorobanRpc.assembleTransaction(transaction, simulation).build();
-    prepared.sign(config.signer);
+    prepared.sign(this.require(config.signer, 'signer'));
     throwIfAborted(signal);
-    const submitted = await server.sendTransaction(prepared);
-    if (submitted.status === 'ERROR') {
-      const errorResult = submitted.errorResult;
-      const resultXdr = errorResult?.toXDR('base64');
-      const decoded = errorResult?.toString() ?? 'unknown error';
-      throw new SubmissionError(
-        formatSorobanError('Soroban submission failed', decoded),
-        {
-          status: submitted.status,
-          hash: submitted.hash,
-          resultXdr,
-          errorResult,
-          response: submitted,
-        }
+    const submitted = await this.submitWithRetry(server, prepared, config);
+    const result = await this.waitForResult(server, submitted.hash, config);
+    if (config.returnReceipt) {
+      return {
+        hash: submitted.hash,
+        ledger: simulation.latestLedger ?? 0,
+        result,
+      } satisfies InvocationReceipt;
+    }
+    return result;
+  }
+
+  /**
+   * Submit a prepared transaction, retrying transient `TRY_AGAIN_LATER`
+   * responses with linear backoff. Terminal `ERROR` responses surface the
+   * decoded result XDR through `SubmissionError` so callers keep the diagnostic
+   * context instead of parsing a formatted string.
+   */
+  private async submitWithRetry(
+    server: SorobanRpc.Server,
+    prepared: ReturnType<typeof SorobanRpc.assembleTransaction>['build'] extends () => infer T
+      ? T
+      : never,
+    config: ContractInvokeOptions
+  ): Promise<SorobanRpc.Api.SendTransactionResponse> {
+    const maxAttempts = config.submissionMaxAttempts ?? DEFAULT_SUBMISSION_MAX_ATTEMPTS;
+    const baseDelay = config.submissionRetryDelayMs ?? DEFAULT_SUBMISSION_RETRY_DELAY_MS;
+    if (!Number.isSafeInteger(maxAttempts) || maxAttempts <= 0) {
+      throw new RangeError('submissionMaxAttempts must be a positive integer');
+    }
+    if (!Number.isSafeInteger(baseDelay) || baseDelay < 0) {
+      throw new RangeError('submissionRetryDelayMs must be a non-negative integer');
+    }
+
+    let lastStatus: string | undefined;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      const submitted = await server.sendTransaction(prepared);
+      if (submitted.status === 'ERROR') {
+        const errorResult = submitted.errorResult;
+        const resultXdr = errorResult?.toXDR('base64');
+        const decoded = errorResult?.toString() ?? 'unknown error';
+        throw new SubmissionError(
+          formatSorobanError('Soroban submission failed', decoded),
+          {
+            status: submitted.status,
+            hash: submitted.hash,
+            resultXdr,
+            errorResult,
+            response: submitted,
+          }
+        );
+      }
+      if (submitted.status !== 'TRY_AGAIN_LATER') {
+        return submitted;
+      }
+
+      lastStatus = submitted.status;
+      if (attempt < maxAttempts) {
+        await delay(baseDelay * attempt, config.signal);
+      }
+    }
+
+    throw new Error(
+      formatSorobanError(
+        'Soroban submission failed after retries',
+        `transaction ${prepared.hash.toString()} was not accepted after ${maxAttempts} attempts ` +
+          `(last status: ${lastStatus ?? 'unknown'}); the signed transaction was preserved and ` +
+          'can be resubmitted'
+      )
+    );
+  }
+
+  private async expiringFootprintKeys(
+    server: SorobanRpc.Server,
+    transactionData: SorobanDataBuilder,
+    config: ContractInvokeOptions
+  ): Promise<xdr.LedgerKey[]> {
+    const threshold = config.ttlThresholdLedgers ?? DEFAULT_TTL_THRESHOLD_LEDGERS;
+    const extendTo = config.ttlExtendToLedgers ?? DEFAULT_TTL_EXTEND_TO_LEDGERS;
+    if (!Number.isSafeInteger(threshold) || threshold <= 0) {
+      throw new RangeError('ttlThresholdLedgers must be a positive integer');
+    }
+    if (!Number.isSafeInteger(extendTo) || extendTo <= threshold) {
+      throw new RangeError('ttlExtendToLedgers must be greater than ttlThresholdLedgers');
+    }
+
+    const candidates = dedupeLedgerKeys(
+      [
+        ...transactionData.getReadOnly(),
+        ...transactionData.getReadWrite(),
+      ].filter(canExtendTtl)
+    );
+    if (candidates.length === 0) {
+      return [];
+    }
+
+    // Chunk large footprints so a single RPC request stays within the node's
+    // ledger-entry limit instead of being rejected wholesale.
+    const expiring: xdr.LedgerKey[] = [];
+    for (let start = 0; start < candidates.length; start += LEDGER_ENTRY_BATCH_LIMIT) {
+      const batch = candidates.slice(start, start + LEDGER_ENTRY_BATCH_LIMIT);
+      const ledgerEntries = await server.getLedgerEntries(...batch);
+      expiring.push(
+        ...findExpiringPersistentKeys(
+          ledgerEntries.entries,
+          ledgerEntries.latestLedger,
+          threshold
+        )
       );
     }
-    if (submitted.status ==
+    return dedupeLedgerKeys(expiring);
+  }
 
-/* … truncated 1086 chars — edit only what you need near the top … */
+  private async extendFootprintTtl(
+    server: SorobanRpc.Server,
+    accountId: string,
+    networkPassphrase: string,
+    transactionData: SorobanDataBuilder,
+    keys: xdr.LedgerKey[],
+    config: ContractInvokeOptions
+  ): Promise<void> {
+    const threshold = config.ttlThresholdLedgers ?? DEFAULT_TTL_THRESHOLD_LEDGERS;
+    const requestedExtendTo = config.ttlExtendToLedgers ?? DEFAULT_TTL_EXTEND_TO_LEDGERS;
+    const networkMaxTtlLedgers = await this.networkMaxTtlLedgers(server, config);
+    const extendTo = resolveTtlExtendTo(requestedExtendTo, threshold, networkMaxTtlLedgers);
+
+    const account = await server.getAccount(accountId);
+    const builder = new TransactionBuilder(account, {
+      fee: config.fee ?? '100000',
+      networkPassphrase,
+    })
+      .setTimeout(config.timeoutSeconds ?? 30)
+      .setSorobanData(transactionData.build());
+
+    for (let index = 0; index < keys.length; index += 1) {
+      builder.addOperation(Operation.extendFootprintTtl({ extendTo }));
+    }
+
+    const transaction = builder.build();
+    const simulation = await server.simulateTransaction(transaction);
+    if (SorobanRpc.Api.isSimulationError(simulation)) {
+      throw new Error(
+        formatSorobanError('Soroban TTL extension simulation failed', simulation.error)
+      );
+    }
+    const prepared = SorobanRpc.assembleTransaction(transaction, simulation).build();
+    prepared.sign(this.require(config.signer, 'signer'));
+    const submitted = await this.submitWithRetry(server, prepared, config);
+    await this.waitForResult(server, submitted.hash, config);
+  }
+
+  /**
+   * Resolve the network maximum entry TTL. A caller-provided value wins; RPCs
+   * that do not expose `maxEntryTtl` fall back to the configured extend target
+   * so TTL maintenance keeps working against older nodes and test doubles.
+   */
+  private async networkMaxTtlLedgers(
+    server: SorobanRpc.Server,
+    config: ContractInvokeOptions
+  ): Promise<number> {
+    if (config.networkMaxTtlLedgers !== undefined) {
+      if (!Number.isSafeInteger(config.networkMaxTtlLedgers) || config.networkMaxTtlLedgers <= 0) {
+        throw new RangeError('networkMaxTtlLedgers must be a positive integer');
+      }
+      return config.networkMaxTtlLedgers;
+    }
+
+    const getNetwork = (server as { getNetwork?: () => Promise<{ maxEntryTtl?: number }> }).getNetwork;
+    if (typeof getNetwork === 'function') {
+      const network = await getNetwork.call(server);
+      if (typeof network.maxEntryTtl === 'number' && network.maxEntryTtl > 0) {
+        return network.maxEntryTtl;
+      }
+    }
+    return config.ttlExtendToLedgers ?? DEFAULT_TTL_EXTEND_TO_LEDGERS;
+  }
+
+  private async waitForResult(
+    server: SorobanRpc.Server,
+    hash: string,
+    config: ContractInvokeOptions
+  ): Promise<unknown> {
+    const initialDelay = config.pollingIntervalMs ?? 1000;
+    const maxDelay = config.pollingMaxIntervalMs ?? 10_000;
+    const timeout = config.pollingTimeoutMs ?? 300_000;
+    if (!Number.isFinite(initialDelay) || initialDelay <= 0) {
+      throw new RangeError('pollingIntervalMs must be a positive number');
+    }
+    if (!Number.isFinite(maxDelay) || maxDelay < initialDelay) {
+      throw new RangeError('pollingMaxIntervalMs must be greater than or equal to pollingIntervalMs');
+    }
+    if (!Number.isFinite(timeout) || timeout <= 0) {
+      throw new RangeError('pollingTimeoutMs must be a positive number');
+    }
+
+    const deadline = Date.now() + timeout;
+    let interval = initialDelay;
+    for (;;) {
+      if (config.signal?.aborted) {
+        throw abortError();
+      }
+      if (Date.now() >= deadline) {
+        throw new Error(`Timed out waiting for Soroban transaction: ${hash}`);
+      }
+      const remaining = deadline - Date.now();
+      const result = await awaitPollResult(
+        server.getTransaction(hash),
+        remaining,
+        `Timed out waiting for Soroban transaction: ${hash}`,
+        config.signal
+      );
+      if (result.status === 'SUCCESS') {
+        return result.returnValue ? native(result.returnValue) : undefined;
+      }
+      if (result.status === 'FAILED') {
+        const errorCodes = result.diagnosticEventsXdr?.flatMap(({ event }) => {
+          const value = event.body.value.data;
+          return value.type === 'scvError' && value.error.type === 'sceContract'
+            ? [value.error.contractCode]
+            : [];
+        });
+        const failure = errorCodes?.length
+          ? `Error(Contract, #${errorCodes.join(', #')})`
+          : hash;
+        throw new Error(
+          formatSorobanError('Soroban transaction failed', failure, errorCodes ?? [])
+        );
+      }
+      const remainingAfterPoll = deadline - Date.now();
+      if (remainingAfterPoll <= 0) {
+        throw new Error(`Timed out waiting for Soroban transaction: ${hash}`);
+      }
+      await delay(Math.min(interval, remainingAfterPoll), config.signal);
+      interval = Math.min(interval * 2, maxDelay);
+    }
+  }
+
+  private server(config: ContractInvokeOptions): SorobanRpc.Server {
+    const serverUrl = this.require(config.serverUrl, 'serverUrl');
+    assertHttpTransportAllowed(serverUrl, config.allowInsecureHttp);
+    return new SorobanRpc.Server(serverUrl, {
+      allowHttp: config.serverUrl?.startsWith('http://') ?? false,
+      ...(config.timeout === undefined ? {} : { timeout: config.timeout }),
+    });
+  }
+
+  private require<T>(value: T | undefined, name: string): T {
+    if (value === undefined) {
+      throw new Error(`Contract invocation requires ${name}`);
+    }
+    return value;
+  }
+}
+
+export type Signer = Keypair;

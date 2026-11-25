@@ -1,4 +1,4 @@
-import { xdr } from "@stellar/stellar-base";
+import { xdr } from '@stellar/stellar-sdk';
 
 export interface AuthorizationEntry {
   credentials: xdr.SorobanCredentials;

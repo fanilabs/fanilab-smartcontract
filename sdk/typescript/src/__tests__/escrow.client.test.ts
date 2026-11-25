@@ -1,4 +1,4 @@
-import { Address, nativeToScVal, scValToNative, xdr } from '@stellar/stellar-sdk';
+import { nativeToScVal, scValToNative, xdr } from '@stellar/stellar-sdk';
 
 import { EscrowClient } from '../clients/escrow.client';
 import { ContractInvoker } from '../clients/invoker';
@@ -14,7 +14,7 @@ import { ContractInvoker } from '../clients/invoker';
  * native shape it would see on-chain.
  */
 function mockInvoker(retvals: Record<string, xdr.ScVal[]>): jest.SpyInstance {
-  const call = jest.fn(async (functionName: string, args: xdr.ScVal[]) => {
+  const call = jest.fn(async (functionName: string, _args: xdr.ScVal[]) => {
     const queue = retvals[functionName];
     if (!queue || queue.length === 0) {
       return undefined;

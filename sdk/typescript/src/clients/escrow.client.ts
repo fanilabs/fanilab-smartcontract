@@ -307,7 +307,7 @@ export class EscrowClient {
     params: EscrowTypes.ReleaseExpiredHoldbackParams,
     options?: ContractInvokeOptions
   ): Promise<void> {
-    await this.invoker.call('release_expired_holdback', [address(params.caller), u64(params.deliveryId)], options);
+    await this.invoker.call('release_expired_holdback', [u64(params.deliveryId)], options);
   }
 
   /**
@@ -323,13 +323,14 @@ export class EscrowClient {
     const resolvedAt = optionalField(raw.resolved_at, 'resolved_at', (v) => typeof v === 'bigint' || typeof v === 'number' || typeof v === 'string');
 
     return {
-      deliveryId: BigInt(String(raw.delivery_id)),
+      deliveryId: Number(raw.delivery_id),
       sender: String(raw.sender),
       recipient: String(raw.recipient),
       driver: String(raw.driver),
       token: String(raw.token),
       amount: BigInt(String(raw.amount)),
-      status: String(raw.status),
+      status: String(raw.status) as EscrowRecord['status'],
+      createdAt: BigInt(String(raw.created_at)),
       fleetId: fleetId === undefined ? undefined : BigInt(String(fleetId)),
       disputeReason,
       resolvedAt: resolvedAt === undefined ? undefined : BigInt(String(resolvedAt)),

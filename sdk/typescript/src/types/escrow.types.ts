@@ -2,8 +2,6 @@
  * Type definitions for escrow contract functions
  */
 
-import { EscrowStatus, ProtocolConfig, EscrowRecord } from './common.types';
-
 /**
  * Contract-specific error codes raised by `escrow_contract::EscrowError`.
  * Shared failures use the `ErrorCodes` map in `common.types.ts`.
@@ -30,7 +28,8 @@ export interface UpdatePlatformFeeParams {
 }
 
 export interface VolumeTier {
-  volumeThreshold: number;
+  /** Wide on-chain counter, encoded as `i128`. */
+  volumeThreshold: bigint;
   discountBps: number;
 }
 

@@ -161,8 +161,24 @@ export const ErrorCodes = {
 } as const;
 
 export interface ContractInvokeOptions {
+  /**
+   * Explicit invocation mode. `simulate` never submits a transaction;
+   * `submit` requires a signer. Defaults to `submit` when a signer is set and
+   * `simulate` otherwise.
+   */
+  mode?: 'simulate' | 'submit';
+  /** Return an `InvocationReceipt` (hash, ledger, result) for write calls. */
+  returnReceipt?: boolean;
   networkPassphrase?: string;
   serverUrl?: string;
+  /** Allow plain HTTP RPC endpoints (HTTPS is required by default). */
+  allowInsecureHttp?: boolean;
+  /** Override the network's maximum entry TTL in ledgers. */
+  networkMaxTtlLedgers?: number;
+  /** Maximum submission attempts for transient `TRY_AGAIN_LATER` responses. */
+  submissionMaxAttempts?: number;
+  /** Base delay, in milliseconds, between submission retries. */
+  submissionRetryDelayMs?: number;
   /** RPC request timeout in milliseconds. */
   timeout?: number;
   timeoutSeconds?: number;

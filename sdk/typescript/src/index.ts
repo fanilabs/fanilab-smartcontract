@@ -20,10 +20,59 @@ export {
 } from './clients/invoker';
 export type { ScVal, Signer } from './clients/invoker';
 export type { PaginationOptions } from './clients/index';
-export * from './types/escrow.types';
+// Exported explicitly: `InitParams` and `RaiseDisputeParams` also exist on the
+// other contract namespaces, so a wildcard export would be ambiguous here.
+export {
+  EscrowErrorCodes,
+  UpdatePlatformFeeParams,
+  VolumeTier,
+  SetVolumeTiersParams,
+  SweepUntrackedBalanceParams,
+  CreateEscrowParams,
+  CreateEscrowBatchParams,
+  ReleaseEscrowParams,
+  RefundEscrowParams,
+  ResolveDisputeParams,
+  ResolveDisputeSplitParams,
+  ReleaseHoldbackEscrowParams,
+  ReleaseExpiredHoldbackParams,
+  MarkHoldbackEscrowParams,
+  FreezeFundsParams,
+  ReclaimExpiredEscrowParams,
+  SweepParams,
+  SetSettlementContractParams,
+  PendingSettlementContractInfo,
+  ConfirmSettlementContractParams,
+  SetFleetManagementContractParams,
+  SetDisputeResolutionContractParams,
+  EscrowReleasedEvent,
+  EscrowFundedEvent,
+  EscrowRefundedEvent,
+  DeliveryDisputedEvent,
+  DisputeResolvedEvent,
+} from './types/escrow.types';
 export * from './types/delivery.types';
 export * from './types/dispute_resolution.types';
-export * from './types/identity_reputation.types';
+// `InitParams` is already exported by the dispute resolution namespace.
+export type {
+  SetAuthorizedContractParams,
+  SetReputationConfigParams,
+  SetDeliveryContractParams,
+  SetDisputeContractParams,
+  RegisterDriverParams,
+  RegisterUserParams,
+  SuspendDriverParams,
+  ReinstateDriverParams,
+  UpdateDriverKycStatusParams,
+  IncreaseReputationParams,
+  DecreaseReputationParams,
+  AwardReputationParams,
+} from './types/identity_reputation.types';
 export * from './types/fleet_management.types';
-export * from './types/settlement.types';
+// `InitParams` is exported from the dispute resolution namespace above;
+// settlement exports its own members explicitly to avoid the collision.
+export type {
+  SetDriverPreferenceParams,
+  ExecuteSettlementSwapParams,
+} from './types/settlement.types';
 export * from './types/common.types';
